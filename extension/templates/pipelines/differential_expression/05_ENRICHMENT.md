@@ -74,11 +74,11 @@ Construct and execute `code/05_enrichment.R`, capturing full execution output to
   enriched_data %>%
     analyze_enrichments(significance_max = 0.05, top_n = 30)
   ```
-  *(Generates `proteins_enrichment_<contrast>.png` and `table_proteins_enrichment_<contrast>.csv`).*
+  *(Generates `<analyte>_enrichment_<contrast>.png` and `table_<analyte>_enrichment_<contrast>.csv`).*
 
 - Move generated enrichment assets into `data/`:
   ```r
-  enr_assets <- list.files(pattern = "^(.*proteins_enrichment_|.*table_proteins_enrichment_).*(png|csv)$")
+  enr_assets <- list.files(pattern = "^(.*(proteins|peptides)_enrichment_|.*table_(proteins|peptides)_enrichment_).*(png|csv)$")
   for (f in enr_assets) {
     file.rename(f, file.path("data", f))
   }
@@ -98,7 +98,7 @@ Construct and execute `code/05_enrichment.R`, capturing full execution output to
 - [ ] **Checkpoint 5.5**:
   1. `logs/05_enrichment.log` exists on disk with non-zero file size.
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size.
-  3. If functional terms were analyzed: `data/table_proteins_enrichment_*.csv` and `data/proteins_enrichment_*.png` exist in `data/` with non-zero file sizes.
+  3. If functional terms were analyzed: enrichment tables (`data/table_*_enrichment_*.csv`) and enrichment plots (`data/*_enrichment_*.png`) exist in `data/` with non-zero file sizes.
   4. `docs/notes.md` contains the functional enrichment audit and summary.
 - [ ] **Complete Phase**:
   - Invoke `complete_phase(phaseName = "05_ENRICHMENT", summary = "Functional annotation assessment and pathway enrichment completed. Tested targeted categories, exported enrichment tables and plots, and persisted data/tidyproteomics_data.rds.")`

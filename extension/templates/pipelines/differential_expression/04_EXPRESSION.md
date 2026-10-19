@@ -47,7 +47,7 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
   stat_data %>%
     analyze_expressions(labels_column = label_col, log2fc_min = 1, significance_max = 0.05)
   ```
-  *(Generates `proteins_volcano_<contrast>.png` and `table_proteins_expression_<contrast>.csv`).*
+  *(Generates `<analyte>_volcano_<contrast>.png` and `table_<analyte>_expression_<contrast>.csv`).*
 
 - **Top Candidate Directional Expression Profiles**:
   Export individual visual profiles for top upregulated and top downregulated candidates:
@@ -63,7 +63,7 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
       log2fc_min = 0, significance_max = 1, top_n = 10,
       regulation = "up", labels_column = label_col, destination = "png"
     ))
-    up_plot <- list.files(pattern = "^plot_proteins_.*_expression_.*\\.png$")[1]
+    up_plot <- list.files(pattern = "^plot_(proteins|peptides)_.*_expression_.*\\.png$")[1]
     if (!is.na(up_plot) && file.exists(up_plot)) {
       file.rename(up_plot, file.path("data", sprintf("plot_expression_up_%s.png", contrast_str)))
     }
@@ -74,7 +74,7 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
       log2fc_min = 0, significance_max = 1, top_n = 10,
       regulation = "down", labels_column = label_col, destination = "png"
     ))
-    down_plot <- list.files(pattern = "^plot_proteins_.*_expression_.*\\.png$")[1]
+    down_plot <- list.files(pattern = "^plot_(proteins|peptides)_.*_expression_.*\\.png$")[1]
     if (!is.na(down_plot) && file.exists(down_plot)) {
       file.rename(down_plot, file.path("data", sprintf("plot_expression_down_%s.png", contrast_str)))
     }
@@ -83,7 +83,7 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
 
 - **Move Generated Volcano & Table Assets into `data/`**:
   ```r
-  generated_assets <- list.files(pattern = "^(.*proteins_volcano_|.*table_proteins_expression_).*(png|csv)$")
+  generated_assets <- list.files(pattern = "^(.*(proteins|peptides)_volcano_|.*table_(proteins|peptides)_expression_).*(png|csv)$")
   for (f in generated_assets) {
     file.rename(f, file.path("data", f))
   }
@@ -95,16 +95,16 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
   saveRDS(stat_data, file = "data/tidyproteomics_data.rds")
   ```
 - Record the following directly into `docs/notes.md`:
-  - Total quantified proteins.
-  - Number of significantly dysregulated proteins ($|\log_2\text{FC}| \ge 1.0, q \le 0.05$), with counts upregulated and downregulated.
+  - Total quantified features (proteins or peptides).
+  - Number of significantly dysregulated features ($|\log_2\text{FC}| \ge 1.0, q \le 0.05$), with counts upregulated and downregulated per contrast.
   - Leading biomarker candidates with fold changes and adjusted $p$-values.
 
 #### Phase 4.5: Checkpoint Verification & State Recording
 - [ ] **Checkpoint 4.5**:
   1. `logs/04_expression.log` exists on disk with non-zero file size and no errors.
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size and contains expression results.
-  3. `data/table_proteins_expression_*.csv` exists on disk with non-zero file size.
-  4. `data/proteins_volcano_*.png`, `data/plot_expression_up_*.png`, and `data/plot_expression_down_*.png` exist on disk with non-zero file sizes.
+  3. Expression tables (`data/table_*_expression_*.csv`) exist on disk with non-zero file size.
+  4. Volcano and candidate expression plots (`data/*_volcano_*.png`, `data/plot_expression_up_*.png`, and `data/plot_expression_down_*.png`) exist on disk with non-zero file sizes.
   5. `docs/notes.md` contains the differential expression summary.
 - [ ] **Complete Phase**:
   - Invoke `complete_phase(phaseName = "04_EXPRESSION", summary = "Differential expression analysis completed. Computed moderated t-statistics, generated volcano and directional candidate expression plots, exported expression tables, and persisted data/tidyproteomics_data.rds.")`

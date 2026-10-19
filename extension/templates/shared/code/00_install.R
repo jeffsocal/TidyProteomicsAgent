@@ -1,5 +1,5 @@
 # =====================================================================
-# Script Name: 00_environment.R
+# Script Name: 00_install.R
 # Purpose: Check and automatically install missing dependencies 
 #          and the tidyproteomics package from GitHub.
 # =====================================================================

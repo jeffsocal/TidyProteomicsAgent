@@ -611,7 +611,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       // 3. Copy shared templates
       const sharedDir = path.join(templateBase, "shared");
       if (fs.existsSync(sharedDir)) {
-        copyFileSafe(path.join(sharedDir, "code", "00_environment.R"), path.join(this.workspaceRoot, "code", "00_environment.R"), true);
+        copyFileSafe(path.join(sharedDir, "code", "00_install.R"), path.join(this.workspaceRoot, "code", "00_install.R"), true);
         copyFileSafe(path.join(sharedDir, "tools", "lint_tidyproteomics.R"), path.join(this.workspaceRoot, "tools", "lint_tidyproteomics.R"), true);
         copyFileSafe(path.join(sharedDir, "agent", "PROTOCOL.md"), path.join(this.workspaceRoot, "agent", "PROTOCOL.md"), true);
         copyFileSafe(path.join(sharedDir, "agent", "SKILL.md"), path.join(this.workspaceRoot, "agent", "SKILL.md"), true);

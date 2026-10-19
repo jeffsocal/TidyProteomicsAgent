@@ -7,14 +7,14 @@ Execute workspace validation, enforce research specification gates, and establis
 #### Phase 0.1: Subdirectory & Project Scaffolding Verification
 - [ ] Verify that all standard project subdirectories exist in the workspace root:
   - `analysis/` (contains pipeline markdown task specifications)
-  - `code/` (contains executable analysis R scripts and `code/00_environment.R`)
+  - `code/` (contains executable analysis R scripts and `code/00_install.R`)
   - `docs/` (contains runtime notes, model specifications, and experimental hypothesis)
   - `agent/` (contains protocol definitions and dataset parameters)
   - `data/` and `data/raw/` (stores imported and processed data artifacts)
   - `logs/` (stores persistent execution logs)
   - `tools/` (contains utility scripts like `tools/lint_tidyproteomics.R`)
 - [ ] If any of the required directories are missing, create them immediately using `mkdir -p`.
-- [ ] Confirm that `code/00_environment.R` exists on disk.
+- [ ] Confirm that `code/00_install.R` exists on disk.
 
 #### Phase 0.2: User Study Specification & Dataset Parameters Gate
 - [ ] **Verify `docs/experiment.md`**:
@@ -37,7 +37,7 @@ Execute workspace validation, enforce research specification gates, and establis
 #### Phase 0.4: Environment & Package Readiness Verification
 - [ ] Execute the pre-flight environment script from the project root, piping stdout and stderr to `logs/00_install.log` (or `logs/00_setup.log`):
   ```bash
-  Rscript code/00_environment.R 2>&1 | tee logs/00_install.log
+  Rscript code/00_install.R 2>&1 | tee logs/00_install.log
   ```
 - [ ] Verify that all required CRAN packages (`dplyr`, `ggplot2`, `knitr`, etc.), Bioconductor packages (`limma`, `fgsea`, etc.), and GitHub package (`jeffsocal/tidyproteomics`) are installed and load cleanly.
 - [ ] Confirm that `logs/00_install.log` exposes the active R version, tidyproteomics version, and the versions of all installed dependencies.

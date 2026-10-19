@@ -2953,7 +2953,7 @@ var SidebarViewProvider = class {
       };
       const sharedDir = path6.join(templateBase, "shared");
       if (fs6.existsSync(sharedDir)) {
-        copyFileSafe(path6.join(sharedDir, "code", "00_environment.R"), path6.join(this.workspaceRoot, "code", "00_environment.R"), true);
+        copyFileSafe(path6.join(sharedDir, "code", "00_install.R"), path6.join(this.workspaceRoot, "code", "00_install.R"), true);
         copyFileSafe(path6.join(sharedDir, "tools", "lint_tidyproteomics.R"), path6.join(this.workspaceRoot, "tools", "lint_tidyproteomics.R"), true);
         copyFileSafe(path6.join(sharedDir, "agent", "PROTOCOL.md"), path6.join(this.workspaceRoot, "agent", "PROTOCOL.md"), true);
         copyFileSafe(path6.join(sharedDir, "agent", "SKILL.md"), path6.join(this.workspaceRoot, "agent", "SKILL.md"), true);

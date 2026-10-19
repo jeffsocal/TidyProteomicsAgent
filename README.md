@@ -126,7 +126,7 @@ TidyProteomicsAgent/
     ├── media/                         # Extension icons and UI assets
     ├── dist/                          # Compiled production bundle
     └── templates/                     # Workspace scaffolding templates
-        ├── shared/                    # Boilerplate: 00_environment.R, linter, protocols, .gitignore
+        ├── shared/                    # Boilerplate: 00_install.R, linter, protocols, .gitignore
         └── pipelines/                 # Pipeline phases: differential_expression/, quality_control_only/
 ```
 

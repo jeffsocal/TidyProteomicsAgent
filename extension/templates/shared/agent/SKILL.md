@@ -873,7 +873,7 @@ When using an LLM or AI coding agent (e.g., Antigravity, Claude, ChatGPT, Gemini
    ```
 13. **Standard Workspace & Directory Architecture**:
    When executing multi-phase analysis workflows with automated agents or reproducible pipelines, organize project deliverables into standardized subdirectories:
-   - `code/`: All executable R scripts (`00_environment.R`, `01_inspect.R`, `02_normalize.R`, `03_impute.R`, `04_expression.R`, `05_enrichment.R`, `06_observations.R`).
+   - `code/`: All executable R scripts (`00_install.R`, `01_inspect.R`, `02_normalize.R`, `03_impute.R`, `04_expression.R`, `05_enrichment.R`, `06_observations.R`).
    - `logs/`: Persistent execution logs capturing full stdout/stderr from scripts.
    - `data/`: Single persistent tidyproteomics object (`tidyproteomics_data.rds`), summary tables (`*.csv`), figures (`*.png`).
    - `docs/`: Analysis notes, active model summary (`llm.md`), experimental hypothesis & dataset parameters (`experiment.md`), observation digests (`observations.md`), execution benchmarks (`notes.md`), and final scientific manuscripts (`scientific_report.md`).

@@ -9,15 +9,21 @@ Construct and execute `code/02_normalize.R`, capturing full execution output to 
   ```r
   data <- readRDS("data/tidyproteomics_data.rds")
   ```
-- Filter out sample contaminants:
+- Filter out sample contaminants (if description annotations exist):
   ```r
-  data_filtered <- data %>% subset(!description %like% "CRAP|Trypsin")
+  if ("description" %in% colnames(as.data.frame(data))) {
+    data_filtered <- data %>% subset(!description %like% "CRAP|Trypsin")
+  } else {
+    data_filtered <- data
+  }
   ```
-- If analyte is `proteins`, retain high-confidence identifications:
+- If analyte is `proteins` and peptide accounting is present, retain high-confidence identifications:
   ```r
-  data_filtered <- data_filtered %>% subset(num_unique_peptides >= 2)
+  if (data_filtered$analyte == "proteins" && "num_unique_peptides" %in% colnames(as.data.frame(data_filtered))) {
+    data_filtered <- data_filtered %>% subset(num_unique_peptides >= 2)
+  }
   ```
-- **Checkpoint 2.1**: Print `print(data_filtered)` to confirm removed contaminant count and remaining high-confidence protein IDs in stdout and log.
+- **Checkpoint 2.1**: Print `print(data_filtered)` to confirm removed contaminant count and remaining high-confidence IDs in stdout and log.
 
 #### Phase 2.2: Multi-Method Normalization Benchmarking
 - Compute candidate normalizations:
@@ -42,7 +48,7 @@ Construct and execute `code/02_normalize.R`, capturing full execution output to 
   ```
 - Move generated diagnostic plots into `data/`:
   ```r
-  plots <- list.files(pattern = "^plot_proteins_.*(variation|pca).*\\.png$")
+  plots <- list.files(pattern = "^plot_(proteins|peptides)_.*(variation|pca).*\\.png$")
   for (p in plots) {
     file.rename(p, file.path("data", p))
   }
@@ -65,8 +71,8 @@ Construct and execute `code/02_normalize.R`, capturing full execution output to 
 - [ ] **Checkpoint 2.5**:
   1. `logs/02_normalize.log` exists on disk with non-zero file size.
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size and contains normalized abundance layers.
-  3. `data/plot_proteins_*_pca_PC1PC2.png` exists on disk with non-zero file size.
-  4. If multiple quantitative layers exist, `data/plot_proteins_normalizated_variation.png` exists on disk.
+  3. PCA score plot (`data/plot_*_pca_PC1PC2.png`) exists on disk with non-zero file size.
+  4. If multiple quantitative layers exist, variation plot (`data/plot_*_normalizated_variation.png`) exists on disk.
   5. `docs/notes.md` contains the normalization benchmark summary.
 - [ ] **Complete Phase**:
   - Invoke `complete_phase(phaseName = "02_NORMALIZE", summary = "Normalization benchmarking completed. Selected optimal normalization method, verified CV reduction across replicates, generated PCA and variation plots, and persisted data/tidyproteomics_data.rds.")`

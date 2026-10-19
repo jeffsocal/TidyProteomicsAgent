@@ -33,11 +33,12 @@ Construct and execute `code/01_inspect.R`, capturing full execution output to `l
   ```r
   summary(data, "sample")
   ```
-- [ ] Generate protein identification counts diagnostic plot:
+- [ ] Generate identification counts diagnostic plot:
   ```r
   invisible(data %>% plot_counts(destination = "png"))
-  if (file.exists("plot_proteins_counts.png")) {
-    file.rename("plot_proteins_counts.png", file.path("data", "plot_proteins_counts.png"))
+  count_plot <- list.files(pattern = "^plot_(proteins|peptides)_counts\\.png$")[1]
+  if (!is.na(count_plot) && file.exists(count_plot)) {
+    file.rename(count_plot, file.path("data", count_plot))
   }
   ```
 - [ ] **Checkpoint 1.2**: Verify that replicate counts, quantifiable fractions, replicate CV distributions, and missingness metrics are printed to stdout and recorded in `logs/01_inspect.log`.
@@ -63,18 +64,18 @@ Construct and execute `code/01_inspect.R`, capturing full execution output to `l
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size.
   3. `sample_names` confirms the exact naming of control and treatment/perturbation conditions.
   4. `annot_terms` outputs all functional category names available in the dataset (e.g., Gene Ontology, Reactome, UniProt keywords).
-  5. `data/plot_proteins_counts.png` exists in `data/` with non-zero file size.
+  5. Count diagnostic plot (`data/plot_proteins_counts.png` or `data/plot_peptides_counts.png`) exists in `data/` with non-zero file size.
 
 #### Phase 1.4: Experimental Alignment & Hypothesis Verification (`docs/experiment.md` is Read-Only)
 - [ ] **READ-ONLY INSPECTION**: Inspect `docs/experiment.md` (user-maintained specification) to extract:
   1. **User Working Hypothesis & Rationale**: Understand the underlying biological inquiry.
   2. **Biological System & Model**: Note the expected cell line, tissue, or organism.
-  3. **Investigated Target(s)**: Note the primary target gene/protein symbol and UniProt accession (e.g., VCP / P55072).
+  3. **Investigated Target(s) / Discovery Scope**: Note the primary target gene/protein symbol and accession if targeted (e.g., a specific knockdown, knockout, or drug target), or explicitly note "Untargeted / Discovery Screen" if conducting an untargeted differential proteome screen.
   4. **Decided Contrast Designations**: Note the user's defined control and treatment groups for downstream differential expression analysis (`treatment` vs `control`).
 - [ ] **Data Alignment Check**: Cross-reference the user's defined contrast groups against the extracted `sample_names` in stdout. Confirm that the dataset contains the required sample conditions.
 - [ ] **Blackboard Recording**:
   - **NEVER modify or overwrite `docs/experiment.md`** (it is strictly reserved for user/researcher modification).
-  - Record the experimental alignment verification, confirmed contrast groups, discovered target metadata, and baseline quality stats directly into `docs/notes.md`.
+  - Record the experimental alignment verification, confirmed contrast groups, discovered target metadata (or untargeted scope), and baseline quality stats directly into `docs/notes.md`.
 - [ ] **Checkpoint 1.4 (Design Alignment Gate)**: Do not proceed to Phase 2 until `docs/experiment.md` has been verified, sample alignment is confirmed against `sample_names`, and the verification summary is recorded in `docs/notes.md`.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "01_INSPECT", summary = "Data ingestion complete. Ingested raw data, verified sample groups in sample_names, confirmed alignment with docs/experiment.md, generated plot_proteins_counts.png, and persisted data/tidyproteomics_data.rds.")`
+  - Invoke `complete_phase(phaseName = "01_INSPECT", summary = "Data ingestion complete. Ingested raw data, verified sample groups in sample_names, confirmed alignment with docs/experiment.md, generated count diagnostic plot, and persisted data/tidyproteomics_data.rds.")`
