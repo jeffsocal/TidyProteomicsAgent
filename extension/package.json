@@ -1,0 +1,134 @@
+{
+  "name": "tidyproteomicsagent",
+  "displayName": "TidyProteomicsAgent",
+  "description": "Autonomous phase-gated agentic reasoning extension with persistent prompts and isolated task loops.",
+  "version": "0.1.0",
+  "publisher": "tidyproteomicsagent",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Machine Learning",
+    "Programming Languages"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onView:tidyproteomicsagent.sidebarView",
+    "onCommand:tidyproteomicsagent.startPipeline",
+    "onCommand:tidyproteomicsagent.runCurrentPhase",
+    "onCommand:tidyproteomicsagent.resetState",
+    "onCommand:tidyproteomicsagent.refreshTasks",
+    "onCommand:tidyproteomicsagent.initWorkspace"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tidyproteomicsagent-sidebar",
+          "title": "TidyProteomicsAgent",
+          "icon": "media/robot.svg"
+        }
+      ]
+    },
+    "views": {
+      "tidyproteomicsagent-sidebar": [
+        {
+          "type": "webview",
+          "id": "tidyproteomicsagent.sidebarView",
+          "name": "TidyProteomicsAgent Pipeline"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "tidyproteomicsagent.startPipeline",
+        "title": "TidyProteomicsAgent: Start Autonomous Pipeline",
+        "icon": "$(play)"
+      },
+      {
+        "command": "tidyproteomicsagent.runCurrentPhase",
+        "title": "TidyProteomicsAgent: Run Selected Phase"
+      },
+      {
+        "command": "tidyproteomicsagent.resetState",
+        "title": "TidyProteomicsAgent: Reset Pipeline State",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "tidyproteomicsagent.refreshTasks",
+        "title": "TidyProteomicsAgent: Refresh Tasks from Disk",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "tidyproteomicsagent.initWorkspace",
+        "title": "TidyProteomicsAgent: Initialize Analysis Pipeline",
+        "icon": "$(sparkle)"
+      }
+    ],
+    "configuration": {
+      "title": "TidyProteomicsAgent",
+      "properties": {
+        "tidyproteomicsagent.provider": {
+          "type": "string",
+          "enum": [
+            "anthropic",
+            "openrouter",
+            "ollama",
+            "gemini",
+            "openai"
+          ],
+          "default": "anthropic",
+          "description": "Default LLM provider"
+        },
+        "tidyproteomicsagent.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Base URL for Remote Ollama (e.g. http://192.168.1.100:11434/v1) or custom OpenRouter endpoint"
+        },
+        "tidyproteomicsagent.model": {
+          "type": "string",
+          "default": "claude-3-7-sonnet-20250219",
+          "description": "Model ID to use for reasoning"
+        },
+        "tidyproteomicsagent.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API Key for chosen provider. Automatically synced with secure SecretStorage."
+        },
+        "tidyproteomicsagent.maxTokens": {
+          "type": "number",
+          "default": 32768,
+          "description": "Maximum completion/output tokens per turn (e.g. 16384, 32768, 65536, 128000)"
+        },
+        "tidyproteomicsagent.timeoutSeconds": {
+          "type": "number",
+          "default": 600,
+          "description": "Request timeout in seconds for LLM API calls (e.g. 180, 300, 600, 900). Default is 600s (10 minutes) for large models and complex synthesis."
+        },
+        "tidyproteomicsagent.promptsDir": {
+          "type": "string",
+          "default": "agent",
+          "description": "Relative path to persistent agent configuration and prompt directory"
+        },
+        "tidyproteomicsagent.analysisDir": {
+          "type": "string",
+          "default": "analysis",
+          "description": "Relative path to phase analysis prompts directory"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "compile": "tsc -p ./ && node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "build": "tsc -p ./ && node esbuild.js --production"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.3"
+  }
+}
