@@ -526,7 +526,7 @@ class SidebarViewProvider {
         const items = [
             {
                 label: "$(symbol-structure) Differential Expression Pipeline",
-                description: "Full 5-phase workflow (QC, Normalization, Differential Expression, Observations, Report)",
+                description: "Full 8-phase workflow (Install, Inspect, Normalize, Impute, Expression, Enrichment, Observations, Report)",
                 id: "differential_expression",
             },
             {
@@ -1878,9 +1878,9 @@ class SidebarViewProvider {
         const selectEl = e.target;
         if (descEl) {
           if (selectEl.value === "quality_control_only") {
-            descEl.innerHTML = "<b>Phases:</b> 00_SETUP ➔ 01_DATA_QUALITY.<br><i>Includes: Workspace readiness, data import, replicate CV analysis, quantifiable fraction evaluation, and PCA separation.</i>";
+            descEl.innerHTML = "<b>Phases:</b> 00_INSTALL ➔ 01_INSPECT.<br><i>Includes: Workspace readiness, data import, replicate CV analysis, quantifiable fraction evaluation, and PCA separation.</i>";
           } else {
-            descEl.innerHTML = "<b>Phases:</b> 00_SETUP ➔ 01_DATA_QUALITY ➔ 02_EXPRESSION ➔ 03_OBSERVATIONS ➔ 04_SYNTHESIS.<br><i>Includes: QC, normalization, imputation, differential expression, observation notes, and synthesis report.</i>";
+            descEl.innerHTML = "<b>Phases:</b> 00_INSTALL ➔ 01_INSPECT ➔ 02_NORMALIZE ➔ 03_IMPUTE ➔ 04_EXPRESSION ➔ 05_ENRICHMENT ➔ 06_OBSERVATIONS ➔ 07_SYNTHESIS.<br><i>Includes: Environment readiness, QC inspection, normalization benchmarking, imputation, differential expression, pathway enrichment, literature observations, and synthesis report.</i>";
           }
         }
       }
@@ -2220,13 +2220,13 @@ class SidebarViewProvider {
               '<div style="margin-bottom:8px;">' +
                 '<label style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--muted); display:block; margin-bottom:4px;">Pipeline Template</label>' +
                 '<select id="pipelineTemplateSelect" style="width:100%; box-sizing:border-box; padding:5px 8px; font-size:11px; background:var(--vscode-input-background, #252526); color:var(--vscode-input-foreground, #cccccc); border:1px solid var(--vscode-input-border, #3c3c3c); border-radius:4px; outline:none;">' +
-                  '<option value="differential_expression">Differential Expression (5-Phase Pipeline)</option>' +
+                  '<option value="differential_expression">Differential Expression (8-Phase Pipeline)</option>' +
                   '<option value="quality_control_only">Quality Control &amp; Exploration (2-Phase QC)</option>' +
                 '</select>' +
               '</div>' +
               '<div id="pipelineDescription" style="font-size:10px; color:var(--muted); margin-bottom:12px; background:rgba(255,255,255,0.03); padding:6px 8px; border-radius:4px; border-left:3px solid var(--primary, #007acc); line-height:1.4;">' +
-                '<b>Phases:</b> 00_SETUP ➔ 01_DATA_QUALITY ➔ 02_EXPRESSION ➔ 03_OBSERVATIONS ➔ 04_SYNTHESIS.<br>' +
-                '<i>Includes QC, normalization, imputation, differential expression, observation notes, and final synthesis report.</i>' +
+                '<b>Phases:</b> 00_INSTALL ➔ 01_INSPECT ➔ 02_NORMALIZE ➔ 03_IMPUTE ➔ 04_EXPRESSION ➔ 05_ENRICHMENT ➔ 06_OBSERVATIONS ➔ 07_SYNTHESIS.<br>' +
+                '<i>Includes environment readiness, QC inspection, normalization benchmarking, imputation, differential expression, pathway enrichment, literature observations, and final synthesis report.</i>' +
               '</div>' +
               '<button type="button" id="initWorkspaceBtn" data-action="initWorkspace" class="btn-primary" style="width:100%; padding:7px 10px; font-size:11px; font-weight:600; display:flex; align-items:center; justify-content:center; gap:6px; cursor:pointer;">' +
                 '<span>' + (ICONS["sparkles"] || "") + '</span> Initialize Working Directory' +
@@ -2288,7 +2288,7 @@ class SidebarViewProvider {
                 taskName = "TASK " + (i + 1);
               }
               if (p.isMasterSetup && taskName === "INSTRUCT") {
-                taskName = "00_SETUP";
+                taskName = "00_INSTALL";
               }
 
               const safeTaskName = escapeHtml(taskName);

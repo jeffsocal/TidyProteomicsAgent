@@ -429,7 +429,7 @@ Construct and execute code for this phase, capturing output to logs.
             agentFolder = "prompts";
         }
         const list = [
-            { name: "analysis", relPath: "analysis", description: "Phase Prompts (00_SETUP.md .. 04_SYNTHESIS.md)" },
+            { name: "analysis", relPath: "analysis", description: "Phase Prompts (00_INSTALL.md .. 07_SYNTHESIS.md)" },
             { name: agentFolder, relPath: agentFolder, description: "Protocol, Variables & Skills (Cached Prefix)" },
             { name: "code", relPath: "code", description: "Generated Analysis Scripts" },
             { name: "tools", relPath: "tools", description: "Linter & Execution Helper Utilities" },

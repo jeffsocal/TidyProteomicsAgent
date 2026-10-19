@@ -1,11 +1,11 @@
-### Phase 1: Data Ingestion & Exploratory Inspection
-Construct and execute `code/01_data_quality.R`, capturing full execution output to `logs/01_data_quality.log` (e.g. `Rscript code/01_data_quality.R 2>&1 | tee logs/01_data_quality.log`). You must strictly enforce all checkpoints below.
+### Phase 1: Data Ingestion & Exploratory Quality Inspection
 
+Construct and execute `code/01_inspect.R`, capturing full execution output to `logs/01_inspect.log` (e.g. `Rscript code/01_inspect.R 2>&1 | tee logs/01_inspect.log`). You must strictly enforce all checkpoints below.
 
 ---
 
 #### Phase 1.1: Data Ingestion
-- [ ] Construct and execute `code/01_data_quality.R`, piping stdout and stderr to generate `logs/01_data_quality.log` (e.g. `Rscript code/01_data_quality.R 2>&1 | tee logs/01_data_quality.log`).
+- [ ] Construct and execute `code/01_inspect.R`, piping stdout and stderr to generate `logs/01_inspect.log` (e.g. `Rscript code/01_inspect.R 2>&1 | tee logs/01_inspect.log`).
 - [ ] Load required libraries: `tidyproteomics` and `dplyr`.
 - [ ] Ingest the raw quantitative dataset (substituting `{{PATH_TO_DATA_FILE}}`, `{{PLATFORM}}`, and `{{ANALYTE}}` with actual values from `docs/experiment.md`). If `{{PATH_TO_DATA_FILE}}` is a remote URL (starts with `http://` or `https://`), stage it locally into `data/raw/` first:
   ```r
@@ -33,7 +33,14 @@ Construct and execute `code/01_data_quality.R`, capturing full execution output 
   ```r
   summary(data, "sample")
   ```
-- [ ] **Checkpoint 1.2**: Verify that replicate counts, quantifiable fractions, replicate CV distributions, and PCA separation are printed to stdout and recorded in `logs/01_data_quality.log`.
+- [ ] Generate protein identification counts diagnostic plot:
+  ```r
+  invisible(data %>% plot_counts(destination = "png"))
+  if (file.exists("plot_proteins_counts.png")) {
+    file.rename("plot_proteins_counts.png", file.path("data", "plot_proteins_counts.png"))
+  }
+  ```
+- [ ] **Checkpoint 1.2**: Verify that replicate counts, quantifiable fractions, replicate CV distributions, and missingness metrics are printed to stdout and recorded in `logs/01_inspect.log`.
 
 #### Phase 1.3: Annotation & Sample Inventory Enforcement
 - [ ] Extract and inspect sample group designations:
@@ -52,10 +59,11 @@ Construct and execute `code/01_data_quality.R`, capturing full execution output 
   saveRDS(data, file = "data/tidyproteomics_data.rds")
   ```
 - [ ] **Checkpoint 1.3 (Phase Gate & Log Verification)**:
-  1. `logs/01_data_quality.log` exists on disk with non-zero file size.
+  1. `logs/01_inspect.log` exists on disk with non-zero file size.
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size.
   3. `sample_names` confirms the exact naming of control and treatment/perturbation conditions.
   4. `annot_terms` outputs all functional category names available in the dataset (e.g., Gene Ontology, Reactome, UniProt keywords).
+  5. `data/plot_proteins_counts.png` exists in `data/` with non-zero file size.
 
 #### Phase 1.4: Experimental Alignment & Hypothesis Verification (`docs/experiment.md` is Read-Only)
 - [ ] **READ-ONLY INSPECTION**: Inspect `docs/experiment.md` (user-maintained specification) to extract:
@@ -66,7 +74,7 @@ Construct and execute `code/01_data_quality.R`, capturing full execution output 
 - [ ] **Data Alignment Check**: Cross-reference the user's defined contrast groups against the extracted `sample_names` in stdout. Confirm that the dataset contains the required sample conditions.
 - [ ] **Blackboard Recording**:
   - **NEVER modify or overwrite `docs/experiment.md`** (it is strictly reserved for user/researcher modification).
-  - Record the experimental alignment verification, confirmed contrast groups, and discovered target metadata directly into `docs/notes.md`.
+  - Record the experimental alignment verification, confirmed contrast groups, discovered target metadata, and baseline quality stats directly into `docs/notes.md`.
 - [ ] **Checkpoint 1.4 (Design Alignment Gate)**: Do not proceed to Phase 2 until `docs/experiment.md` has been verified, sample alignment is confirmed against `sample_names`, and the verification summary is recorded in `docs/notes.md`.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "01_DATA_QUALITY", summary = "Data ingestion complete. Staged raw data, verified sample groups in sample_names, confirmed alignment with docs/experiment.md, and persisted data/tidyproteomics_data.rds.")`
+  - Invoke `complete_phase(phaseName = "01_INSPECT", summary = "Data ingestion complete. Ingested raw data, verified sample groups in sample_names, confirmed alignment with docs/experiment.md, generated plot_proteins_counts.png, and persisted data/tidyproteomics_data.rds.")`

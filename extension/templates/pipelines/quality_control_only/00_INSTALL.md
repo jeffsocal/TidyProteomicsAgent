@@ -1,4 +1,4 @@
-### Phase 0: Workspace Verification, Parameter Gates & Environment Readiness
+### Phase 0: System Installation, Environment Readiness & Workspace Gates
 
 Execute workspace validation, enforce research specification gates, and establish the runtime tracking blackboard. You must strictly enforce all checkpoints below before allowing downstream analysis to proceed.
 
@@ -35,19 +35,19 @@ Execute workspace validation, enforce research specification gates, and establis
   - You do NOT need to calculate or track execution token counts or run durations; telemetry is owned entirely by the orchestrator.
 
 #### Phase 0.4: Environment & Package Readiness Verification
-- [ ] Execute the pre-flight environment script from the project root, piping stdout and stderr to `logs/00_setup.log`:
+- [ ] Execute the pre-flight environment script from the project root, piping stdout and stderr to `logs/00_install.log` (or `logs/00_setup.log`):
   ```bash
-  Rscript code/00_environment.R 2>&1 | tee logs/00_setup.log
+  Rscript code/00_environment.R 2>&1 | tee logs/00_install.log
   ```
 - [ ] Verify that all required CRAN packages (`dplyr`, `ggplot2`, `knitr`, etc.), Bioconductor packages (`limma`, `fgsea`, etc.), and GitHub package (`jeffsocal/tidyproteomics`) are installed and load cleanly.
-- [ ] Confirm that `logs/00_setup.log` exposes the active R version, tidyproteomics version, and the versions of all installed dependencies.
+- [ ] Confirm that `logs/00_install.log` exposes the active R version, tidyproteomics version, and the versions of all installed dependencies.
 
 #### Phase 0.5: Checkpoint Verification & State Recording
 - [ ] **Checkpoint 0.1 (Workspace & Readiness Gate)**:
   1. All subdirectories (`analysis/`, `code/`, `docs/`, `agent/`, `data/`, `logs/`, `tools/`) are verified on disk.
   2. `docs/experiment.md` is verified to contain valid `PATH_TO_DATA_FILE`, `PLATFORM`, and `ANALYTE` dataset parameters and non-placeholder user hypothesis/study content.
-  3. `logs/00_setup.log` exists on disk with non-zero file size and script exit status 0.
+  3. `logs/00_install.log` (or `logs/00_setup.log`) exists on disk with non-zero file size and script exit status 0.
   4. The log ends with `Setup complete! All required packages are ready to use.`.
   5. `docs/notes.md` exists on disk.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "00_SETUP", summary = "Workspace verification passed. All subdirectories present, experiment hypothesis and dataset parameters configured in docs/experiment.md, and all R packages verified in logs/00_setup.log.")`
+  - Invoke `complete_phase(phaseName = "00_INSTALL", summary = "Workspace verification passed. All subdirectories present, experiment hypothesis and dataset parameters configured in docs/experiment.md, and all R packages verified in logs/00_install.log.")`

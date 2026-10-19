@@ -20,11 +20,14 @@ Unlike standard conversational agents (e.g. Cline) that accumulate all file insp
 
 3. **Isolated Phase Reasoning Loops (`analysis/*.md`)**:
    - Sequential, isolated phase executions:
-     - `00_SETUP.md`: Environment validation & blackboard initialization
-     - `01_QUALITY.md`: Ingestion, replicate CV & biological discovery
-     - `02_EXPRESSION.md`: Normalization benchmark & differential expression
-     - `03_OBSERVATIONS.md`: Data extraction & biological literature notes
-     - `04_SYNTHESIS.md`: Publication-grade manuscript compilation
+     - `00_INSTALL.md`: System verification, package readiness & workspace gates
+     - `01_INSPECT.md`: Data ingestion, replicate CV & exploratory quality inspection
+     - `02_NORMALIZE.md`: Contaminant filtering & multi-method normalization benchmarking
+     - `03_IMPUTE.md`: Missingness assessment (MAR vs MNAR) & quantitative imputation
+     - `04_EXPRESSION.md`: Contrast modeling, moderated t-statistics (`limma`) & volcano plots
+     - `05_ENRICHMENT.md`: Annotation adequacy assessment & multi-category pathway enrichment
+     - `06_OBSERVATIONS.md`: Targeted data extraction & biological literature notes
+     - `07_SYNTHESIS.md`: Publication-grade manuscript compilation
    - Tool calls, command executions, and self-correction retries stay local to the active phase.
    - Upon meeting phase checkpoints, the local trajectory is **completely discarded from memory**.
    - Subsequent phases start with a pristine, unpolluted context window reading only disk state!

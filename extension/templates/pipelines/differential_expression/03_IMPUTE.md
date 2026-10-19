@@ -1,0 +1,67 @@
+### Phase 3: Missingness Assessment & Quantitative Imputation
+
+Construct and execute `code/03_impute.R`, capturing full execution output to `logs/03_impute.log` (e.g. `Rscript code/03_impute.R 2>&1 | tee logs/03_impute.log`). You must strictly enforce all checkpoints below.
+
+---
+
+#### Phase 3.1: Missing Value Distribution & Mechanism Audit
+- Load the normalized dataset from Phase 2:
+  ```r
+  norm_data <- readRDS("data/tidyproteomics_data.rds")
+  ```
+- Quantify missing values overall and per sample/condition:
+  ```r
+  cat("=== MISSING VALUE AUDIT ===\n")
+  print(norm_data)
+  summary(norm_data, "sample")
+  ```
+- **Scientific Imputation Strategy Assessment**:
+  Evaluate the biological mechanism of missingness before applying an imputation function:
+  1. **Missing Not At Random (MNAR) / Limit of Detection (LOD)**:
+     - *Characteristics*: Protein is consistently present in control/baseline replicates but completely undetected in knockout/perturbation replicates (or vice versa).
+     - *Pros of Left-Censored Minimum (`base::min`)*: Captures true biological dropouts and preserves large effect sizes for genuine biological absences.
+     - *Cons of Left-Censored Minimum*: Artificially truncates the lower-tail variance if missingness is due to technical stochasticity.
+     - *Recommended Code*:
+       ```r
+       imp_data <- norm_data %>%
+         impute(.function = base::min, method = "column", group_by_sample = TRUE)
+       ```
+  2. **Missing At Random (MAR)**:
+     - *Characteristics*: Missingness occurs sporadically across replicates at moderate-to-high protein abundances.
+     - *Pros of Correlation / Neighbor Imputation*: Preserves replicate covariance structure.
+     - *Cons*: May inappropriately infer signal for proteins that are biologically non-expressed.
+  3. **No Imputation / Pairwise Deletion**:
+     - *Pros*: Preserves empirical ground truth without synthetic data injection; `limma` natively handles missing values in linear modeling.
+     - *Cons*: Cannot compute finite fold changes or $p$-values for proteins completely absent in one condition (they drop out of volcano plots).
+
+#### Phase 3.2: Imputation Execution
+- Based on the experimental study design (e.g., knockout/knockdown study design from `docs/experiment.md`) and missingness audit, apply the appropriate imputation method:
+  ```r
+  # Standard default for perturbation/knockout proteomics is within-condition left-censored minimum:
+  imp_data <- norm_data %>%
+    impute(.function = base::min, method = "column", group_by_sample = TRUE)
+  ```
+- **Checkpoint 3.2**: Print `print(imp_data)` and inspect operations history via `operations(imp_data)` to confirm imputation succeeded and verify that residual missingness has been resolved.
+
+#### Phase 3.3: Post-Imputation Distribution Verification
+- Verify that the imputed dataset maintains valid dynamic range and variance structure across conditions.
+- Confirm that no `NaN` or `Inf` values were introduced into quantitative matrices.
+
+#### Phase 3.4: Object Persistence & Blackboard Recording
+- Persist the imputed dataset to disk for downstream statistical modeling:
+  ```r
+  saveRDS(imp_data, file = "data/tidyproteomics_data.rds")
+  ```
+- Record the following directly into `docs/notes.md`:
+  - Overall missingness percentage prior to imputation.
+  - Condition-specific dropout patterns (e.g., proteins uniquely absent in treatment vs. control).
+  - Chosen imputation method and scientific rationale (MAR vs. MNAR).
+  - Post-imputation data completeness confirmation.
+
+#### Phase 3.5: Checkpoint Verification & State Recording
+- [ ] **Checkpoint 3.5**:
+  1. `logs/03_impute.log` exists on disk with non-zero file size.
+  2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size and operations log contains `impute`.
+  3. `docs/notes.md` contains the missingness audit and imputation strategy rationale.
+- [ ] **Complete Phase**:
+  - Invoke `complete_phase(phaseName = "03_IMPUTE", summary = "Missingness audit and imputation completed. Applied selected imputation model, confirmed matrix completeness, and persisted data/tidyproteomics_data.rds.")`

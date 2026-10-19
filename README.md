@@ -30,7 +30,7 @@ The diagram below illustrates the core execution architecture:
         ▼                           ▼                           ▼
 ┌───────────────┐           ┌───────────────┐           ┌───────────────┐
 │ Sub-Loop: P1  │           │ Sub-Loop: P2  │           │ Sub-Loop: P3  │
-│ 01_QUALITY.md │  Passed   │ 02_EXPRESSION │  Passed   │ 03_EXTRACT    │
+│ 01_INSPECT.md │  Passed   │ 02_NORMALIZE  │  Passed   │ 03_IMPUTE...  │
 │ (Isolated     ├──────────►│ (Fresh Context├──────────►│ (Fresh Context│
 │  Tool History)│           │  Tool History)│           │  Tool History)│
 └───────┬───────┘           └───────┬───────┘           └───────┬───────┘
@@ -70,11 +70,11 @@ The diagram below illustrates the core execution architecture:
 ## Features
 
 - **Built-in Pipeline Templates**:
-  - 🧬 **Standard Differential Expression (5 Phases)**: Full workflow from pre-flight validation, data quality and PCA exploration, normalization/imputation, differential expression, observation notes, and executive synthesis reporting.
+  - 🧬 **Standard Differential Expression (8 Phases)**: Full modular workflow from environment readiness (`00_INSTALL`), data inspection (`01_INSPECT`), normalization benchmarking (`02_NORMALIZE`), missingness assessment & imputation (`03_IMPUTE`), differential expression (`04_EXPRESSION`), functional annotation & pathway enrichment (`05_ENRICHMENT`), literature observations (`06_OBSERVATIONS`), to publication-grade manuscript synthesis (`07_SYNTHESIS`).
   - 📊 **Quality Control & Exploration (2 Phases)**: Rapid exploratory data analysis, replicate CV evaluation, quantifiable fraction verification, and PCA separation.
 - **One-Click Workspace Initialization**:
   - Open any empty directory in VS Code and initialize the complete study structure (`analysis/`, `code/`, `agent/`, `data/`, `docs/`, `logs/`, `tools/`, and `.gitignore`) with a single click.
-- **Pre-Flight Research Gates (`00_SETUP`)**:
+- **Pre-Flight Research Gates (`00_INSTALL`)**:
   - Validates project folder structure.
   - Ensures the researcher has populated `docs/experiment.md` with dataset parameters (`PATH_TO_DATA_FILE`, `PLATFORM`, `ANALYTE`) and study hypotheses (rejecting unedited placeholder templates).
   - Tests R package availability (CRAN, Bioconductor, and `tidyproteomics`).

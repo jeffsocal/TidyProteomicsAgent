@@ -33,11 +33,14 @@ $$\text{Read Phase Directive} \longrightarrow \text{Author Script} \longrightarr
 1. **Isolated Reasoning Sub-Loops**: Each phase executes in an isolated context window. Inter-phase memory is preserved exclusively through verified disk artifacts (`data/*`, `logs/*`, `docs/*`).
 2. **Persistent Shared Memory & User Specifications**: Runtime execution state, technical audits, and task histories are tracked continuously on disk in `docs/notes.md`. Crucially, `docs/experiment.md` is an **immutable, user-owned specification** defining the biological hypothesis, model system, and designated contrast groups. **The agent is strictly prohibited from modifying or overwriting `docs/experiment.md`**.
 3. **Sequential Progression**: Phases defined in `analysis/*.md` execute in alphanumeric order (e.g., `00_*.md` $\to$ `01_*.md` $\to$ `02_*.md` $\dots$):
-   - **Environment & Setup**: Validate system dependencies, runtime packages, and initialize blackboard tracking in `docs/notes.md`.
-   - **Ingestion & Quality Control**: Ingest raw input data, assess sample quality and reproducibility metrics, verify alignment with user contrast groups from `docs/experiment.md`, and record verification in `docs/notes.md`.
-   - **Transformation, Modeling & Statistics**: Apply normalization, statistical contrast testing, model fitting, and quantitative comparisons.
-   - **Deep Observations & Feature Exploration**: Investigate significant features, enrichments, correlations, and compile structured findings in `docs/observations.md`.
-   - **Synthesis & Final Reporting**: Synthesize findings into a publication-grade, self-contained report (`docs/report.md` or `docs/scientific_report.md`).
+   - **00_INSTALL**: Validate system dependencies, runtime packages (`code/00_environment.R`), and initialize blackboard tracking in `docs/notes.md`.
+   - **01_INSPECT**: Ingest raw input data (`tidyproteomics::import`), assess sample quality, replicate CVs, and verify contrast groups against `docs/experiment.md`.
+   - **02_NORMALIZE**: Filter sample contaminants, benchmark candidate normalization methods (`median`, `linear`, `loess`, `limma`), select the optimal model, and verify CV reduction across replicates.
+   - **03_IMPUTE**: Audit missingness mechanisms (MAR vs. MNAR), evaluate imputation trade-offs (e.g., left-censored minimum for dropouts vs. neighbor methods), and persist the imputed quantitative matrix.
+   - **04_EXPRESSION**: Define contrast pairs (`treatment` vs. `control`), compute empirical Bayes moderated $t$-statistics (`expression(.method = "limma")`), and export volcano plots and candidate expression profiles.
+   - **05_ENRICHMENT**: Assess functional annotation adequacy; if missing or sparse, guide the researcher to the [TidyProteomics Annotation Guide](https://jeffsocal.github.io/tidyproteomics/articles/annotating.html) or import `data/annotations.csv`; execute multi-category Wilcoxon rank-sum enrichment testing.
+   - **06_OBSERVATIONS**: Run targeted extraction (`code/06_observations.R`), verify target perturbation, curate top 10 biomarker tables, corroborate findings with scientific literature, and author `docs/observations.md`.
+   - **07_SYNTHESIS**: Author a publication-grade scientific manuscript (`docs/scientific_report.md`) with embedded diagnostic figures, validated statistics, and an in-depth biological Discussion.
 
 ---
 
