@@ -15,17 +15,29 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
   cat("Available sample groups:\n")
   print(sample_names)
   ```
-- Define contrast pairs as a list of two-element vectors representing `treatment` vs `control`:
+- Define contrast pairs as a list of two-element vectors representing `c(treatment, control)`:
   ```r
+  # 1. Single comparison:
+  # pairs <- list(c("<treatment_group>", "<control_group>"))
+
+  # 2. Multi-group / multi-arm screen (e.g. comparing multiple perturbations to control or each other):
+  # pairs <- list(
+  #   c("drug_a", "vehicle"),
+  #   c("drug_b", "vehicle"),
+  #   c("drug_a", "drug_b")
+  # )
+
+  # 3. Factorial design (e.g. Genotype x Treatment):
+  # Form composite groups (e.g. WT_vehicle, WT_treated, KO_vehicle, KO_treated) and define pairwise arms:
+  # pairs <- list(
+  #   c("WT_treated", "WT_vehicle"),
+  #   c("KO_treated", "KO_vehicle"),
+  #   c("KO_vehicle", "WT_vehicle")
+  # )
+
   treatment_group <- "<decided_treatment_group>"
   control_group <- "<decided_control_group>"
   pairs <- list(c(treatment_group, control_group))
-
-  # For stratified / multi-tissue designs (e.g. paste(sample_tissue, sample, sep = "_")):
-  # pairs <- list(
-  #   c("brain_stem_necrotic", "brain_stem_control"),
-  #   c("cortex_necrotic", "cortex_control")
-  # )
   ```
 
 #### Phase 4.2: Empirical Bayes Differential Expression
@@ -34,6 +46,7 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
   stat_data <- imp_data %>%
     expression(.pairs = pairs, .method = "limma")
   ```
+  *(Note for repeated measures / paired-sample cohorts: specify subject origin in metadata and consider `expression(..., .method = "mixed-effects")`).*
 - **Checkpoint 4.2**: Verify that differential expression contrasts are successfully computed and recorded in `operations(stat_data)`.
 
 #### Phase 4.3: Automated Export, Volcano Plots & Candidate Expression Profiles
@@ -83,7 +96,7 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
 
 - **Move Generated Volcano & Table Assets into `data/`**:
   ```r
-  generated_assets <- list.files(pattern = "^(.*(proteins|peptides)_volcano_|.*table_(proteins|peptides)_expression_).*(png|csv)$")
+  generated_assets <- list.files(pattern = "^(plot_|table_|.*_volcano_|.*_expression_).*(png|csv)$")
   for (f in generated_assets) {
     file.rename(f, file.path("data", f))
   }

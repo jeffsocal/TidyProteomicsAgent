@@ -48,7 +48,7 @@ Construct and execute `code/02_normalize.R`, capturing full execution output to 
   ```
 - Move generated diagnostic plots into `data/`:
   ```r
-  plots <- list.files(pattern = "^plot_(proteins|peptides)_.*(variation|pca).*\\.png$")
+  plots <- list.files(pattern = "^plot_.*(variation|pca).*\\.png$")
   for (p in plots) {
     file.rename(p, file.path("data", p))
   }

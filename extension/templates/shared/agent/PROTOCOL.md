@@ -17,7 +17,7 @@ All generated project assets must strictly adhere to the following organized str
 | `code/` | Executable analysis scripts | `code/<NN>_<task_name>.[R|py|sh]` (self-contained, non-interactive, reproducible) |
 | `logs/` | Persistent execution logs | `logs/<NN>_<task_name>.log` (captures combined stdout and stderr for audit & triage) |
 | `data/` | Data artifacts, tables & figures | Single persistent tidyproteomics object (`tidyproteomics_data.rds`), summary tables (`*.csv`), figures (`*.png`) |
-| `docs/` | Blackboard & structured reports | Runtime blackboard (`notes.md`), active model summary (`llm.md` - Read-Only, maintained by extension), user experiment & dataset design (`experiment.md` - Read-Only), findings (`observations.md`), synthesis (`scientific_report.md`) |
+| `docs/` | Blackboard & structured reports | Runtime blackboard (`notes.md`), active model summary (`llm.md` - Read-Only, maintained by extension), user experiment & dataset design (`experiment.md` - Read-Only), primary observations (`observations.md`), internal knowledge (`knowledge.md`), web search corroboration (`websearch.md`), literature database interrogation (`literature.md`), synthesis (`scientific_report.md`) |
 | `agent/` | Global agent context suite | Static configuration files (`PROTOCOL.md`, `SKILL.md`) compiled into the system prompt prefix |
 | `analysis/` | Phase directives & gates | Sequential markdown directives (`<NN>_<PHASE_NAME>.md`) defining tasks and gate checkpoints |
 
@@ -39,8 +39,11 @@ $$\text{Read Phase Directive} \longrightarrow \text{Author Script} \longrightarr
    - **03_IMPUTE**: Audit missingness mechanisms (MAR vs. MNAR), evaluate imputation trade-offs (e.g., left-censored minimum for dropouts vs. neighbor methods), and persist the imputed quantitative matrix.
    - **04_EXPRESSION**: Define contrast pairs (`treatment` vs. `control`), compute empirical Bayes moderated $t$-statistics (`expression(.method = "limma")`), and export volcano plots and candidate expression profiles.
    - **05_ENRICHMENT**: Assess functional annotation adequacy; if missing or sparse, guide the researcher to the [TidyProteomics Annotation Guide](https://jeffsocal.github.io/tidyproteomics/articles/annotating.html) or import `data/annotations.csv`; execute multi-category Wilcoxon rank-sum enrichment testing.
-   - **06_OBSERVATIONS**: Run targeted extraction (`code/06_observations.R`), verify target perturbation, curate top 10 biomarker tables, corroborate findings with scientific literature, and author `docs/observations.md`.
-   - **07_SYNTHESIS**: Author a publication-grade scientific manuscript (`docs/scientific_report.md`) with embedded diagnostic figures, validated statistics, and an in-depth biological Discussion.
+   - **06_OBSERVATIONS**: Run targeted extraction (`code/06_observations.R`), verify target perturbation (or untargeted scope), curate top 10 biomarker tables, summarize top pathway enrichments, and author `docs/observations.md`.
+   - **07_KNOWLEDGE**: Ingest `docs/observations.md`, apply internal biological knowledge to contextualize observations without hallucinating, query data via `agent/SKILL.md` to pursue new hypotheses, develop web-search keyphrases, and author `docs/knowledge.md`.
+   - **08_WEBSEARCH**: Execute targeted web searches using keyphrases from Phase 7, ingest prior observations and knowledge, query data via `agent/SKILL.md` to test new hypotheses, formulate a literature search strategy, and author `docs/websearch.md` with documented references.
+   - **09_LITERATURE**: Interrogate the DuckDB Literature Knowledge Database using the strategy from Phase 8, perform unthresholded reverse-interrogation, query data via `agent/SKILL.md` to follow new hypotheses, and author `docs/literature.md` with grounded citations and verbatim evidence quotes.
+   - **10_SYNTHESIS**: Author a publication-grade scientific manuscript (`docs/scientific_report.md`) synthesizing all evidence from `docs/*` with embedded diagnostic figures, validated statistics, an in-depth biological Discussion integrating all three layers of conclusions, and artifact links.
 
 ---
 
@@ -125,19 +128,25 @@ Direct slot access (`tp_data$experiments`, `tp_data$quantitative`, etc.) violate
   2. The execution script exited cleanly with status code `0`.
   3. The corresponding log file in `logs/` exists and has non-zero size.
   4. All expected data objects, summary tables, and figure files are confirmed present on disk.
-  5. Required documentation updates (in `docs/notes.md` or `docs/observations.md`) are written to disk.
+  5. Required documentation updates (in `docs/notes.md`, `docs/observations.md`, `docs/knowledge.md`, `docs/websearch.md`, or `docs/literature.md`) are written to disk.
 - **Self-Correction Loop**: If a script fails (lint error, non-zero exit code, or error output in log):
   1. Read the error message directly from the terminal or log file.
   2. If lint failed, replace all direct slot access (`$quantitative`, `$analysis`, etc.) or raw `ggplot()` calls with canonical `tidyproteomics` methods.
   3. Formulate a minimal, targeted fix in the script.
   4. Re-execute and verify (up to 2 autonomous retry attempts before escalating to the user).
 - **Non-Interactive Execution**: Never invoke commands or functions that prompt for user interaction (e.g., interactive plotting devices, `browser()`, `readline()`, `input()`). Always save plots and tables directly to disk in `data/`.
+- **Gate Failure & Halting Protocol (`fail_phase`)**:
+  - If a mandatory pre-flight gate, immutable specification prerequisite (e.g. `docs/experiment.md` containing `[REQUIRED:` placeholders), or unrecoverable error requires user intervention:
+    1. Do NOT loop, repeat commands, or attempt redundant verifications.
+    2. Record the blocked status and failure reason in `docs/notes.md`.
+    3. Immediately invoke `fail_phase(phaseName = "<PHASE>", reason = "<REASON>", actionableInsights = "<ACTIONABLE_STEPS>")`.
+    4. State clear, concise, and actionable instructions to the researcher explaining how to fix the issue before rerunning the phase.
 
 ---
 
 ## Document Formatting & Provenance Standard
 
-All agent-authored documents and reports (including `docs/observations.md`, `docs/scientific_report.md`, and any generated analytical documents) must reference `docs/llm.md` and be organized with the following metadata header placed directly beneath the document title:
+All agent-authored documents and reports (including `docs/observations.md`, `docs/knowledge.md`, `docs/websearch.md`, `docs/literature.md`, `docs/scientific_report.md`, and any generated analytical documents) must reference `docs/llm.md` and be organized with the following metadata header placed directly beneath the document title:
 
 ```markdown
 Title

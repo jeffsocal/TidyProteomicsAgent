@@ -40,6 +40,7 @@ const ContextBuilder_1 = require("../agent/ContextBuilder");
 const AgentLoop_1 = require("../agent/AgentLoop");
 const ChatLogger_1 = require("../agent/ChatLogger");
 const ModelSummaryWriter_1 = require("./ModelSummaryWriter");
+const LiteratureService_1 = require("../literature/LiteratureService");
 class PipelineOrchestrator {
     workspaceRoot;
     client;
@@ -101,6 +102,8 @@ class PipelineOrchestrator {
             }
             case "complete_phase":
                 return `[Complete Phase] ${args?.phaseName || ""}`;
+            case "fail_phase":
+                return `[Halt / Fail Phase] ${args?.phaseName || ""}: ${args?.reason || ""}`;
             default: {
                 const keys = Object.keys(args || {});
                 const summary = keys.length > 0 ? ` (${keys.join(", ")})` : "";
@@ -280,7 +283,7 @@ class PipelineOrchestrator {
                     durationSeconds: prev?.durationSeconds || noteRec?.durationSeconds,
                     tokenUsage: prev?.tokenUsage || noteRec?.tokenUsage,
                     summary: prev?.summary || noteRec?.summary,
-                    error: prev?.error,
+                    error: prev?.error || (resolvedStatus === "failed" ? noteRec?.summary : undefined),
                 });
             }
         }
@@ -324,7 +327,7 @@ class PipelineOrchestrator {
                     durationSeconds: prev?.durationSeconds || noteRec?.durationSeconds,
                     tokenUsage: prev?.tokenUsage || noteRec?.tokenUsage,
                     summary: prev?.summary || noteRec?.summary,
-                    error: prev?.error,
+                    error: prev?.error || (resolvedStatus === "failed" ? noteRec?.summary : undefined),
                 });
             }
             catch {
@@ -429,7 +432,7 @@ Construct and execute code for this phase, capturing output to logs.
             agentFolder = "prompts";
         }
         const list = [
-            { name: "analysis", relPath: "analysis", description: "Phase Prompts (00_INSTALL.md .. 07_SYNTHESIS.md)" },
+            { name: "analysis", relPath: "analysis", description: "Phase Prompts (00_INSTALL.md .. 10_SYNTHESIS.md)" },
             { name: agentFolder, relPath: agentFolder, description: "Protocol, Variables & Skills (Cached Prefix)" },
             { name: "code", relPath: "code", description: "Generated Analysis Scripts" },
             { name: "tools", relPath: "tools", description: "Linter & Execution Helper Utilities" },
@@ -475,6 +478,12 @@ Construct and execute code for this phase, capturing output to logs.
         }
         const promptFiles = await this.getPromptFiles();
         const folders = await this.getFoldersStatus();
+        const analysisFolder = folders.find((f) => f.name === "analysis");
+        const isAnalysisMissingOrEmpty = !this.workspaceRoot ||
+            !analysisFolder ||
+            !analysisFolder.exists ||
+            (analysisFolder.itemCount || 0) === 0 ||
+            this.phases.length === 0;
         return {
             workingDirectory: this.workspaceRoot,
             workspaceName: this.workspaceRoot ? path.basename(this.workspaceRoot) : "No Folder Open",
@@ -493,6 +502,9 @@ Construct and execute code for this phase, capturing output to logs.
                 totalTokens: totalTokens,
                 cachedPromptTokens: totalCached,
             },
+            isAnalysisMissingOrEmpty,
+            literature: (0, LiteratureService_1.readLiteratureConfig)(this.workspaceRoot),
+            knowledgeCorpus: (0, LiteratureService_1.readLiteratureConfig)(this.workspaceRoot),
         };
     }
     async notifyState() {
@@ -622,6 +634,10 @@ Construct and execute code for this phase, capturing output to logs.
             this.onLog(`[${this.ts()}] ⚠️ [Pipeline] Execution busy: A pipeline is already running.`);
             return;
         }
+        if (!this.workspaceRoot || this.phases.length === 0) {
+            this.onLog(`[${this.ts()}] ⚠️ [Pipeline] No analysis tasks found to execute. Please initialize an analysis pipeline first.`);
+            return;
+        }
         this.isRunning = true;
         this.isFullPipelineRunning = true;
         this.shouldStop = false;
@@ -727,8 +743,17 @@ Construct and execute code for this phase, capturing output to logs.
             else {
                 currentPhase.status = "failed";
                 currentPhase.error = result.summary;
-                const firstLine = String(result.summary || "Phase failed").split("\n")[0];
-                this.onLog(`[${this.ts()}] ❌ ${currentPhase.title} failed: ${firstLine}`);
+                const summaryText = String(result.summary || "Phase failed").trim();
+                const lines = summaryText.split("\n");
+                const firstLine = lines[0];
+                this.onLog(`[${this.ts()}] ❌ ${currentPhase.title} halted / failed: ${firstLine}`);
+                for (let i = 1; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if (line) {
+                        this.onLog(`[${this.ts()}] 💡 ${line}`);
+                    }
+                }
+                await this.appendPhaseRecordToNotes(currentPhase);
                 await this.notifyState();
                 return false;
             }
@@ -747,15 +772,17 @@ Construct and execute code for this phase, capturing output to logs.
     }
     async appendPhaseRecordToNotes(phase) {
         const notesPath = path.join(this.workspaceRoot, "docs", "notes.md");
+        const statusText = phase.status === "failed" ? "FAILED" : "COMPLETED";
+        const summaryContent = phase.summary || (phase.status === "failed" ? phase.error || "Phase halted or failed." : "Phase checkpoints verified.");
         const entry = `
-### ${phase.title} - COMPLETED
+### ${phase.title} - ${statusText}
 - **File**: \`${phase.fileName}\`
 - **Duration**: ${phase.durationSeconds}s
 - **Start**: ${phase.startTime}
 - **End**: ${phase.endTime}
 - **Token Usage**: Total: ${phase.tokenUsage?.totalTokens || "N/A"}, Prompt: ${phase.tokenUsage?.promptTokens || "N/A"}, Completion: ${phase.tokenUsage?.completionTokens || "N/A"}, Cached: ${phase.tokenUsage?.cachedPromptTokens || 0}
 - **Summary**:
-${phase.summary || "Phase checkpoints verified."}
+${summaryContent}
 
 ---
 `;

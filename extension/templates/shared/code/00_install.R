@@ -4,6 +4,16 @@
 #          and the tidyproteomics package from GitHub.
 # =====================================================================
 
+# Ensure macOS compiler environment is valid if Command Line Tools are installed
+if (Sys.info()["sysname"] == "Darwin" && Sys.getenv("DEVELOPER_DIR") == "") {
+    if (file.exists("/Library/Developer/CommandLineTools")) {
+        test_clang <- suppressWarnings(tryCatch(system2("clang", "--version", stdout = FALSE, stderr = FALSE), error = function(e) 1))
+        if (test_clang != 0) {
+            Sys.setenv(DEVELOPER_DIR = "/Library/Developer/CommandLineTools")
+        }
+    }
+}
+
 # 1. Ensure core installation helpers are present
 if (!requireNamespace("BiocManager", quietly = TRUE)) {
     install.packages("BiocManager")
@@ -15,11 +25,12 @@ if (!requireNamespace("remotes", quietly = TRUE)) {
 
 # 2. Define package groups based on source
 cran_packages <- c(
-    "broom", "cli", "digest", "doParallel", "dplyr", "e1071", "eulerr", 
-    "forcats", "ggplot2", "ggrepel", "glue", "gridExtra", "magrittr", 
-    "missForest", "pheatmap", "prettyunits", "purrr", "randomForest", 
-    "RColorBrewer", "readr", "readxl", "rlang", "scales", "stringr", 
-    "tibble", "tidyr", "tidyselect", "vroom", "writexl", "knitr", "testthat"
+    "babelgene", "broom", "cli", "DBI", "digest", "doParallel", "dplyr", "duckdb", 
+    "e1071", "eulerr", "forcats", "ggplot2", "ggrepel", "glue", "gridExtra", 
+    "jsonlite", "knitr", "magrittr", "missForest", "pdftools", "pheatmap", 
+    "prettyunits", "purrr", "randomForest", "RColorBrewer", "readr", "readxl", 
+    "rlang", "scales", "stringr", "testthat", "tibble", "tidyr", "tidyselect", 
+    "vroom", "writexl"
 )
 
 bioc_packages <- c(
@@ -53,6 +64,24 @@ install_missing(cran_packages, type = "cran")
 
 message("\nChecking Bioconductor dependencies...")
 install_missing(bioc_packages, type = "bioc")
+
+# Optional Bioconductor packages (graceful fallback if compilation or download fails)
+if (length(optional_bioc_packages) > 0) {
+    message("\nChecking optional annotation packages...")
+    for (pkg in optional_bioc_packages) {
+        if (!pkg %in% rownames(installed.packages())) {
+            message(sprintf("-> Checking optional package %s (non-fatal)...", pkg))
+            tryCatch({
+                BiocManager::install(pkg, update = FALSE, ask = FALSE)
+            }, error = function(e) {
+                message(sprintf("   Notice: Optional package %s could not be installed: %s", pkg, e$message))
+                message("   (This does not affect core tidyproteomics analysis or pipeline execution).")
+            })
+        } else {
+            message(sprintf("-> Optional package %s is already installed.", pkg))
+        }
+    }
+}
 
 message("\nChecking tidyproteomics (GitHub)...")
 if (!("tidyproteomics" %in% rownames(installed.packages()))) {

@@ -34,14 +34,24 @@ Construct and execute `code/03_impute.R`, capturing full execution output to `lo
      - *Pros*: Preserves empirical ground truth without synthetic data injection; `limma` natively handles missing values in linear modeling.
      - *Cons*: Cannot compute finite fold changes or $p$-values for features completely absent in one condition (they drop out of volcano plots).
 
-#### Phase 3.2: Imputation Execution
-- Based on the experimental study design (e.g., perturbation, drug treatment, or clinical discovery screen from `docs/experiment.md`) and missingness audit, apply the appropriate imputation method:
+#### Phase 3.2: Imputation Execution & Complete-Case Safeguard
+- Check for missingness and apply the appropriate imputation method based on experimental design (e.g. perturbation, drug treatment, or clinical screen):
   ```r
-  # Standard default for biological dropouts / limit-of-detection missingness is within-condition left-censored minimum:
-  imp_data <- norm_data %>%
-    impute(.function = base::min, method = "column", group_by_sample = TRUE)
+  # Check if missing values exist in the quantitative matrix:
+  total_missing <- sum(is.na(as.data.frame(norm_data)$abundance_normalized %||% as.data.frame(norm_data)$abundance_raw))
+  cat(sprintf("Total missing quantitative values: %d\n", total_missing))
+
+  if (total_missing == 0) {
+    cat("Zero missing values detected (complete-case dataset / single TMT plex). Bypassing imputation to preserve empirical ground truth.\n")
+    imp_data <- norm_data
+  } else {
+    # Standard default for biological dropouts / limit-of-detection missingness is within-condition left-censored minimum:
+    cat("Applying within-condition left-censored minimum imputation for limit-of-detection dropouts...\n")
+    imp_data <- norm_data %>%
+      impute(.function = base::min, method = "column", group_by_sample = TRUE)
+  }
   ```
-- **Checkpoint 3.2**: Print `print(imp_data)` and inspect operations history via `operations(imp_data)` to confirm imputation succeeded and verify that residual missingness has been resolved.
+- **Checkpoint 3.2**: Print `print(imp_data)` and inspect operations history via `operations(imp_data)` to confirm imputation status (or verified complete-case bypass) and confirm that residual missingness has been resolved.
 
 #### Phase 3.3: Post-Imputation Distribution Verification
 - Verify that the imputed dataset maintains valid dynamic range and variance structure across conditions.
@@ -54,14 +64,14 @@ Construct and execute `code/03_impute.R`, capturing full execution output to `lo
   ```
 - Record the following directly into `docs/notes.md`:
   - Overall missingness percentage prior to imputation.
-  - Condition-specific dropout patterns (e.g., features uniquely absent in one condition vs. another).
-  - Chosen imputation method and scientific rationale (MAR vs. MNAR).
+  - Condition-specific dropout patterns (e.g., features uniquely absent in one condition vs. another) or complete-case verification.
+  - Chosen imputation method and scientific rationale (MAR vs. MNAR vs. complete-case bypass).
   - Post-imputation data completeness confirmation.
 
 #### Phase 3.5: Checkpoint Verification & State Recording
 - [ ] **Checkpoint 3.5**:
   1. `logs/03_impute.log` exists on disk with non-zero file size.
-  2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size and operations log contains `impute`.
+  2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size, and either operations log contains `impute` or complete-case bypass is verified.
   3. `docs/notes.md` contains the missingness audit and imputation strategy rationale.
 - [ ] **Complete Phase**:
   - Invoke `complete_phase(phaseName = "03_IMPUTE", summary = "Missingness audit and imputation completed. Applied selected imputation model, confirmed matrix completeness, and persisted data/tidyproteomics_data.rds.")`

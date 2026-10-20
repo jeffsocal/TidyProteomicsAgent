@@ -90,7 +90,82 @@ export interface PipelineState {
   promptFiles?: PromptFileInfo[];
   folders?: FolderStatus[];
   totalTokens: TokenUsage;
+  isAnalysisMissingOrEmpty?: boolean;
+  literature?: LiteratureConfig;
+  /** @deprecated Backwards compatibility alias */
+  knowledgeCorpus?: LiteratureConfig;
 }
+
+// ---------------------------------------------------------------------------
+// Literature Database (DuckDB)
+// ---------------------------------------------------------------------------
+
+/** Persisted in <workspace>/literature/literature_config.json and read by ContextBuilder. */
+export interface LiteratureConfig {
+  /** File name of the active database inside literature/ (e.g. "p97_vcp_ko.duckdb"). */
+  activeLiterature?: string;
+  /** When true, the active literature path is injected into prompt-phasing context. */
+  useInSynthesis: boolean;
+  updatedAt?: string;
+  /** @deprecated Backwards compatibility alias for activeLiterature */
+  activeCorpus?: string;
+}
+
+export interface LiteratureInfo {
+  name: string;
+  fileName: string;
+  relPath: string;
+  absPath: string;
+  sizeBytes: number;
+  modified: string;
+}
+
+export type IngestStage =
+  | "queued"
+  | "parsing_pdf"
+  | "llm_extraction"
+  | "normalization"
+  | "indexed"
+  | "failed"
+  | "skipped";
+
+export interface IngestQueueItem {
+  id: string;
+  fileName: string;
+  absPath: string;
+  relPath: string;
+  kind: "pdf" | "table";
+  sizeBytes: number;
+  stage: IngestStage;
+  message?: string;
+}
+
+export interface LiteratureViewState {
+  workspaceRoot: string;
+  literatureDir: string;
+  databases: LiteratureInfo[];
+  literature?: LiteratureInfo[];
+  config: LiteratureConfig;
+  activeLiterature?: string;
+  useInSynthesis?: boolean;
+  activeLiteratureInfo?: LiteratureInfo;
+  ingestFolder?: string;
+  queue: IngestQueueItem[];
+  ingestionAvailable: boolean;
+  busy?: string;
+  isIngesting?: boolean;
+  stats?: any;
+
+  // Backwards-compatibility aliases
+  corporaDir?: string;
+  corpora?: LiteratureInfo[];
+  activeCorpus?: string;
+  activeCorpusInfo?: LiteratureInfo;
+}
+
+export type CorpusConfig = LiteratureConfig;
+export type CorpusInfo = LiteratureInfo;
+export type CorpusViewState = LiteratureViewState;
 
 export interface ToolDefinition {
   name: string;

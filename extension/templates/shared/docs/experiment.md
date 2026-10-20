@@ -2,7 +2,7 @@
 ======================================================================
 USER SPECIFICATION FILE: MAINTAINED EXCLUSIVELY BY THE RESEARCHER.
 AI AGENTS: DO NOT EDIT OR OVERWRITE THIS FILE. 
-Record all runtime logs in docs/notes.md and findings in docs/observations.md.
+Record all runtime logs in docs/notes.md and findings across docs/ (observations.md, knowledge.md, websearch.md, literature.md).
 ======================================================================
 -->
 

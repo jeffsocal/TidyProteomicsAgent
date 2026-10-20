@@ -8,7 +8,15 @@
       "args": [
         "--extensionDevelopmentPath=${workspaceFolder}",
         "--disable-extensions",
+        "--disable-extension=GitHub.copilot-chat",
+        "--disable-extension=GitHub.copilot",
         "--disable-restore-windows"
+      ],
+      "skipFiles": [
+        "<node_internals>/**",
+        "**/node_modules/**",
+        "**/resources/app/extensions/**",
+        "/Applications/Visual Studio Code.app/**"
       ],
       "outFiles": [
         "${workspaceFolder}/dist/**/*.js"

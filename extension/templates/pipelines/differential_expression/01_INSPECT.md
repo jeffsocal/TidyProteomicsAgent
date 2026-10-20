@@ -36,9 +36,8 @@ Construct and execute `code/01_inspect.R`, capturing full execution output to `l
 - [ ] Generate identification counts diagnostic plot:
   ```r
   invisible(data %>% plot_counts(destination = "png"))
-  count_plot <- list.files(pattern = "^plot_(proteins|peptides)_counts\\.png$")[1]
-  if (!is.na(count_plot) && file.exists(count_plot)) {
-    file.rename(count_plot, file.path("data", count_plot))
+  for (f in list.files(pattern = "^plot_.*_counts\\.png$")) {
+    file.rename(f, file.path("data", f))
   }
   ```
 - [ ] **Checkpoint 1.2**: Verify that replicate counts, quantifiable fractions, replicate CV distributions, and missingness metrics are printed to stdout and recorded in `logs/01_inspect.log`.

@@ -104,7 +104,7 @@ class ToolRegistry {
             "agent/VARIABLES.md",
         ];
         if (PROTECTED_FILES.some((p) => normalizedRel === p || normalizedRel.endsWith("/" + p))) {
-            throw new Error(`Security Policy Violation: '${filePath}' is a protected user or extension specification file and cannot be modified by the agent. Record runtime logs in 'docs/notes.md' and biological findings in 'docs/observations.md'.`);
+            throw new Error(`Security Policy Violation: '${filePath}' is a protected user or extension specification file and cannot be modified by the agent. Record runtime logs in 'docs/notes.md' and biological findings across docs/ (observations.md, knowledge.md, websearch.md, literature.md).`);
         }
     }
     registerDefaultTools() {
@@ -392,6 +392,34 @@ class ToolRegistry {
             },
             execute: async (args) => {
                 return `PHASE_COMPLETED: ${args.phaseName}\nSummary:\n${args.summary}`;
+            },
+        });
+        // 8. fail_phase
+        this.tools.set("fail_phase", {
+            definition: {
+                name: "fail_phase",
+                description: "Halts execution and marks the current phase as failed when an immutable specification gate, mandatory prerequisite, or unrecoverable error occurs. Use this to exit the phase loop immediately and provide actionable insights for the user to resolve before rerunning.",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        phaseName: {
+                            type: "string",
+                            description: "The name or filename of the phase (e.g. '00_INSTALL', '01_INSPECT')",
+                        },
+                        reason: {
+                            type: "string",
+                            description: "Concise summary of why the phase failed or was halted (e.g. 'Pre-flight Gate Failed: docs/experiment.md contains unconfigured placeholders')",
+                        },
+                        actionableInsights: {
+                            type: "string",
+                            description: "Specific, actionable instructions for the researcher explaining what to edit, configure, or verify to resolve the blocker before rerunning the phase.",
+                        },
+                    },
+                    required: ["phaseName", "reason", "actionableInsights"],
+                },
+            },
+            execute: async (args) => {
+                return `PHASE_HALTED_FAILED: ${args.phaseName}\nReason: ${args.reason}\nActionable Insights:\n${args.actionableInsights}`;
             },
         });
     }

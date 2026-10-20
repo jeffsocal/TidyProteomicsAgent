@@ -39,7 +39,7 @@ Construct and execute `code/05_enrichment.R`, capturing full execution output to
     If `available_terms` does not contain at least one biological ontology category:
     1. Log an explicit alert in stdout and `docs/notes.md`:
        > "⚠️ **Annotation Notice**: Dataset lacks functional ontologies (GO terms / Reactome / KEGG). Enrichment analysis requires biological annotations. Refer to the [TidyProteomics Annotation Guide](https://jeffsocal.github.io/tidyproteomics/articles/annotating.html) to download and supply an annotation file in `data/annotations.csv`."
-    2. If no external annotation table is supplied, record in `docs/notes.md` that pathway enrichment was bypassed due to missing ontology terms, preserve `stat_data` to `data/tidyproteomics_data.rds`, and complete the phase so Phase 6 and Phase 7 can proceed based on biomarker observations.
+    2. If no external annotation table is supplied, record in `docs/notes.md` that pathway enrichment was bypassed due to missing ontology terms, preserve `stat_data` to `data/tidyproteomics_data.rds`, and complete the phase so Phase 6 through Phase 10 can proceed based on biomarker observations.
 
 #### Phase 5.2: Multi-Category Pathway Enrichment Testing
 - If functional annotation terms are present, select targeted biological terms:
@@ -55,16 +55,19 @@ Construct and execute `code/05_enrichment.R`, capturing full execution output to
   cat("Targeted enrichment categories:\n")
   print(selected_terms)
   ```
-- Define the contrast pairs (identical to Phase 4):
+- Dynamically extract contrast pairs directly from completed Phase 4 expression analysis:
   ```r
-  treatment_group <- "<decided_treatment_group>"
-  control_group <- "<decided_control_group>"
-  pairs <- list(c(treatment_group, control_group))
+  available_contrasts <- names(stat_data$analysis)
+  cat(sprintf("Available contrasts for pathway enrichment: %s\n", paste(available_contrasts, collapse = ", ")))
+  pairs <- lapply(strsplit(available_contrasts, "/"), function(x) c(x[1], x[2]))
   ```
 - Execute non-parametric two-tailed Wilcoxon rank-sum enrichment across all targeted terms:
   ```r
+  cores <- max(1, min(4, parallel::detectCores() - 1))
+  cat(sprintf("Executing multi-category enrichment across %d contrast(s) using %d CPU core(s)...\n", length(pairs), cores))
+
   enriched_data <- stat_data %>%
-    enrichment(.pairs = pairs, .terms = selected_terms, .method = "wilcoxon", .cpu_cores = 4)
+    enrichment(.pairs = pairs, .terms = selected_terms, .method = "wilcoxon", .cpu_cores = cores)
   ```
 - **Checkpoint 5.2**: Confirm that enrichment operations completed without errors and are recorded in `operations(enriched_data)`.
 
@@ -78,7 +81,7 @@ Construct and execute `code/05_enrichment.R`, capturing full execution output to
 
 - Move generated enrichment assets into `data/`:
   ```r
-  enr_assets <- list.files(pattern = "^(.*(proteins|peptides)_enrichment_|.*table_(proteins|peptides)_enrichment_).*(png|csv)$")
+  enr_assets <- list.files(pattern = "^(plot_|table_|.*_enrichment_).*(png|csv)$")
   for (f in enr_assets) {
     file.rename(f, file.path("data", f))
   }

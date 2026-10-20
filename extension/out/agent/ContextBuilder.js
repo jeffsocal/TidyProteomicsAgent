@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ContextBuilder = void 0;
 const fs = __importStar(require("fs/promises"));
 const path = __importStar(require("path"));
+const LiteratureService_1 = require("../literature/LiteratureService");
 class ContextBuilder {
     workspaceRoot;
     promptsDir;
@@ -116,6 +117,7 @@ ${llm || "No active model summary found."}
 
 ### docs/experiment.md (USER EXPERIMENT & DATASET SPECIFICATION - READ ONLY):
 ${experiment || "No user experiment design provided. Note: This file is strictly user-maintained; do not create or overwrite it."}
+${this.buildLiteratureSection()}
 `.trim();
         // 3. Isolated Phase Directive
         let phasePath = phaseFileName;
@@ -144,6 +146,7 @@ ${phaseContent}
   Author: PROVIDER | LLM-MODEL
   Agent: TidyProteomicsAgent vX.X.X
 - Once all checkpoints for this phase are satisfied and verified, invoke complete_phase(phaseName = "${normalizedPhaseName}", summary = "...").
+- If a mandatory pre-flight gate, configuration prerequisite, or checkpoint fails and requires user intervention (such as unconfigured placeholders in docs/experiment.md), immediately invoke fail_phase(phaseName = "${normalizedPhaseName}", reason = "...", actionableInsights = "...") to halt execution and present actionable insights to the user.
 `.trim();
         return {
             systemPrompt,
@@ -151,6 +154,36 @@ ${phaseContent}
             blackboardState,
             staticPrefixForCache
         };
+    }
+    /**
+     * Describes the active DuckDB literature database (toggled from the Literature tab).
+     * Placed in the dynamic blackboard (not the cached prefix) because it can change between phases.
+     */
+    buildLiteratureSection() {
+        if (!this.workspaceRoot)
+            return "";
+        const cfg = (0, LiteratureService_1.readLiteratureConfig)(this.workspaceRoot);
+        const activeName = cfg.activeLiterature || cfg.activeCorpus;
+        if (!activeName && !cfg.useInSynthesis)
+            return "";
+        const active = (0, LiteratureService_1.getActiveSynthesisLiterature)(this.workspaceRoot);
+        if (!active) {
+            return `
+### ACTIVE LITERATURE DATABASE (DuckDB):
+- Status: DISABLED for synthesis (toggle off or no database selected in the Literature tab).
+- Use the standard literature corroboration strategy described in the phase directive.
+`;
+        }
+        return `
+### ACTIVE LITERATURE DATABASE (DuckDB - READ ONLY):
+- Status: ENABLED for literature corroboration and synthesis.
+- Database file: \`${active.relPath}\`
+- Schema: studies(study_id, title, year, core_thesis) -> experimental_contexts(context_id, organism, model_name, perturbation_type, perturbation_target, assay_modality) -> molecular_assertions(raw_entity_name, canonical_human_symbol, relationship_type, functional_module, quantitative_note, evidence_quote). Denormalized view: v_assertions_full.
+- Inspect: \`Rscript tools/literature/literature_cli.R stats ${active.relPath}\`
+- Lookup: \`Rscript tools/literature/literature_cli.R search ${active.relPath} <SYMBOL_OR_MODULE> [limit]\`
+- Query Skill: \`Rscript tools/literature/query_literature.R ${active.relPath} "<seed_symbols>" "<pathway_terms>"\`
+- Policy: Prefer literature database evidence (cite study_id + verbatim evidence_quote) over generic web search. Open the database read-only; never modify it during analysis phases.
+`;
     }
 }
 exports.ContextBuilder = ContextBuilder;

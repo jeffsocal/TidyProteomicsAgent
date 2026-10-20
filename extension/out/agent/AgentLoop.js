@@ -55,6 +55,7 @@ class AgentLoop {
         }
         let turn = 0;
         let completedSummary = "";
+        let consecutiveNoToolTurns = 0;
         while (turn < maxTurns) {
             if (this.isCancelled && this.isCancelled()) {
                 const stopSummary = "Execution stopped by user.";
@@ -179,8 +180,9 @@ class AgentLoop {
                     await this.chatLogger.logTruncationWarning(turn, response.finishReason || "length", response.usage.completionTokens);
                 }
             }
-            // Check if complete_phase tool was called or if finished
+            // Check if complete_phase or fail_phase tool was called or if finished
             if (response.tool_calls && response.tool_calls.length > 0) {
+                consecutiveNoToolTurns = 0;
                 for (const tc of response.tool_calls) {
                     this.onProgress({
                         type: "tool_start",
@@ -212,6 +214,32 @@ class AgentLoop {
                     if (this.chatLogger) {
                         await this.chatLogger.logToolResult(tc.name, tc.id, result.content, result.isError);
                     }
+                    if (tc.name === "fail_phase") {
+                        const failReason = tc.args.reason || "Phase gate or checkpoint failed";
+                        const actionable = tc.args.actionableInsights || "";
+                        const summary = actionable
+                            ? `❌ Pre-flight Gate / Checkpoint Failed: ${failReason}\n\nActionable Insights:\n${actionable}`
+                            : `❌ Pre-flight Gate / Checkpoint Failed: ${failReason}`;
+                        const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
+                        if (this.chatLogger) {
+                            await this.chatLogger.logPhaseEnd({
+                                phaseTitle: this.phaseTitle || this.phaseName,
+                                phaseFileName: this.phaseName,
+                                success: false,
+                                summary,
+                                durationSeconds,
+                                tokensUsed: this.totalUsage,
+                                turnCount: turn,
+                            });
+                        }
+                        return {
+                            success: false,
+                            summary,
+                            tokensUsed: this.totalUsage,
+                            phaseName: this.phaseName,
+                            turnCount: turn,
+                        };
+                    }
                     if (tc.name === "complete_phase") {
                         completedSummary = tc.args.summary || response.content;
                         const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
@@ -237,6 +265,7 @@ class AgentLoop {
                 }
             }
             else {
+                consecutiveNoToolTurns++;
                 // If model didn't call any tools, check if text indicates completion
                 if (response.content.includes("PHASE_COMPLETED") || response.content.includes("CHECKPOINT_PASSED")) {
                     const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
@@ -259,6 +288,51 @@ class AgentLoop {
                         turnCount: turn,
                     };
                 }
+                else if (this.isPhaseFailureOrHalt(response.content)) {
+                    // Model output text indicating a pre-flight gate failure, blocked phase, or halt directive
+                    const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
+                    if (this.chatLogger) {
+                        await this.chatLogger.logPhaseEnd({
+                            phaseTitle: this.phaseTitle || this.phaseName,
+                            phaseFileName: this.phaseName,
+                            success: false,
+                            summary: response.content,
+                            durationSeconds,
+                            tokensUsed: this.totalUsage,
+                            turnCount: turn,
+                        });
+                    }
+                    return {
+                        success: false,
+                        summary: response.content,
+                        tokensUsed: this.totalUsage,
+                        phaseName: this.phaseName,
+                        turnCount: turn,
+                    };
+                }
+                else if (consecutiveNoToolTurns >= 2) {
+                    // Model repeatedly returned conversational text without tool actions; halt to avoid burning tokens in a loop
+                    const summary = `Execution halted: Agent stopped calling tools and provided instructions to user:\n\n${response.content}`;
+                    const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
+                    if (this.chatLogger) {
+                        await this.chatLogger.logPhaseEnd({
+                            phaseTitle: this.phaseTitle || this.phaseName,
+                            phaseFileName: this.phaseName,
+                            success: false,
+                            summary,
+                            durationSeconds,
+                            tokensUsed: this.totalUsage,
+                            turnCount: turn,
+                        });
+                    }
+                    return {
+                        success: false,
+                        summary,
+                        tokensUsed: this.totalUsage,
+                        phaseName: this.phaseName,
+                        turnCount: turn,
+                    };
+                }
                 else if (response.truncationDetected) {
                     // If response was truncated and tool call failed to parse, notify the model explicitly
                     this.messages.push({
@@ -267,10 +341,10 @@ class AgentLoop {
                     });
                 }
                 else {
-                    // If no tool was called and no completion indicated, prompt the agent to proceed
+                    // If no tool was called and no completion or failure indicated, prompt the agent to proceed
                     this.messages.push({
                         role: "user",
-                        content: "Please execute the required tools to fulfill the objectives of this phase, or call complete_phase when finished.",
+                        content: "Please execute the required tools to fulfill the objectives of this phase, or call complete_phase when finished, or call fail_phase if a prerequisite/gate failed.",
                     });
                 }
             }
@@ -295,6 +369,36 @@ class AgentLoop {
             phaseName: this.phaseName,
             turnCount: maxTurns,
         };
+    }
+    isPhaseFailureOrHalt(content) {
+        if (!content)
+            return false;
+        const lower = content.toLowerCase();
+        // Explicit gate failure, blocked phase, or halt keywords
+        const failurePatterns = [
+            /pre-flight\s+gate\s+fail/i,
+            /specification\s+gate\s+fail/i,
+            /checkpoint\s+gate\s+fail/i,
+            /\bgate\s+failed\b/i,
+            /\bphase\s+(?:[0-9a-zA-Z_]+\s+)?(?:is\s+blocked|remains\s+blocked|cannot\s+be\s+completed|is\s+halted)\b/i,
+            /\bphase_failed\b/i,
+            /\bphase_blocked\b/i,
+            /\bphase_halted\b/i,
+            /\bblocked_specification_gate\b/i,
+            /\bhalt(?:ed)?\s+(?:immediately\s+)?with\s+status\s+`?failed`?/i,
+            /\bhalt\s+directive\b/i,
+        ];
+        if (failurePatterns.some((pattern) => pattern.test(content))) {
+            return true;
+        }
+        if (content.includes("❌") &&
+            (lower.includes("placeholder") ||
+                lower.includes("blocked") ||
+                lower.includes("rerun phase") ||
+                lower.includes("gate"))) {
+            return true;
+        }
+        return false;
     }
 }
 exports.AgentLoop = AgentLoop;

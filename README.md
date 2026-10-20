@@ -70,7 +70,7 @@ The diagram below illustrates the core execution architecture:
 ## Features
 
 - **Built-in Pipeline Templates**:
-  - 🧬 **Standard Differential Expression (8 Phases)**: Full modular workflow from environment readiness (`00_INSTALL`), data inspection (`01_INSPECT`), normalization benchmarking (`02_NORMALIZE`), missingness assessment & imputation (`03_IMPUTE`), differential expression (`04_EXPRESSION`), functional annotation & pathway enrichment (`05_ENRICHMENT`), literature observations (`06_OBSERVATIONS`), to publication-grade manuscript synthesis (`07_SYNTHESIS`).
+  - 🧬 **Standard Differential Expression (11 Phases)**: Full modular workflow from environment readiness (`00_INSTALL`), data inspection (`01_INSPECT`), normalization benchmarking (`02_NORMALIZE`), missingness assessment & imputation (`03_IMPUTE`), differential expression (`04_EXPRESSION`), functional annotation & pathway enrichment (`05_ENRICHMENT`), primary data observations (`06_OBSERVATIONS`), internal knowledge contextualization (`07_KNOWLEDGE`), web search corroboration (`08_WEBSEARCH`), literature database interrogation (`09_LITERATURE`), to publication-grade manuscript synthesis (`10_SYNTHESIS`).
   - 📊 **Quality Control & Exploration (2 Phases)**: Rapid exploratory data analysis, replicate CV evaluation, quantifiable fraction verification, and PCA separation.
 - **One-Click Workspace Initialization**:
   - Open any empty directory in VS Code and initialize the complete study structure (`analysis/`, `code/`, `agent/`, `data/`, `docs/`, `logs/`, `tools/`, and `.gitignore`) with a single click.

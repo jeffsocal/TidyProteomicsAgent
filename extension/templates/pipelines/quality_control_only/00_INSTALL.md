@@ -26,8 +26,9 @@ Execute workspace validation, enforce research specification gates, and establis
     - **Hypothesis & Study Design**:
       - Must contain the researcher's experimental hypothesis, biological model, and study design.
       - **Gate Check**: Verify that `docs/experiment.md` does **NOT** contain unedited `[REQUIRED:` placeholder tokens anywhere in the file and is not blank or whitespace-only.
-  - *If any parameter is missing, placeholder, or blank*: HALT immediately with status `failed`. Prompt the user with:
-    > "❌ **Pre-flight Gate Failed**: `docs/experiment.md` contains unconfigured placeholders. Please configure `PATH_TO_DATA_FILE`, `PLATFORM`, `ANALYTE`, and your study hypothesis in `docs/experiment.md` before rerunning Phase 0."
+  - *If any parameter is missing, placeholder, or blank*: HALT immediately with status `failed`. Record the gate failure in `docs/notes.md` and invoke:
+    `fail_phase(phaseName = "00_INSTALL", reason = "Pre-flight Gate Failed: docs/experiment.md contains unconfigured placeholders", actionableInsights = "Please configure PATH_TO_DATA_FILE, PLATFORM, ANALYTE, and your study hypothesis in docs/experiment.md before rerunning Phase 0.")`
+    Provide clear actionable insights in your response explaining what placeholders remain unconfigured and how the researcher should configure `docs/experiment.md`.
 
 #### Phase 0.3: Initialize Blackboard (`docs/notes.md`)
 - [ ] Verify or initialize `docs/notes.md` runtime notes:
@@ -49,5 +50,7 @@ Execute workspace validation, enforce research specification gates, and establis
   3. `logs/00_install.log` (or `logs/00_setup.log`) exists on disk with non-zero file size and script exit status 0.
   4. The log ends with `Setup complete! All required packages are ready to use.`.
   5. `docs/notes.md` exists on disk.
+- [ ] **Phase Gate Failure Handling**:
+  - If any checkpoint or pre-flight gate cannot be satisfied, invoke `fail_phase(phaseName = "00_INSTALL", reason = "<REASON>", actionableInsights = "<ACTIONABLE_STEPS>")` to halt execution cleanly and provide actionable next steps.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "00_INSTALL", summary = "Workspace verification passed. All subdirectories present, experiment hypothesis and dataset parameters configured in docs/experiment.md, and all R packages verified in logs/00_install.log.")`
+  - If all checkpoints pass, invoke `complete_phase(phaseName = "00_INSTALL", summary = "Workspace verification passed. All subdirectories present, experiment hypothesis and dataset parameters configured in docs/experiment.md, and all R packages verified in logs/00_install.log.")`

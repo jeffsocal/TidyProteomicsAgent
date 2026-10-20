@@ -35,21 +35,580 @@ __export(extension_exports, {
 });
 module.exports = __toCommonJS(extension_exports);
 var vscode2 = __toESM(require("vscode"));
-var path7 = __toESM(require("path"));
-var fs7 = __toESM(require("fs"));
+var path9 = __toESM(require("path"));
+var fs9 = __toESM(require("fs"));
 
 // src/ui/SidebarViewProvider.ts
 var vscode = __toESM(require("vscode"));
-var path6 = __toESM(require("path"));
-var fs6 = __toESM(require("fs"));
+var path8 = __toESM(require("path"));
+var fs8 = __toESM(require("fs"));
 
 // src/orchestrator/PipelineOrchestrator.ts
-var fs4 = __toESM(require("fs/promises"));
-var path4 = __toESM(require("path"));
+var fs5 = __toESM(require("fs/promises"));
+var path5 = __toESM(require("path"));
 
 // src/agent/ContextBuilder.ts
-var fs = __toESM(require("fs/promises"));
+var fs2 = __toESM(require("fs/promises"));
+var path2 = __toESM(require("path"));
+
+// src/literature/LiteratureService.ts
+var fs = __toESM(require("fs"));
 var path = __toESM(require("path"));
+var import_child_process = require("child_process");
+var LITERATURE_REL_DIR = "literature";
+var LITERATURE_CONFIG_FILE = "literature_config.json";
+var LITERATURE_EXT = ".duckdb";
+var LITERATURE_SCRIPTS_REL_DIR = path.join("tools", "literature");
+var JSON_MARKER = "@@LITERATURE_JSON@@";
+var LEGACY_JSON_MARKER = "@@CORPUS_JSON@@";
+var PDF_EXTS = /* @__PURE__ */ new Set([".pdf"]);
+var TABLE_EXTS = /* @__PURE__ */ new Set([".csv", ".tsv", ".xlsx", ".xls"]);
+var MAX_SCAN_DEPTH = 3;
+var MAX_QUEUE_FILES = 500;
+function getLiteratureDir(workspaceRoot) {
+  return path.join(workspaceRoot, LITERATURE_REL_DIR);
+}
+function autoMigrateLegacyCorpora(workspaceRoot) {
+  if (!workspaceRoot)
+    return;
+  const legacyDir = path.join(workspaceRoot, ".vscode", "corpora");
+  const newDir = path.join(workspaceRoot, LITERATURE_REL_DIR);
+  if (fs.existsSync(legacyDir) && !fs.existsSync(newDir)) {
+    try {
+      fs.mkdirSync(newDir, { recursive: true });
+      const entries = fs.readdirSync(legacyDir);
+      for (const entry of entries) {
+        const oldPath = path.join(legacyDir, entry);
+        if (entry.toLowerCase().endsWith(LITERATURE_EXT)) {
+          fs.copyFileSync(oldPath, path.join(newDir, entry));
+        } else if (entry === "corpus_config.json") {
+          try {
+            const raw = fs.readFileSync(oldPath, "utf-8");
+            const parsed = JSON.parse(raw);
+            const active = parsed.activeLiterature || parsed.activeCorpus;
+            const migrated = {
+              activeLiterature: active,
+              activeCorpus: active,
+              useInSynthesis: !!parsed.useInSynthesis,
+              updatedAt: parsed.updatedAt || (/* @__PURE__ */ new Date()).toISOString()
+            };
+            fs.writeFileSync(path.join(newDir, LITERATURE_CONFIG_FILE), JSON.stringify(migrated, null, 2) + "\n", "utf-8");
+          } catch {
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[LiteratureService] Auto-migration from .vscode/corpora failed:", err);
+    }
+  }
+}
+function readLiteratureConfig(workspaceRoot) {
+  const fallback = { useInSynthesis: false };
+  if (!workspaceRoot)
+    return fallback;
+  autoMigrateLegacyCorpora(workspaceRoot);
+  try {
+    const configPath = path.join(getLiteratureDir(workspaceRoot), LITERATURE_CONFIG_FILE);
+    let raw = "";
+    if (fs.existsSync(configPath)) {
+      raw = fs.readFileSync(configPath, "utf-8");
+    } else {
+      const legacyPath = path.join(workspaceRoot, ".vscode", "corpora", "corpus_config.json");
+      if (fs.existsSync(legacyPath)) {
+        raw = fs.readFileSync(legacyPath, "utf-8");
+      } else {
+        return fallback;
+      }
+    }
+    const parsed = JSON.parse(raw);
+    const active = typeof parsed.activeLiterature === "string" && parsed.activeLiterature || typeof parsed.activeCorpus === "string" && parsed.activeCorpus || void 0;
+    return {
+      activeLiterature: active,
+      activeCorpus: active,
+      useInSynthesis: !!parsed.useInSynthesis,
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : void 0
+    };
+  } catch {
+    return fallback;
+  }
+}
+function getActiveSynthesisLiterature(workspaceRoot) {
+  const cfg = readLiteratureConfig(workspaceRoot);
+  const active = cfg.activeLiterature || cfg.activeCorpus;
+  if (!cfg.useInSynthesis || !active)
+    return void 0;
+  const litDir = getLiteratureDir(workspaceRoot);
+  let absPath = path.join(litDir, active);
+  if (!fs.existsSync(absPath)) {
+    const legacyPath = path.join(workspaceRoot, ".vscode", "corpora", active);
+    if (fs.existsSync(legacyPath)) {
+      absPath = legacyPath;
+    } else {
+      return void 0;
+    }
+  }
+  return { relPath: path.join(LITERATURE_REL_DIR, active).replace(/\\/g, "/"), absPath };
+}
+function sanitizeLiteratureName(raw) {
+  return String(raw || "").trim().replace(/\.duckdb$/i, "").toLowerCase().replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 64);
+}
+var LiteratureService = class {
+  constructor(workspaceRoot, extensionPath, getRscriptOverride = () => void 0) {
+    this.workspaceRoot = workspaceRoot;
+    this.extensionPath = extensionPath;
+    this.getRscriptOverride = getRscriptOverride;
+  }
+  queue = [];
+  ingestFolder;
+  writeChain = Promise.resolve();
+  cachedRscript;
+  cachedStats = /* @__PURE__ */ new Map();
+  setWorkspaceRoot(root) {
+    if (root !== this.workspaceRoot) {
+      this.workspaceRoot = root || "";
+      this.queue = [];
+      this.ingestFolder = void 0;
+    }
+  }
+  getWorkspaceRoot() {
+    return this.workspaceRoot;
+  }
+  requireRoot() {
+    if (!this.workspaceRoot) {
+      throw new Error("No active workspace directory. Open or choose an analysis folder first.");
+    }
+    return this.workspaceRoot;
+  }
+  // -------------------------------------------------------------------------
+  // Literature database listing / configuration
+  // -------------------------------------------------------------------------
+  listDatabases() {
+    if (!this.workspaceRoot)
+      return [];
+    autoMigrateLegacyCorpora(this.workspaceRoot);
+    const dir = getLiteratureDir(this.workspaceRoot);
+    if (!fs.existsSync(dir))
+      return [];
+    const out = [];
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.toLowerCase().endsWith(LITERATURE_EXT))
+        continue;
+      const abs = path.join(dir, f);
+      try {
+        const st = fs.statSync(abs);
+        if (!st.isFile())
+          continue;
+        out.push({
+          name: f.slice(0, -LITERATURE_EXT.length),
+          fileName: f,
+          relPath: path.join(LITERATURE_REL_DIR, f).replace(/\\/g, "/"),
+          absPath: abs,
+          sizeBytes: st.size,
+          modified: st.mtime.toISOString()
+        });
+      } catch {
+      }
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  }
+  listCorpora() {
+    return this.listDatabases();
+  }
+  getConfig() {
+    return readLiteratureConfig(this.workspaceRoot);
+  }
+  writeConfig(cfg) {
+    const dir = getLiteratureDir(this.requireRoot());
+    fs.mkdirSync(dir, { recursive: true });
+    const active = cfg.activeLiterature || cfg.activeCorpus;
+    const payload = {
+      ...cfg,
+      activeLiterature: active,
+      activeCorpus: active,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    fs.writeFileSync(path.join(dir, LITERATURE_CONFIG_FILE), JSON.stringify(payload, null, 2) + "\n", "utf-8");
+  }
+  getViewState(busy) {
+    const databases = this.listDatabases();
+    let config = this.getConfig();
+    const active = config.activeLiterature || config.activeCorpus;
+    if (active && !databases.some((c) => c.fileName === active)) {
+      config = { ...config, activeLiterature: void 0, activeCorpus: void 0 };
+    }
+    const activeInfo = databases.find((c) => c.fileName === active);
+    const dir = this.workspaceRoot ? getLiteratureDir(this.workspaceRoot) : "";
+    const stats = active ? this.cachedStats.get(path.basename(active)) : void 0;
+    return {
+      workspaceRoot: this.workspaceRoot,
+      literatureDir: dir,
+      corporaDir: dir,
+      databases,
+      literature: databases,
+      corpora: databases,
+      config,
+      activeLiterature: active,
+      activeCorpus: active,
+      useInSynthesis: !!config.useInSynthesis,
+      activeLiteratureInfo: activeInfo,
+      activeCorpusInfo: activeInfo,
+      ingestFolder: this.ingestFolder,
+      queue: [...this.queue],
+      ingestionAvailable: true,
+      busy,
+      isIngesting: busy === "ingesting",
+      stats
+    };
+  }
+  async createDatabase(rawName) {
+    const root = this.requireRoot();
+    const name = sanitizeLiteratureName(rawName);
+    if (!name)
+      throw new Error("Literature database name must contain at least one letter or number.");
+    const fileName = `${name}${LITERATURE_EXT}`;
+    const dir = getLiteratureDir(root);
+    fs.mkdirSync(dir, { recursive: true });
+    const abs = path.join(dir, fileName);
+    if (fs.existsSync(abs))
+      throw new Error(`A literature database named '${fileName}' already exists.`);
+    const res = await this.runCli("init", [abs, rawName.trim() || name], true);
+    if (!res.ok)
+      throw new Error(res.error || "Failed to initialize literature database.");
+    this.cachedStats.set(fileName, {
+      study_count: 0,
+      context_count: 0,
+      assertion_count: 0,
+      unique_symbols: 0,
+      organism_count: 0,
+      perturbation_count: 0,
+      studies: 0,
+      contexts: 0,
+      assertions: 0,
+      symbols: 0,
+      organisms: 0,
+      perturbations: 0
+    });
+    this.syncWorkspaceScripts();
+    const cfg = this.getConfig();
+    this.writeConfig({ ...cfg, activeLiterature: fileName, activeCorpus: fileName });
+    const info = this.listDatabases().find((c) => c.fileName === fileName);
+    if (!info)
+      throw new Error("Literature database was initialized but could not be found on disk.");
+    return info;
+  }
+  async createCorpus(rawName) {
+    return this.createDatabase(rawName);
+  }
+  setActiveLiterature(fileName) {
+    const root = this.requireRoot();
+    if (fileName) {
+      const abs = path.join(getLiteratureDir(root), path.basename(fileName));
+      if (!fs.existsSync(abs))
+        throw new Error(`Literature database '${fileName}' not found in ${LITERATURE_REL_DIR}.`);
+    }
+    const cfg = this.getConfig();
+    const base = fileName ? path.basename(fileName) : void 0;
+    this.writeConfig({ ...cfg, activeLiterature: base, activeCorpus: base });
+    this.syncWorkspaceScripts();
+  }
+  setActiveCorpus(fileName) {
+    this.setActiveLiterature(fileName);
+  }
+  setUseInSynthesis(enabled) {
+    const cfg = this.getConfig();
+    this.writeConfig({ ...cfg, useInSynthesis: !!enabled });
+    if (enabled)
+      this.syncWorkspaceScripts();
+  }
+  /** Ensures the active literature schema is current (idempotent). */
+  async ensureSchema(fileName) {
+    const abs = this.resolveLiteraturePath(fileName);
+    const res = await this.runCli("init", [abs], true);
+    if (!res.ok)
+      throw new Error(res.error || "Failed to migrate literature schema.");
+  }
+  async getStats(fileName) {
+    const cfg = this.getConfig();
+    const target = fileName || cfg.activeLiterature || cfg.activeCorpus;
+    if (!target)
+      return { ok: false, error: "No active literature database selected." };
+    const res = await this.runCli("stats", [this.resolveLiteraturePath(target)], false);
+    if (res.ok && res.data) {
+      const raw = res.data.totals || res.data.stats || res.data;
+      const normalizedStats = {
+        study_count: Number(raw.study_count ?? raw.studies ?? 0),
+        context_count: Number(raw.context_count ?? raw.contexts ?? 0),
+        assertion_count: Number(raw.assertion_count ?? raw.assertions ?? 0),
+        unique_symbols: Number(raw.unique_symbols ?? raw.symbols ?? 0),
+        organism_count: Number(raw.organism_count ?? raw.organisms ?? 0),
+        perturbation_count: Number(raw.perturbation_count ?? raw.perturbations ?? 0),
+        studies: Number(raw.studies ?? raw.study_count ?? 0),
+        contexts: Number(raw.contexts ?? raw.context_count ?? 0),
+        assertions: Number(raw.assertions ?? raw.assertion_count ?? 0),
+        symbols: Number(raw.symbols ?? raw.unique_symbols ?? 0),
+        organisms: Number(raw.organisms ?? raw.organism_count ?? 0),
+        perturbations: Number(raw.perturbations ?? raw.perturbation_count ?? 0)
+      };
+      this.cachedStats.set(path.basename(target), normalizedStats);
+      return {
+        ...res,
+        stats: normalizedStats,
+        data: {
+          ...res.data,
+          stats: normalizedStats,
+          totals: {
+            ...res.data.totals || {},
+            ...normalizedStats
+          }
+        }
+      };
+    }
+    return res;
+  }
+  async search(query, limit = 50, fileName) {
+    const cfg = this.getConfig();
+    const target = fileName || cfg.activeLiterature || cfg.activeCorpus;
+    if (!target)
+      return { ok: false, error: "No active literature database selected." };
+    const q = String(query || "").trim();
+    if (!q)
+      return { ok: false, error: "Enter a protein symbol, alias, functional module, or perturbation." };
+    const res = await this.runCli("search", [this.resolveLiteraturePath(target), q, String(limit)], false);
+    if (res.ok && res.data) {
+      const rows = res.data.rows || res.data.results || [];
+      return {
+        ...res,
+        results: rows,
+        rows,
+        query: q,
+        data: {
+          ...res.data,
+          rows,
+          results: rows
+        }
+      };
+    }
+    return res;
+  }
+  resolveLiteraturePath(fileName) {
+    const base = path.basename(fileName);
+    const withExt = base.toLowerCase().endsWith(LITERATURE_EXT) ? base : `${base}${LITERATURE_EXT}`;
+    const primary = path.join(getLiteratureDir(this.requireRoot()), withExt);
+    if (fs.existsSync(primary))
+      return primary;
+    if (this.workspaceRoot) {
+      const legacy = path.join(this.workspaceRoot, ".vscode", "corpora", withExt);
+      if (fs.existsSync(legacy))
+        return legacy;
+    }
+    return primary;
+  }
+  // -------------------------------------------------------------------------
+  // Ingestion queue (discovery only; processing is handled by the ingestion runner)
+  // -------------------------------------------------------------------------
+  scanIngestFolder(folder) {
+    if (!folder || !fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) {
+      throw new Error(`Folder not found: ${folder}`);
+    }
+    const found = [];
+    const walk = (dir, depth) => {
+      if (depth > MAX_SCAN_DEPTH || found.length >= MAX_QUEUE_FILES)
+        return;
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      for (const e of entries) {
+        if (e.name.startsWith(".") || e.name.startsWith("~$"))
+          continue;
+        const abs = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          walk(abs, depth + 1);
+          continue;
+        }
+        const ext = path.extname(e.name).toLowerCase();
+        const kind = PDF_EXTS.has(ext) ? "pdf" : TABLE_EXTS.has(ext) ? "table" : void 0;
+        if (!kind)
+          continue;
+        let size = 0;
+        try {
+          size = fs.statSync(abs).size;
+        } catch {
+        }
+        found.push({
+          id: `q${found.length + 1}`,
+          fileName: e.name,
+          absPath: abs,
+          relPath: path.relative(folder, abs).replace(/\\/g, "/"),
+          kind,
+          sizeBytes: size,
+          stage: "queued"
+        });
+        if (found.length >= MAX_QUEUE_FILES)
+          return;
+      }
+    };
+    walk(folder, 0);
+    this.ingestFolder = folder;
+    this.queue = found;
+    return [...found];
+  }
+  clearQueue() {
+    this.queue = [];
+    this.ingestFolder = void 0;
+  }
+  updateQueueItem(id, patch) {
+    const item = this.queue.find((q) => q.id === id);
+    if (item)
+      Object.assign(item, patch);
+  }
+  // -------------------------------------------------------------------------
+  // R plumbing
+  // -------------------------------------------------------------------------
+  /** Copies tools/literature/*.R from extension templates into the workspace so phases can call them. */
+  syncWorkspaceScripts() {
+    if (!this.workspaceRoot)
+      return;
+    const srcDir = this.findTemplateScriptsDir();
+    if (!srcDir)
+      return;
+    const destDir = path.join(this.workspaceRoot, LITERATURE_SCRIPTS_REL_DIR);
+    try {
+      fs.mkdirSync(destDir, { recursive: true });
+      for (const f of fs.readdirSync(srcDir)) {
+        if (f.endsWith(".R"))
+          fs.copyFileSync(path.join(srcDir, f), path.join(destDir, f));
+      }
+    } catch (err) {
+      console.warn("[LiteratureService] Could not sync literature scripts into workspace:", err);
+    }
+  }
+  findTemplateScriptsDir() {
+    const candidates = [
+      path.join(this.extensionPath, "templates", "shared", "tools", "literature"),
+      path.join(this.extensionPath, "extension", "templates", "shared", "tools", "literature"),
+      path.join(__dirname, "..", "templates", "shared", "tools", "literature"),
+      path.join(__dirname, "..", "..", "templates", "shared", "tools", "literature"),
+      // Fallback to legacy
+      path.join(this.extensionPath, "templates", "shared", "tools", "corpus"),
+      path.join(this.extensionPath, "extension", "templates", "shared", "tools", "corpus"),
+      path.join(__dirname, "..", "templates", "shared", "tools", "corpus"),
+      path.join(__dirname, "..", "..", "templates", "shared", "tools", "corpus")
+    ];
+    return candidates.find((p) => fs.existsSync(path.join(p, "literature_cli.R")) || fs.existsSync(path.join(p, "corpus_cli.R")));
+  }
+  findCliScript() {
+    const tplDir = this.findTemplateScriptsDir();
+    if (tplDir) {
+      const lit = path.join(tplDir, "literature_cli.R");
+      if (fs.existsSync(lit))
+        return lit;
+      const corp = path.join(tplDir, "corpus_cli.R");
+      if (fs.existsSync(corp))
+        return corp;
+    }
+    if (this.workspaceRoot) {
+      const wsLit = path.join(this.workspaceRoot, LITERATURE_SCRIPTS_REL_DIR, "literature_cli.R");
+      if (fs.existsSync(wsLit))
+        return wsLit;
+      const wsCorp = path.join(this.workspaceRoot, "tools", "corpus", "corpus_cli.R");
+      if (fs.existsSync(wsCorp))
+        return wsCorp;
+    }
+    throw new Error("literature_cli.R not found in extension templates or workspace tools/literature/.");
+  }
+  /**
+   * Resolves an Rscript binary. VS Code launched from the macOS Dock often has a
+   * minimal PATH, so common install locations are probed explicitly.
+   */
+  resolveRscript() {
+    const override = (this.getRscriptOverride() || "").trim();
+    if (override)
+      return override;
+    if (this.cachedRscript)
+      return this.cachedRscript;
+    const candidates = [
+      "/usr/local/bin/Rscript",
+      "/opt/homebrew/bin/Rscript",
+      "/Library/Frameworks/R.framework/Resources/bin/Rscript",
+      "/usr/bin/Rscript"
+    ];
+    const pathDirs = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
+    const exe = process.platform === "win32" ? "Rscript.exe" : "Rscript";
+    for (const d of pathDirs)
+      candidates.unshift(path.join(d, exe));
+    const hit = candidates.find((c) => {
+      try {
+        return fs.statSync(c).isFile();
+      } catch {
+        return false;
+      }
+    });
+    this.cachedRscript = hit || "Rscript";
+    return this.cachedRscript;
+  }
+  /**
+   * Runs literature_cli.R. Operations are queued sequentially through writeChain
+   * because DuckDB limits concurrent multi-process access to a single file.
+   */
+  runCli(cmd, args, _isWrite = true, timeoutMs = 12e4) {
+    const exec2 = () => this.execR(this.findCliScript(), [cmd, ...args], timeoutMs);
+    const next = this.writeChain.then(exec2, exec2);
+    this.writeChain = next.catch(() => void 0);
+    return next;
+  }
+  execR(script, args, timeoutMs) {
+    return new Promise((resolve2) => {
+      let rscript;
+      try {
+        rscript = this.resolveRscript();
+      } catch (e) {
+        resolve2({ ok: false, error: e.message });
+        return;
+      }
+      (0, import_child_process.execFile)(
+        rscript,
+        [script, ...args],
+        { cwd: this.workspaceRoot || void 0, timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024 },
+        (error, stdout, stderr) => {
+          const lines = String(stdout || "").split(/\r?\n/);
+          const line = lines.find((l) => l.startsWith(JSON_MARKER) || l.startsWith(LEGACY_JSON_MARKER));
+          if (line) {
+            try {
+              const marker = line.startsWith(JSON_MARKER) ? JSON_MARKER : LEGACY_JSON_MARKER;
+              const payload = JSON.parse(line.slice(marker.length));
+              if (payload && payload.ok) {
+                resolve2({ ok: true, data: payload, stderr: String(stderr || "") });
+              } else {
+                resolve2({ ok: false, error: payload?.error || "Unknown R error", stderr: String(stderr || "") });
+              }
+              return;
+            } catch (parseErr) {
+              resolve2({ ok: false, error: `Could not parse R output: ${parseErr.message}`, stderr: String(stderr || "") });
+              return;
+            }
+          }
+          const errCode = error?.code;
+          let msg;
+          if (errCode === "ENOENT") {
+            msg = `Rscript not found ('${rscript}'). Install R or set 'tidyproteomicsagent.rscriptPath' in Settings.`;
+          } else if (error?.killed) {
+            msg = `R process timed out after ${Math.round(timeoutMs / 1e3)}s.`;
+          } else {
+            const tail = String(stderr || error?.message || "").trim().split(/\r?\n/).slice(-6).join("\n");
+            msg = tail || "R process exited without output.";
+          }
+          resolve2({ ok: false, error: msg, stderr: String(stderr || "") });
+        }
+      );
+    });
+  }
+};
+
+// src/agent/ContextBuilder.ts
 var ContextBuilder = class {
   constructor(workspaceRoot, promptsDir = "agent", analysisDir = "analysis") {
     this.workspaceRoot = workspaceRoot;
@@ -61,10 +620,10 @@ var ContextBuilder = class {
   }
   async readFileSafe(relPath) {
     try {
-      if (!this.workspaceRoot && !path.isAbsolute(relPath))
+      if (!this.workspaceRoot && !path2.isAbsolute(relPath))
         return "";
-      const fullPath = path.isAbsolute(relPath) ? relPath : path.join(this.workspaceRoot, relPath);
-      return await fs.readFile(fullPath, "utf-8");
+      const fullPath = path2.isAbsolute(relPath) ? relPath : path2.join(this.workspaceRoot, relPath);
+      return await fs2.readFile(fullPath, "utf-8");
     } catch {
       return "";
     }
@@ -76,9 +635,9 @@ var ContextBuilder = class {
    */
   async buildPhaseContext(phaseFileName) {
     let agentDir = this.promptsDir;
-    let protocol = await this.readFileSafe(path.join(agentDir, "PROTOCOL.md"));
+    let protocol = await this.readFileSafe(path2.join(agentDir, "PROTOCOL.md"));
     if (!protocol && agentDir === "agent") {
-      const fallback = await this.readFileSafe(path.join("prompts", "PROTOCOL.md"));
+      const fallback = await this.readFileSafe(path2.join("prompts", "PROTOCOL.md"));
       if (fallback) {
         agentDir = "prompts";
         protocol = fallback;
@@ -86,18 +645,18 @@ var ContextBuilder = class {
     }
     if (!protocol) {
       const clinerules = await this.readFileSafe(".clinerules");
-      const instruct = await this.readFileSafe(path.join(agentDir, "INSTRUCT.md"));
+      const instruct = await this.readFileSafe(path2.join(agentDir, "INSTRUCT.md"));
       protocol = `${clinerules}
 
 ${instruct}`.trim();
     }
-    const skill = await this.readFileSafe(path.join(agentDir, "SKILL.md"));
-    const experiment = await this.readFileSafe(path.join("docs", "experiment.md"));
-    let variables = await this.readFileSafe(path.join(agentDir, "VARIABLES.md"));
+    const skill = await this.readFileSafe(path2.join(agentDir, "SKILL.md"));
+    const experiment = await this.readFileSafe(path2.join("docs", "experiment.md"));
+    let variables = await this.readFileSafe(path2.join(agentDir, "VARIABLES.md"));
     if (!variables) {
       variables = experiment || "No dataset parameters provided. See docs/experiment.md.";
     }
-    const biology = await this.readFileSafe(path.join(agentDir, "BIOLOGY.md"));
+    const biology = await this.readFileSafe(path2.join(agentDir, "BIOLOGY.md"));
     const biologySection = biology ? `
 
 # CURATED DOMAIN BIOLOGICAL CONTEXT
@@ -113,8 +672,8 @@ ${biologySection}
 # DOMAIN SKILL SPECIFICATION & API CONVENTIONS
 ${skill}
 `.trim();
-    const notes = await this.readFileSafe(path.join("docs", "notes.md"));
-    const llm = await this.readFileSafe(path.join("docs", "llm.md"));
+    const notes = await this.readFileSafe(path2.join("docs", "notes.md"));
+    const llm = await this.readFileSafe(path2.join("docs", "llm.md"));
     const blackboardState = `
 ## CURRENT RUNTIME STATE (Shared Memory)
 ### docs/notes.md:
@@ -125,14 +684,15 @@ ${llm || "No active model summary found."}
 
 ### docs/experiment.md (USER EXPERIMENT & DATASET SPECIFICATION - READ ONLY):
 ${experiment || "No user experiment design provided. Note: This file is strictly user-maintained; do not create or overwrite it."}
+${this.buildLiteratureSection()}
 `.trim();
     let phasePath = phaseFileName;
     if (!phaseFileName.includes("/") && !phaseFileName.includes("\\")) {
-      phasePath = path.join(this.analysisDir, phaseFileName);
+      phasePath = path2.join(this.analysisDir, phaseFileName);
     }
     const phaseContent = await this.readFileSafe(phasePath);
     const systemPrompt = staticPrefixForCache;
-    const normalizedPhaseName = path.basename(phaseFileName).replace(/\.md$/, "").toUpperCase();
+    const normalizedPhaseName = path2.basename(phaseFileName).replace(/\.md$/, "").toUpperCase();
     const phasePrompt = `
 ${blackboardState}
 
@@ -152,6 +712,7 @@ ${phaseContent}
   Author: PROVIDER | LLM-MODEL
   Agent: TidyProteomicsAgent vX.X.X
 - Once all checkpoints for this phase are satisfied and verified, invoke complete_phase(phaseName = "${normalizedPhaseName}", summary = "...").
+- If a mandatory pre-flight gate, configuration prerequisite, or checkpoint fails and requires user intervention (such as unconfigured placeholders in docs/experiment.md), immediately invoke fail_phase(phaseName = "${normalizedPhaseName}", reason = "...", actionableInsights = "...") to halt execution and present actionable insights to the user.
 `.trim();
     return {
       systemPrompt,
@@ -159,6 +720,36 @@ ${phaseContent}
       blackboardState,
       staticPrefixForCache
     };
+  }
+  /**
+   * Describes the active DuckDB literature database (toggled from the Literature tab).
+   * Placed in the dynamic blackboard (not the cached prefix) because it can change between phases.
+   */
+  buildLiteratureSection() {
+    if (!this.workspaceRoot)
+      return "";
+    const cfg = readLiteratureConfig(this.workspaceRoot);
+    const activeName = cfg.activeLiterature || cfg.activeCorpus;
+    if (!activeName && !cfg.useInSynthesis)
+      return "";
+    const active = getActiveSynthesisLiterature(this.workspaceRoot);
+    if (!active) {
+      return `
+### ACTIVE LITERATURE DATABASE (DuckDB):
+- Status: DISABLED for synthesis (toggle off or no database selected in the Literature tab).
+- Use the standard literature corroboration strategy described in the phase directive.
+`;
+    }
+    return `
+### ACTIVE LITERATURE DATABASE (DuckDB - READ ONLY):
+- Status: ENABLED for literature corroboration and synthesis.
+- Database file: \`${active.relPath}\`
+- Schema: studies(study_id, title, year, core_thesis) -> experimental_contexts(context_id, organism, model_name, perturbation_type, perturbation_target, assay_modality) -> molecular_assertions(raw_entity_name, canonical_human_symbol, relationship_type, functional_module, quantitative_note, evidence_quote). Denormalized view: v_assertions_full.
+- Inspect: \`Rscript tools/literature/literature_cli.R stats ${active.relPath}\`
+- Lookup: \`Rscript tools/literature/literature_cli.R search ${active.relPath} <SYMBOL_OR_MODULE> [limit]\`
+- Query Skill: \`Rscript tools/literature/query_literature.R ${active.relPath} "<seed_symbols>" "<pathway_terms>"\`
+- Policy: Prefer literature database evidence (cite study_id + verbatim evidence_quote) over generic web search. Open the database read-only; never modify it during analysis phases.
+`;
   }
 };
 
@@ -208,6 +799,7 @@ var AgentLoop = class {
     }
     let turn = 0;
     let completedSummary = "";
+    let consecutiveNoToolTurns = 0;
     while (turn < maxTurns) {
       if (this.isCancelled && this.isCancelled()) {
         const stopSummary = "Execution stopped by user.";
@@ -330,6 +922,7 @@ var AgentLoop = class {
         }
       }
       if (response.tool_calls && response.tool_calls.length > 0) {
+        consecutiveNoToolTurns = 0;
         for (const tc of response.tool_calls) {
           this.onProgress({
             type: "tool_start",
@@ -361,6 +954,33 @@ ${tail}`;
           if (this.chatLogger) {
             await this.chatLogger.logToolResult(tc.name, tc.id, result.content, result.isError);
           }
+          if (tc.name === "fail_phase") {
+            const failReason = tc.args.reason || "Phase gate or checkpoint failed";
+            const actionable = tc.args.actionableInsights || "";
+            const summary = actionable ? `\u274C Pre-flight Gate / Checkpoint Failed: ${failReason}
+
+Actionable Insights:
+${actionable}` : `\u274C Pre-flight Gate / Checkpoint Failed: ${failReason}`;
+            const durationSeconds2 = Math.round((Date.now() - startTimeMs) / 1e3);
+            if (this.chatLogger) {
+              await this.chatLogger.logPhaseEnd({
+                phaseTitle: this.phaseTitle || this.phaseName,
+                phaseFileName: this.phaseName,
+                success: false,
+                summary,
+                durationSeconds: durationSeconds2,
+                tokensUsed: this.totalUsage,
+                turnCount: turn
+              });
+            }
+            return {
+              success: false,
+              summary,
+              tokensUsed: this.totalUsage,
+              phaseName: this.phaseName,
+              turnCount: turn
+            };
+          }
           if (tc.name === "complete_phase") {
             completedSummary = tc.args.summary || response.content;
             const durationSeconds2 = Math.round((Date.now() - startTimeMs) / 1e3);
@@ -385,6 +1005,7 @@ ${tail}`;
           }
         }
       } else {
+        consecutiveNoToolTurns++;
         if (response.content.includes("PHASE_COMPLETED") || response.content.includes("CHECKPOINT_PASSED")) {
           const durationSeconds2 = Math.round((Date.now() - startTimeMs) / 1e3);
           if (this.chatLogger) {
@@ -405,6 +1026,49 @@ ${tail}`;
             phaseName: this.phaseName,
             turnCount: turn
           };
+        } else if (this.isPhaseFailureOrHalt(response.content)) {
+          const durationSeconds2 = Math.round((Date.now() - startTimeMs) / 1e3);
+          if (this.chatLogger) {
+            await this.chatLogger.logPhaseEnd({
+              phaseTitle: this.phaseTitle || this.phaseName,
+              phaseFileName: this.phaseName,
+              success: false,
+              summary: response.content,
+              durationSeconds: durationSeconds2,
+              tokensUsed: this.totalUsage,
+              turnCount: turn
+            });
+          }
+          return {
+            success: false,
+            summary: response.content,
+            tokensUsed: this.totalUsage,
+            phaseName: this.phaseName,
+            turnCount: turn
+          };
+        } else if (consecutiveNoToolTurns >= 2) {
+          const summary = `Execution halted: Agent stopped calling tools and provided instructions to user:
+
+${response.content}`;
+          const durationSeconds2 = Math.round((Date.now() - startTimeMs) / 1e3);
+          if (this.chatLogger) {
+            await this.chatLogger.logPhaseEnd({
+              phaseTitle: this.phaseTitle || this.phaseName,
+              phaseFileName: this.phaseName,
+              success: false,
+              summary,
+              durationSeconds: durationSeconds2,
+              tokensUsed: this.totalUsage,
+              turnCount: turn
+            });
+          }
+          return {
+            success: false,
+            summary,
+            tokensUsed: this.totalUsage,
+            phaseName: this.phaseName,
+            turnCount: turn
+          };
         } else if (response.truncationDetected) {
           this.messages.push({
             role: "user",
@@ -413,7 +1077,7 @@ ${tail}`;
         } else {
           this.messages.push({
             role: "user",
-            content: "Please execute the required tools to fulfill the objectives of this phase, or call complete_phase when finished."
+            content: "Please execute the required tools to fulfill the objectives of this phase, or call complete_phase when finished, or call fail_phase if a prerequisite/gate failed."
           });
         }
       }
@@ -439,11 +1103,36 @@ ${tail}`;
       turnCount: maxTurns
     };
   }
+  isPhaseFailureOrHalt(content) {
+    if (!content)
+      return false;
+    const lower = content.toLowerCase();
+    const failurePatterns = [
+      /pre-flight\s+gate\s+fail/i,
+      /specification\s+gate\s+fail/i,
+      /checkpoint\s+gate\s+fail/i,
+      /\bgate\s+failed\b/i,
+      /\bphase\s+(?:[0-9a-zA-Z_]+\s+)?(?:is\s+blocked|remains\s+blocked|cannot\s+be\s+completed|is\s+halted)\b/i,
+      /\bphase_failed\b/i,
+      /\bphase_blocked\b/i,
+      /\bphase_halted\b/i,
+      /\bblocked_specification_gate\b/i,
+      /\bhalt(?:ed)?\s+(?:immediately\s+)?with\s+status\s+`?failed`?/i,
+      /\bhalt\s+directive\b/i
+    ];
+    if (failurePatterns.some((pattern) => pattern.test(content))) {
+      return true;
+    }
+    if (content.includes("\u274C") && (lower.includes("placeholder") || lower.includes("blocked") || lower.includes("rerun phase") || lower.includes("gate"))) {
+      return true;
+    }
+    return false;
+  }
 };
 
 // src/agent/ChatLogger.ts
-var fs2 = __toESM(require("fs/promises"));
-var path2 = __toESM(require("path"));
+var fs3 = __toESM(require("fs/promises"));
+var path3 = __toESM(require("path"));
 var ChatLogger = class {
   constructor(workspaceRoot, logFileName = "logs/llm_chat.md") {
     this.workspaceRoot = workspaceRoot;
@@ -460,21 +1149,21 @@ var ChatLogger = class {
     return this.logPath;
   }
   resolveLogPath(fileName) {
-    if (path2.isAbsolute(fileName)) {
+    if (path3.isAbsolute(fileName)) {
       return fileName;
     }
     if (!this.workspaceRoot)
       return "";
-    return path2.join(this.workspaceRoot, fileName);
+    return path3.join(this.workspaceRoot, fileName);
   }
   async append(text) {
     if (!this.workspaceRoot || !this.logPath)
       return;
     this.writeQueue = this.writeQueue.then(async () => {
       try {
-        const dir = path2.dirname(this.logPath);
-        await fs2.mkdir(dir, { recursive: true });
-        await fs2.appendFile(this.logPath, text + "\n", "utf-8");
+        const dir = path3.dirname(this.logPath);
+        await fs3.mkdir(dir, { recursive: true });
+        await fs3.appendFile(this.logPath, text + "\n", "utf-8");
       } catch (err) {
         console.error(`[ChatLogger] Failed to write to ${this.logPath}:`, err);
       }
@@ -588,8 +1277,8 @@ var ChatLogger = class {
 };
 
 // src/orchestrator/ModelSummaryWriter.ts
-var fs3 = __toESM(require("fs/promises"));
-var path3 = __toESM(require("path"));
+var fs4 = __toESM(require("fs/promises"));
+var path4 = __toESM(require("path"));
 function formatDateTime(d = /* @__PURE__ */ new Date()) {
   const pad = (n) => n.toString().padStart(2, "0");
   const year = d.getFullYear();
@@ -633,7 +1322,7 @@ Agent: ${agentStr}
 ---
 
 ## Agent Document Header Standard
-All agent-authored documents and reports (including \`docs/observations.md\`, \`docs/scientific_report.md\`, and any other generated markdown reports) must reference this specification and place the following metadata block immediately below the title:
+All agent-authored documents and reports (including \`docs/observations.md\`, \`docs/knowledge.md\`, \`docs/websearch.md\`, \`docs/literature.md\`, \`docs/scientific_report.md\`, and any other generated markdown reports) must reference this specification and place the following metadata block immediately below the title:
 
 \`\`\`markdown
 Title
@@ -647,19 +1336,19 @@ Agent: ${agentStr}
 async function writeActiveModelSummaryFile(workspaceRoot, config, extensionVersion = "0.1.0") {
   if (!workspaceRoot)
     return "";
-  const docsDir = path3.join(workspaceRoot, "docs");
-  await fs3.mkdir(docsDir, { recursive: true });
-  const llmPath = path3.join(docsDir, "llm.md");
+  const docsDir = path4.join(workspaceRoot, "docs");
+  await fs4.mkdir(docsDir, { recursive: true });
+  const llmPath = path4.join(docsDir, "llm.md");
   const markdown = generateActiveModelSummaryMarkdown(config, extensionVersion);
   try {
-    const existing = await fs3.readFile(llmPath, "utf-8");
+    const existing = await fs4.readFile(llmPath, "utf-8");
     const stripCreated = (s) => s.replace(/Created:\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/g, "");
     if (stripCreated(existing) === stripCreated(markdown)) {
       return llmPath;
     }
   } catch {
   }
-  await fs3.writeFile(llmPath, markdown, "utf-8");
+  await fs4.writeFile(llmPath, markdown, "utf-8");
   return llmPath;
 }
 
@@ -719,6 +1408,8 @@ var PipelineOrchestrator = class {
       }
       case "complete_phase":
         return `[Complete Phase] ${args?.phaseName || ""}`;
+      case "fail_phase":
+        return `[Halt / Fail Phase] ${args?.phaseName || ""}: ${args?.reason || ""}`;
       default: {
         const keys = Object.keys(args || {});
         const summary = keys.length > 0 ? ` (${keys.join(", ")})` : "";
@@ -757,8 +1448,8 @@ var PipelineOrchestrator = class {
     if (!this.workspaceRoot)
       return map;
     try {
-      const notesPath = path4.join(this.workspaceRoot, "docs", "notes.md");
-      const content = await fs4.readFile(notesPath, "utf-8");
+      const notesPath = path5.join(this.workspaceRoot, "docs", "notes.md");
+      const content = await fs5.readFile(notesPath, "utf-8");
       const sections = content.split(/\n(?=###\s+)/);
       for (const section of sections) {
         const fileMatch = section.match(/- \*\*File\*\*:\s*`([^`]+)`/);
@@ -789,7 +1480,7 @@ var PipelineOrchestrator = class {
         const summary = summaryMatch ? summaryMatch[1].trim() : void 0;
         const record = { status, durationSeconds, tokenUsage, summary, startTime, endTime };
         map.set(rawFileName, record);
-        const base = path4.basename(rawFileName);
+        const base = path5.basename(rawFileName);
         if (!map.has(base)) {
           map.set(base, record);
         }
@@ -811,13 +1502,13 @@ var PipelineOrchestrator = class {
       this.onLog(`[${this.ts()}] \u26A0\uFE0F [Pipeline] Cannot reset state while an active run is in flight.`);
       return;
     }
-    const notesPath = path4.join(this.workspaceRoot, "docs", "notes.md");
+    const notesPath = path5.join(this.workspaceRoot, "docs", "notes.md");
     try {
       const header = `# Autonomous Proteomics Analysis Notes
 Model: ${this.client.getConfig().model}
 
 `;
-      await fs4.writeFile(notesPath, header, "utf-8");
+      await fs5.writeFile(notesPath, header, "utf-8");
     } catch {
     }
     for (const p of this.phases) {
@@ -845,10 +1536,10 @@ Model: ${this.client.getConfig().model}
     const existingMap = forceReload ? /* @__PURE__ */ new Map() : new Map(this.phases.map((p) => [p.fileName, p]));
     const enabledMap = new Map(this.phases.map((p) => [p.fileName, p.enabled]));
     const newPhases = [];
-    const analysisDir = path4.join(this.workspaceRoot, "analysis");
+    const analysisDir = path5.join(this.workspaceRoot, "analysis");
     let hasSetupInAnalysis = false;
     try {
-      const files = await fs4.readdir(analysisDir);
+      const files = await fs5.readdir(analysisDir);
       const mdFiles = files.filter((f) => f.endsWith(".md")).sort();
       for (let i = 0; i < mdFiles.length; i++) {
         const fileName = mdFiles[i];
@@ -856,11 +1547,11 @@ Model: ${this.client.getConfig().model}
           hasSetupInAnalysis = true;
         }
         const prev = existingMap.get(fileName);
-        const noteRec = notesRecords.get(fileName) || notesRecords.get(path4.basename(fileName));
+        const noteRec = notesRecords.get(fileName) || notesRecords.get(path5.basename(fileName));
         let title = prev?.title;
         if (!title) {
           try {
-            const content = await fs4.readFile(path4.join(analysisDir, fileName), "utf-8");
+            const content = await fs5.readFile(path5.join(analysisDir, fileName), "utf-8");
             const firstHeader = content.split("\n").find((l) => l.trim().startsWith("#"));
             if (firstHeader) {
               title = firstHeader.replace(/^#+\s*/, "").trim();
@@ -893,7 +1584,7 @@ Model: ${this.client.getConfig().model}
           durationSeconds: prev?.durationSeconds || noteRec?.durationSeconds,
           tokenUsage: prev?.tokenUsage || noteRec?.tokenUsage,
           summary: prev?.summary || noteRec?.summary,
-          error: prev?.error
+          error: prev?.error || (resolvedStatus === "failed" ? noteRec?.summary : void 0)
         });
       }
     } catch (e) {
@@ -901,15 +1592,15 @@ Model: ${this.client.getConfig().model}
     }
     if (!hasSetupInAnalysis) {
       let instructRel = "agent/INSTRUCT.md";
-      let instructPath = path4.join(this.workspaceRoot, "agent", "INSTRUCT.md");
+      let instructPath = path5.join(this.workspaceRoot, "agent", "INSTRUCT.md");
       try {
-        await fs4.stat(instructPath);
+        await fs5.stat(instructPath);
       } catch {
         instructRel = "prompts/INSTRUCT.md";
-        instructPath = path4.join(this.workspaceRoot, "prompts", "INSTRUCT.md");
+        instructPath = path5.join(this.workspaceRoot, "prompts", "INSTRUCT.md");
       }
       try {
-        await fs4.stat(instructPath);
+        await fs5.stat(instructPath);
         const prev = existingMap.get(instructRel) || existingMap.get("agent/INSTRUCT.md") || existingMap.get("prompts/INSTRUCT.md");
         const noteRec = notesRecords.get(instructRel) || notesRecords.get("agent/INSTRUCT.md") || notesRecords.get("prompts/INSTRUCT.md") || notesRecords.get("INSTRUCT.md");
         let resolvedStatus = "pending";
@@ -931,7 +1622,7 @@ Model: ${this.client.getConfig().model}
           durationSeconds: prev?.durationSeconds || noteRec?.durationSeconds,
           tokenUsage: prev?.tokenUsage || noteRec?.tokenUsage,
           summary: prev?.summary || noteRec?.summary,
-          error: prev?.error
+          error: prev?.error || (resolvedStatus === "failed" ? noteRec?.summary : void 0)
         });
       } catch {
       }
@@ -942,7 +1633,7 @@ Model: ${this.client.getConfig().model}
   async getPromptFiles() {
     let agentDir = "agent";
     try {
-      await fs4.stat(path4.join(this.workspaceRoot, "agent"));
+      await fs5.stat(path5.join(this.workspaceRoot, "agent"));
     } catch {
       agentDir = "prompts";
     }
@@ -955,12 +1646,12 @@ Model: ${this.client.getConfig().model}
       { name: "LLM Chat Log", relPath: "logs/llm_chat.md" }
     ];
     try {
-      await fs4.stat(path4.join(this.workspaceRoot, `${agentDir}/BIOLOGY.md`));
+      await fs5.stat(path5.join(this.workspaceRoot, `${agentDir}/BIOLOGY.md`));
       list.splice(1, 0, { name: "Curated Biological Context", relPath: `${agentDir}/BIOLOGY.md` });
     } catch {
     }
     try {
-      await fs4.stat(path4.join(this.workspaceRoot, `${agentDir}/VARIABLES.md`));
+      await fs5.stat(path5.join(this.workspaceRoot, `${agentDir}/VARIABLES.md`));
       list.splice(1, 0, { name: "Legacy Dataset Variables", relPath: `${agentDir}/VARIABLES.md` });
     } catch {
     }
@@ -968,7 +1659,7 @@ Model: ${this.client.getConfig().model}
     for (const item of list) {
       let exists = false;
       try {
-        await fs4.stat(path4.join(this.workspaceRoot, item.relPath));
+        await fs5.stat(path5.join(this.workspaceRoot, item.relPath));
         exists = true;
       } catch {
         exists = false;
@@ -989,9 +1680,9 @@ Model: ${this.client.getConfig().model}
   }
   async addPhase(fileName, title) {
     const cleanFileName = fileName.endsWith(".md") ? fileName : `${fileName}.md`;
-    const analysisDir = path4.join(this.workspaceRoot, "analysis");
-    await fs4.mkdir(analysisDir, { recursive: true });
-    const fullPath = path4.join(analysisDir, cleanFileName);
+    const analysisDir = path5.join(this.workspaceRoot, "analysis");
+    await fs5.mkdir(analysisDir, { recursive: true });
+    const fullPath = path5.join(analysisDir, cleanFileName);
     const defaultTitle = title || cleanFileName.replace(/\.md$/, "").replace(/_/g, " ");
     const template = `### Phase: ${defaultTitle}
 Construct and execute code for this phase, capturing output to logs.
@@ -1001,7 +1692,7 @@ Construct and execute code for this phase, capturing output to logs.
 - [ ] Task 2: Execute analysis in R or shell.
 - [ ] Checkpoint: Verify outputs and log files.
 `;
-    await fs4.writeFile(fullPath, template, "utf-8");
+    await fs5.writeFile(fullPath, template, "utf-8");
     await this.rescanPhases();
     return fullPath;
   }
@@ -1011,7 +1702,7 @@ Construct and execute code for this phase, capturing output to logs.
       const phase = this.phases[idx];
       if (!phase.isMasterSetup) {
         try {
-          await fs4.unlink(path4.join(this.workspaceRoot, "analysis", phase.fileName));
+          await fs5.unlink(path5.join(this.workspaceRoot, "analysis", phase.fileName));
         } catch {
         }
       }
@@ -1022,12 +1713,12 @@ Construct and execute code for this phase, capturing output to logs.
   async getFoldersStatus() {
     let agentFolder = "agent";
     try {
-      await fs4.stat(path4.join(this.workspaceRoot, "agent"));
+      await fs5.stat(path5.join(this.workspaceRoot, "agent"));
     } catch {
       agentFolder = "prompts";
     }
     const list = [
-      { name: "analysis", relPath: "analysis", description: "Phase Prompts (00_INSTALL.md .. 07_SYNTHESIS.md)" },
+      { name: "analysis", relPath: "analysis", description: "Phase Prompts (00_INSTALL.md .. 10_SYNTHESIS.md)" },
       { name: agentFolder, relPath: agentFolder, description: "Protocol, Variables & Skills (Cached Prefix)" },
       { name: "code", relPath: "code", description: "Generated Analysis Scripts" },
       { name: "tools", relPath: "tools", description: "Linter & Execution Helper Utilities" },
@@ -1039,14 +1730,14 @@ Construct and execute code for this phase, capturing output to logs.
     if (!this.workspaceRoot)
       return result;
     for (const item of list) {
-      const full = path4.join(this.workspaceRoot, item.relPath);
+      const full = path5.join(this.workspaceRoot, item.relPath);
       let exists = false;
       let itemCount = 0;
       try {
-        const stat3 = await fs4.stat(full);
+        const stat3 = await fs5.stat(full);
         if (stat3.isDirectory()) {
           exists = true;
-          const files = await fs4.readdir(full);
+          const files = await fs5.readdir(full);
           itemCount = files.filter((f) => !f.startsWith(".")).length;
         }
       } catch {
@@ -1072,9 +1763,11 @@ Construct and execute code for this phase, capturing output to logs.
     }
     const promptFiles = await this.getPromptFiles();
     const folders = await this.getFoldersStatus();
+    const analysisFolder = folders.find((f) => f.name === "analysis");
+    const isAnalysisMissingOrEmpty = !this.workspaceRoot || !analysisFolder || !analysisFolder.exists || (analysisFolder.itemCount || 0) === 0 || this.phases.length === 0;
     return {
       workingDirectory: this.workspaceRoot,
-      workspaceName: this.workspaceRoot ? path4.basename(this.workspaceRoot) : "No Folder Open",
+      workspaceName: this.workspaceRoot ? path5.basename(this.workspaceRoot) : "No Folder Open",
       model: config.model,
       provider: config.provider,
       startTime: (/* @__PURE__ */ new Date()).toISOString(),
@@ -1089,7 +1782,10 @@ Construct and execute code for this phase, capturing output to logs.
         completionTokens: totalCompletion,
         totalTokens,
         cachedPromptTokens: totalCached
-      }
+      },
+      isAnalysisMissingOrEmpty,
+      literature: readLiteratureConfig(this.workspaceRoot),
+      knowledgeCorpus: readLiteratureConfig(this.workspaceRoot)
     };
   }
   async notifyState() {
@@ -1126,23 +1822,23 @@ Construct and execute code for this phase, capturing output to logs.
     const filesToRemove = /* @__PURE__ */ new Set();
     for (const p of targetPhases) {
       filesToRemove.add(p.fileName);
-      filesToRemove.add(path4.basename(p.fileName));
+      filesToRemove.add(path5.basename(p.fileName));
       if (p.isMasterSetup) {
         filesToRemove.add("agent/INSTRUCT.md");
         filesToRemove.add("prompts/INSTRUCT.md");
         filesToRemove.add("INSTRUCT.md");
       }
     }
-    const notesPath = path4.join(this.workspaceRoot, "docs", "notes.md");
+    const notesPath = path5.join(this.workspaceRoot, "docs", "notes.md");
     try {
-      const content = await fs4.readFile(notesPath, "utf-8");
+      const content = await fs5.readFile(notesPath, "utf-8");
       const sections = content.split(/\n(?=###\s+)/);
       const kept = [];
       for (const section of sections) {
         const fileMatch = section.match(/- \*\*File\*\*:\s*`([^`]+)`/);
         if (fileMatch) {
           const rawFileName = fileMatch[1].trim();
-          const baseName = path4.basename(rawFileName);
+          const baseName = path5.basename(rawFileName);
           if (filesToRemove.has(rawFileName) || filesToRemove.has(baseName)) {
             continue;
           }
@@ -1150,7 +1846,7 @@ Construct and execute code for this phase, capturing output to logs.
         kept.push(section);
       }
       const updated = kept.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
-      await fs4.writeFile(notesPath, updated, "utf-8");
+      await fs5.writeFile(notesPath, updated, "utf-8");
     } catch {
     }
   }
@@ -1208,6 +1904,10 @@ Construct and execute code for this phase, capturing output to logs.
   async runFullPipeline() {
     if (this.isRunning) {
       this.onLog(`[${this.ts()}] \u26A0\uFE0F [Pipeline] Execution busy: A pipeline is already running.`);
+      return;
+    }
+    if (!this.workspaceRoot || this.phases.length === 0) {
+      this.onLog(`[${this.ts()}] \u26A0\uFE0F [Pipeline] No analysis tasks found to execute. Please initialize an analysis pipeline first.`);
       return;
     }
     this.isRunning = true;
@@ -1315,8 +2015,17 @@ Construct and execute code for this phase, capturing output to logs.
       } else {
         currentPhase.status = "failed";
         currentPhase.error = result.summary;
-        const firstLine = String(result.summary || "Phase failed").split("\n")[0];
-        this.onLog(`[${this.ts()}] \u274C ${currentPhase.title} failed: ${firstLine}`);
+        const summaryText = String(result.summary || "Phase failed").trim();
+        const lines = summaryText.split("\n");
+        const firstLine = lines[0];
+        this.onLog(`[${this.ts()}] \u274C ${currentPhase.title} halted / failed: ${firstLine}`);
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (line) {
+            this.onLog(`[${this.ts()}] \u{1F4A1} ${line}`);
+          }
+        }
+        await this.appendPhaseRecordToNotes(currentPhase);
         await this.notifyState();
         return false;
       }
@@ -1333,31 +2042,33 @@ Construct and execute code for this phase, capturing output to logs.
     }
   }
   async appendPhaseRecordToNotes(phase) {
-    const notesPath = path4.join(this.workspaceRoot, "docs", "notes.md");
+    const notesPath = path5.join(this.workspaceRoot, "docs", "notes.md");
+    const statusText = phase.status === "failed" ? "FAILED" : "COMPLETED";
+    const summaryContent = phase.summary || (phase.status === "failed" ? phase.error || "Phase halted or failed." : "Phase checkpoints verified.");
     const entry = `
-### ${phase.title} - COMPLETED
+### ${phase.title} - ${statusText}
 - **File**: \`${phase.fileName}\`
 - **Duration**: ${phase.durationSeconds}s
 - **Start**: ${phase.startTime}
 - **End**: ${phase.endTime}
 - **Token Usage**: Total: ${phase.tokenUsage?.totalTokens || "N/A"}, Prompt: ${phase.tokenUsage?.promptTokens || "N/A"}, Completion: ${phase.tokenUsage?.completionTokens || "N/A"}, Cached: ${phase.tokenUsage?.cachedPromptTokens || 0}
 - **Summary**:
-${phase.summary || "Phase checkpoints verified."}
+${summaryContent}
 
 ---
 `;
     try {
-      await fs4.mkdir(path4.dirname(notesPath), { recursive: true });
+      await fs5.mkdir(path5.dirname(notesPath), { recursive: true });
       let current = "";
       try {
-        current = await fs4.readFile(notesPath, "utf-8");
+        current = await fs5.readFile(notesPath, "utf-8");
       } catch {
         current = `# Autonomous Proteomics Analysis Notes
 Model: ${this.client.getConfig().model}
 
 `;
       }
-      await fs4.writeFile(notesPath, current + entry, "utf-8");
+      await fs5.writeFile(notesPath, current + entry, "utf-8");
     } catch (e) {
       this.onLog(`[${this.ts()}] \u26A0\uFE0F Warning: Failed to update docs/notes.md: ${e}`);
     }
@@ -2036,13 +2747,13 @@ var ProviderClient = class {
 };
 
 // src/tools/ToolRegistry.ts
-var fs5 = __toESM(require("fs/promises"));
+var fs6 = __toESM(require("fs/promises"));
 var fsSync = __toESM(require("fs"));
 var readline = __toESM(require("readline"));
-var path5 = __toESM(require("path"));
-var import_child_process = require("child_process");
+var path6 = __toESM(require("path"));
+var import_child_process2 = require("child_process");
 var import_util = require("util");
-var execAsync = (0, import_util.promisify)(import_child_process.exec);
+var execAsync = (0, import_util.promisify)(import_child_process2.exec);
 var ToolRegistry = class {
   constructor(workspaceRoot) {
     this.workspaceRoot = workspaceRoot;
@@ -2085,17 +2796,17 @@ var ToolRegistry = class {
     if (!root) {
       throw new Error("No active workspace directory set.");
     }
-    const resolved = path5.isAbsolute(filePath) ? path5.resolve(filePath) : path5.resolve(root, filePath);
-    const normalizedRoot = path5.resolve(root);
-    if (resolved !== normalizedRoot && !resolved.startsWith(normalizedRoot + path5.sep)) {
+    const resolved = path6.isAbsolute(filePath) ? path6.resolve(filePath) : path6.resolve(root, filePath);
+    const normalizedRoot = path6.resolve(root);
+    if (resolved !== normalizedRoot && !resolved.startsWith(normalizedRoot + path6.sep)) {
       throw new Error(`Security restriction: access to '${filePath}' outside workspace root is denied.`);
     }
     return resolved;
   }
   assertNotProtected(filePath) {
     const root = this.workspaceRoot || "";
-    const resolved = path5.isAbsolute(filePath) ? path5.resolve(filePath) : path5.resolve(root, filePath);
-    const normalizedRel = root ? path5.relative(path5.resolve(root), resolved).replace(/\\/g, "/") : filePath.replace(/\\/g, "/");
+    const resolved = path6.isAbsolute(filePath) ? path6.resolve(filePath) : path6.resolve(root, filePath);
+    const normalizedRel = root ? path6.relative(path6.resolve(root), resolved).replace(/\\/g, "/") : filePath.replace(/\\/g, "/");
     const PROTECTED_FILES = [
       "docs/experiment.md",
       "docs/llm.md",
@@ -2105,7 +2816,7 @@ var ToolRegistry = class {
     ];
     if (PROTECTED_FILES.some((p) => normalizedRel === p || normalizedRel.endsWith("/" + p))) {
       throw new Error(
-        `Security Policy Violation: '${filePath}' is a protected user or extension specification file and cannot be modified by the agent. Record runtime logs in 'docs/notes.md' and biological findings in 'docs/observations.md'.`
+        `Security Policy Violation: '${filePath}' is a protected user or extension specification file and cannot be modified by the agent. Record runtime logs in 'docs/notes.md' and biological findings across docs/ (observations.md, knowledge.md, websearch.md, literature.md).`
       );
     }
   }
@@ -2237,8 +2948,8 @@ ${selected.join("\n")}`;
       execute: async (args) => {
         this.assertNotProtected(args.filePath);
         const fullPath = this.resolvePath(args.filePath);
-        await fs5.mkdir(path5.dirname(fullPath), { recursive: true });
-        await fs5.writeFile(fullPath, args.content, "utf-8");
+        await fs6.mkdir(path6.dirname(fullPath), { recursive: true });
+        await fs6.writeFile(fullPath, args.content, "utf-8");
         return `Successfully wrote ${args.content.length} characters to ${args.filePath}`;
       }
     });
@@ -2268,12 +2979,12 @@ ${selected.join("\n")}`;
       execute: async (args) => {
         this.assertNotProtected(args.filePath);
         const fullPath = this.resolvePath(args.filePath);
-        const content = await fs5.readFile(fullPath, "utf-8");
+        const content = await fs6.readFile(fullPath, "utf-8");
         if (!content.includes(args.targetContent)) {
           throw new Error(`Target content was not found in ${args.filePath}. Ensure exact whitespace and line match.`);
         }
         const updated = content.replace(args.targetContent, () => args.replacementContent);
-        await fs5.writeFile(fullPath, updated, "utf-8");
+        await fs6.writeFile(fullPath, updated, "utf-8");
         return `Successfully replaced content in ${args.filePath}`;
       }
     });
@@ -2294,7 +3005,7 @@ ${selected.join("\n")}`;
       },
       execute: async (args) => {
         const fullPath = this.resolvePath(args.dirPath || ".");
-        const entries = await fs5.readdir(fullPath, { withFileTypes: true });
+        const entries = await fs6.readdir(fullPath, { withFileTypes: true });
         const list = entries.map((e) => `${e.isDirectory() ? "[DIR]" : "[FILE]"} ${e.name}`).join("\n");
         return `Directory '${args.dirPath}':
 ${list || "(empty)"}`;
@@ -2322,20 +3033,20 @@ ${list || "(empty)"}`;
         for (const file of args.requiredFiles) {
           const fullPath = this.resolvePath(file);
           if (file.includes("*")) {
-            const dir = path5.dirname(fullPath);
-            const basePattern = path5.basename(file);
+            const dir = path6.dirname(fullPath);
+            const basePattern = path6.basename(file);
             try {
-              const entries = await fs5.readdir(dir);
+              const entries = await fs6.readdir(dir);
               const regexStr = "^" + basePattern.replace(/[-/\\^$+?.()|[\]{}]/g, "\\$&").replace(/\\\*/g, ".*") + "$";
               const regex = new RegExp(regexStr);
               const matched = entries.filter((e) => regex.test(e));
               if (matched.length > 0) {
                 let anyValid = false;
                 for (const m of matched) {
-                  const s = await fs5.stat(path5.join(dir, m));
+                  const s = await fs6.stat(path6.join(dir, m));
                   if (s.size > 0) {
                     anyValid = true;
-                    results.push(`PASS: ${path5.join(path5.dirname(file), m)} (size: ${s.size} bytes)`);
+                    results.push(`PASS: ${path6.join(path6.dirname(file), m)} (size: ${s.size} bytes)`);
                   }
                 }
                 if (!anyValid) {
@@ -2352,7 +3063,7 @@ ${list || "(empty)"}`;
             }
           } else {
             try {
-              const stat3 = await fs5.stat(fullPath);
+              const stat3 = await fs6.stat(fullPath);
               if (stat3.size > 0) {
                 results.push(`PASS: ${file} (size: ${stat3.size} bytes)`);
               } else {
@@ -2394,6 +3105,330 @@ Summary:
 ${args.summary}`;
       }
     });
+    this.tools.set("fail_phase", {
+      definition: {
+        name: "fail_phase",
+        description: "Halts execution and marks the current phase as failed when an immutable specification gate, mandatory prerequisite, or unrecoverable error occurs. Use this to exit the phase loop immediately and provide actionable insights for the user to resolve before rerunning.",
+        parameters: {
+          type: "object",
+          properties: {
+            phaseName: {
+              type: "string",
+              description: "The name or filename of the phase (e.g. '00_INSTALL', '01_INSPECT')"
+            },
+            reason: {
+              type: "string",
+              description: "Concise summary of why the phase failed or was halted (e.g. 'Pre-flight Gate Failed: docs/experiment.md contains unconfigured placeholders')"
+            },
+            actionableInsights: {
+              type: "string",
+              description: "Specific, actionable instructions for the researcher explaining what to edit, configure, or verify to resolve the blocker before rerunning the phase."
+            }
+          },
+          required: ["phaseName", "reason", "actionableInsights"]
+        }
+      },
+      execute: async (args) => {
+        return `PHASE_HALTED_FAILED: ${args.phaseName}
+Reason: ${args.reason}
+Actionable Insights:
+${args.actionableInsights}`;
+      }
+    });
+  }
+};
+
+// src/literature/IngestionRunner.ts
+var path7 = __toESM(require("path"));
+var fs7 = __toESM(require("fs"));
+var import_child_process3 = require("child_process");
+var IngestionRunner = class {
+  constructor(literatureService, client, extensionPath, onProgress, onLog) {
+    this.literatureService = literatureService;
+    this.client = client;
+    this.extensionPath = extensionPath;
+    this.onProgress = onProgress;
+    this.onLog = onLog;
+  }
+  isRunning = false;
+  shouldAbort = false;
+  getIsRunning() {
+    return this.isRunning;
+  }
+  abort() {
+    this.shouldAbort = true;
+  }
+  ts() {
+    return (/* @__PURE__ */ new Date()).toTimeString().split(" ")[0];
+  }
+  async runIngestion(dbFileName) {
+    if (this.isRunning) {
+      throw new Error("An ingestion process is already running.");
+    }
+    const viewState = this.literatureService.getViewState();
+    const queue = viewState.queue;
+    if (queue.length === 0) {
+      throw new Error("No files in the ingestion queue. Select a literature folder first.");
+    }
+    const wsRoot = this.literatureService.getWorkspaceRoot();
+    if (!wsRoot) {
+      throw new Error("No active workspace directory set.");
+    }
+    const targetDir = viewState.literatureDir || viewState.corporaDir || getLiteratureDir(wsRoot);
+    const dbPath = path7.join(targetDir, path7.basename(dbFileName));
+    if (!fs7.existsSync(dbPath)) {
+      throw new Error(`Literature database does not exist: ${dbFileName}`);
+    }
+    this.isRunning = true;
+    this.shouldAbort = false;
+    let processed = 0;
+    let errors = 0;
+    this.onLog(`[${this.ts()}] \u{1F4DA} [Literature] Starting batch ingestion of ${queue.length} files into ${path7.basename(dbFileName)}`);
+    try {
+      for (let i = 0; i < queue.length; i++) {
+        if (this.shouldAbort) {
+          this.onLog(`[${this.ts()}] \u23F9 [Literature] Ingestion aborted by user.`);
+          break;
+        }
+        const item = queue[i];
+        if (item.stage === "indexed") {
+          continue;
+        }
+        try {
+          await this.processItem(item, dbPath, i + 1, queue.length);
+          processed++;
+        } catch (err) {
+          errors++;
+          item.stage = "failed";
+          item.message = err.message || String(err);
+          this.literatureService.updateQueueItem(item.id, { stage: "failed", message: item.message });
+          this.onProgress({
+            item,
+            stage: "failed",
+            message: item.message,
+            processedCount: i + 1,
+            totalCount: queue.length
+          });
+          this.onLog(`[${this.ts()}] \u274C [Literature] Failed to ingest ${item.fileName}: ${item.message}`);
+        }
+      }
+    } finally {
+      this.isRunning = false;
+      this.shouldAbort = false;
+      this.literatureService.syncWorkspaceScripts();
+    }
+    this.onLog(`[${this.ts()}] \u{1F3C1} [Literature] Ingestion batch complete: ${processed} indexed, ${errors} failed.`);
+    return { success: errors === 0, processed, errors };
+  }
+  async processItem(item, dbPath, currentIndex, totalCount) {
+    const notify = (stage, message) => {
+      item.stage = stage;
+      item.message = message;
+      this.literatureService.updateQueueItem(item.id, { stage, message });
+      this.onProgress({
+        item,
+        stage,
+        message,
+        processedCount: currentIndex,
+        totalCount
+      });
+    };
+    notify("parsing_pdf", "Extracting text and tables...");
+    this.onLog(`[${this.ts()}] \u{1F4C4} [${currentIndex}/${totalCount}] Parsing ${item.fileName}...`);
+    const extractScript = this.findScript("extract_text_or_table.R");
+    const rscript = this.literatureService.resolveRscript();
+    const extractPayload = await this.execRJson(rscript, extractScript, [item.absPath, "25"]);
+    if (!extractPayload.ok) {
+      throw new Error(extractPayload.error || "Failed to extract text from file.");
+    }
+    notify("llm_extraction", "LLM structured extraction...");
+    this.onLog(`[${this.ts()}] \u{1F916} [${currentIndex}/${totalCount}] LLM extracting assertions from ${item.fileName}...`);
+    let studyId = `doi_${path7.basename(item.fileName, path7.extname(item.fileName))}`;
+    let extractedPayload = null;
+    if (extractPayload.kind === "pdf") {
+      extractedPayload = await this.llmExtractFromPdfText(item.fileName, extractPayload.text);
+    } else {
+      extractedPayload = await this.llmExtractFromTable(item.fileName, extractPayload.columns, extractPayload.rows);
+    }
+    if (!extractedPayload || !extractedPayload.study) {
+      throw new Error("LLM failed to return structured extraction payload.");
+    }
+    extractedPayload.db_path = dbPath;
+    if (extractedPayload.study && extractedPayload.study.study_id) {
+      studyId = extractedPayload.study.study_id;
+    } else {
+      extractedPayload.study.study_id = studyId;
+    }
+    extractedPayload.study.filename = item.fileName;
+    notify("normalization", "Normalizing symbols and orthologs...");
+    this.onLog(`[${this.ts()}] \u{1F9EC} [${currentIndex}/${totalCount}] Normalizing symbols via R (limma/babelgene)...`);
+    let normScript;
+    try {
+      normScript = this.findScript("normalize_and_insert_literature.R");
+    } catch {
+      normScript = this.findScript("normalize_and_insert_corpus.R");
+    }
+    const wsRoot = this.literatureService.getWorkspaceRoot();
+    const litDir = getLiteratureDir(wsRoot);
+    fs7.mkdirSync(litDir, { recursive: true });
+    const tmpJson = path7.join(litDir, `_tmp_ingest_${Date.now()}.json`);
+    try {
+      fs7.writeFileSync(tmpJson, JSON.stringify(extractedPayload, null, 2), "utf-8");
+      const normRes = await this.execRJson(rscript, normScript, [tmpJson, dbPath]);
+      if (!normRes.ok) {
+        throw new Error(normRes.error || "Normalization and insertion failed in R.");
+      }
+      if ((normRes.assertions_inserted || 0) === 0) {
+        notify("indexed", "Indexed 0 assertions (no explicit protein relationships found)");
+        this.onLog(
+          `[${this.ts()}] \u26A0\uFE0F [Literature] Warning: 0 assertions extracted from ${item.fileName}. Check if document contains explicit protein interactions or is a conceptual overview.`
+        );
+      } else {
+        notify(
+          "indexed",
+          `Indexed ${normRes.assertions_inserted} assertions (${normRes.symbols_normalized || 0} normalized)`
+        );
+        this.onLog(
+          `[${this.ts()}] \u2705 [${currentIndex}/${totalCount}] Indexed ${item.fileName}: ${normRes.assertions_inserted} assertions into DuckDB.`
+        );
+      }
+    } finally {
+      try {
+        if (fs7.existsSync(tmpJson))
+          fs7.unlinkSync(tmpJson);
+      } catch {
+      }
+    }
+  }
+  async llmExtractFromPdfText(fileName, rawText) {
+    const systemPrompt = `You are an expert molecular biologist, biochemist, and biocuration specialist.
+Your task is to extract structured scientific facts from literature text for ingestion into a Perturbation-Centric Knowledge Graph.
+
+CRITICAL INSTRUCTIONS:
+1. Extract ALL specific proteins, co-factors, adapters, substrates, binding partners, and pathway members mentioned across the text (Abstract, Introduction, Results, Figures, Discussion, or Review sections).
+2. For experimental perturbation papers (KO, KD, chemical inhibition): extract altered targets, secondary hits, downstream destabilized targets, and co-regulated modules.
+3. For structural, biochemical, or review papers: extract the primary target, its known physical interactors (e.g. adapters, co-chaperones, E3 ligases), direct substrates, and functional pathways (e.g. ERAD, autophagy, proteasome, ribosome quality control).
+4. Do NOT return an empty list if any proteins, complexes, or molecular interactions are discussed in the paper. Always extract the relevant molecular entities with their biological relationship type.
+
+OUTPUT SCHEMA (Must be raw valid JSON matching this exact structure):
+{
+  "study": {
+    "study_id": "DOI or paper title slug (e.g. 10.1038/s41589-021-00800-0)",
+    "title": "Full title of paper",
+    "year": 2021,
+    "core_thesis": "2-3 sentence summary of the primary biological conclusions"
+  },
+  "experimental_contexts": [
+    {
+      "context_id": "c1",
+      "system_category": "cell_line | primary_cells | in_vivo_animal | human_clinical",
+      "organism": "Homo sapiens | Mus musculus | Saccharomyces cerevisiae",
+      "model_name": "HeLa | U2OS | HEK293T | C57BL/6",
+      "perturbation_type": "CRISPR_KO | siRNA_KD | chemical_inhibitor | infection",
+      "perturbation_target": "Exact perturbation target (e.g. VCP / p97, CB-5083)",
+      "assay_modality": "whole_cell_proteomics | AP-MS | diGly_ubiquitinomics | RNA_seq | western_blot",
+      "context_metadata": "Dose, timepoint, or condition details"
+    }
+  ],
+  "molecular_assertions": [
+    {
+      "context_id": "c1",
+      "raw_entity_name": "Exact protein/gene name used in paper (e.g. p97, p47, UBXD8, Cdc48)",
+      "relationship_type": "ACCUMULATES_UP | DEPLETED_DOWN | PHYSICAL_INTERACTOR | DIRECT_SUBSTRATE | COMPENSATORY_PATHWAY | NO_CHANGE",
+      "functional_module": "e.g. ERAD, RQC, Mitophagy, Proteasome, Golgi reassembly",
+      "quantitative_note": "Fold change or statistical metric if stated",
+      "evidence_quote": "Verbatim short sentence or table reference from the text"
+    }
+  ]
+}
+
+Return ONLY the raw JSON object. Do not include markdown code fences or conversational text.`;
+    const userMessage = `Paper Filename: ${fileName}
+
+Text Content:
+${rawText.slice(0, 5e4)}
+
+Extract all studies, contexts, and molecular assertions.`;
+    const response = await this.client.chat({
+      system: systemPrompt,
+      messages: [{ role: "user", content: userMessage }],
+      tools: []
+    });
+    return this.cleanAndParseJson(response.content);
+  }
+  async llmExtractFromTable(fileName, columns, rows) {
+    const systemPrompt = `You are a biocuration specialist. Convert a supplementary proteomics/genomics table into structured assertions.
+Return ONLY valid JSON with { "study": {...}, "experimental_contexts": [...], "molecular_assertions": [...] }.`;
+    const userMessage = `Table Filename: ${fileName}
+Columns: ${columns.join(", ")}
+Top Data Rows (JSON):
+${JSON.stringify(rows.slice(0, 40), null, 2)}
+
+Extract the study, context, and all molecular assertions with raw_entity_name and relationship_type.`;
+    const response = await this.client.chat({
+      system: systemPrompt,
+      messages: [{ role: "user", content: userMessage }],
+      tools: []
+    });
+    return this.cleanAndParseJson(response.content);
+  }
+  cleanAndParseJson(content) {
+    let clean = (content || "").trim();
+    if (clean.startsWith("```json"))
+      clean = clean.slice(7);
+    else if (clean.startsWith("```"))
+      clean = clean.slice(3);
+    if (clean.endsWith("```"))
+      clean = clean.slice(0, -3);
+    clean = clean.trim();
+    const firstBrace = clean.indexOf("{");
+    const lastBrace = clean.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace !== -1) {
+      clean = clean.substring(firstBrace, lastBrace + 1);
+    }
+    return JSON.parse(clean);
+  }
+  findScript(scriptName) {
+    const candidates = [
+      path7.join(this.extensionPath, "templates", "shared", "tools", "literature", scriptName),
+      path7.join(this.extensionPath, "extension", "templates", "shared", "tools", "literature", scriptName),
+      path7.join(__dirname, "..", "templates", "shared", "tools", "literature", scriptName),
+      path7.join(__dirname, "..", "..", "templates", "shared", "tools", "literature", scriptName),
+      // Legacy fallbacks
+      path7.join(this.extensionPath, "templates", "shared", "tools", "corpus", scriptName),
+      path7.join(this.extensionPath, "extension", "templates", "shared", "tools", "corpus", scriptName),
+      path7.join(__dirname, "..", "templates", "shared", "tools", "corpus", scriptName),
+      path7.join(__dirname, "..", "..", "templates", "shared", "tools", "corpus", scriptName)
+    ];
+    const hit = candidates.find((c) => fs7.existsSync(c));
+    if (hit)
+      return hit;
+    throw new Error(`Literature script '${scriptName}' not found in extension templates.`);
+  }
+  execRJson(rscript, scriptPath, args) {
+    return new Promise((resolve2) => {
+      (0, import_child_process3.execFile)(
+        rscript,
+        [scriptPath, ...args],
+        { timeout: 9e4, maxBuffer: 15 * 1024 * 1024 },
+        (error, stdout, stderr) => {
+          const lines = String(stdout || "").split(/\r?\n/);
+          const line = lines.find((l) => l.startsWith("@@LITERATURE_JSON@@") || l.startsWith("@@CORPUS_JSON@@"));
+          if (line) {
+            try {
+              const marker = line.startsWith("@@LITERATURE_JSON@@") ? "@@LITERATURE_JSON@@" : "@@CORPUS_JSON@@";
+              resolve2(JSON.parse(line.slice(marker.length)));
+              return;
+            } catch (err) {
+              resolve2({ ok: false, error: `JSON parse error: ${err.message}`, stderr });
+              return;
+            }
+          }
+          const msg = String(stderr || error?.message || "").trim();
+          resolve2({ ok: false, error: msg || "R process finished without output.", stderr });
+        }
+      );
+    });
   }
 };
 
@@ -2403,6 +3438,12 @@ var SidebarViewProvider = class {
     this._extensionUri = _extensionUri;
     this.context = context;
     this.workspaceRoot = this.getActiveWorkspaceRoot();
+    this.literatureService = new LiteratureService(
+      this.workspaceRoot,
+      this._extensionUri.fsPath,
+      () => vscode.workspace.getConfiguration("tidyproteomicsagent").get("rscriptPath")
+    );
+    this.corpusService = this.literatureService;
     const wsConfig = vscode.workspace.getConfiguration("tidyproteomicsagent");
     const savedBaseUrl = wsConfig.get("baseUrl") || context.globalState.get("tidyproteomicsagent.baseUrl") || "";
     const savedProvider = wsConfig.get("provider") || context.globalState.get("tidyproteomicsagent.provider") || "anthropic";
@@ -2442,6 +3483,16 @@ var SidebarViewProvider = class {
       (log) => this.sendLog(log),
       this.getExtensionVersion()
     );
+    this.ingestionRunner = new IngestionRunner(
+      this.literatureService,
+      this.client,
+      this._extensionUri.fsPath,
+      (ev) => {
+        this.sendLiteratureProgress(ev);
+        this.sendLiteratureState();
+      },
+      (log) => this.sendLog(log)
+    );
     this.syncActiveModelSummary().catch(() => {
     });
     context.subscriptions.push(
@@ -2468,6 +3519,9 @@ var SidebarViewProvider = class {
   orchestrator;
   client;
   tools;
+  literatureService;
+  corpusService;
+  ingestionRunner;
   workspaceRoot;
   customWorkspaceRoot;
   onFolderChangedCallback;
@@ -2476,9 +3530,9 @@ var SidebarViewProvider = class {
       if (this.context.extension?.packageJSON?.version) {
         return this.context.extension.packageJSON.version;
       }
-      const pkgPath = path6.join(this._extensionUri.fsPath, "package.json");
-      if (fs6.existsSync(pkgPath)) {
-        const pkg = JSON.parse(fs6.readFileSync(pkgPath, "utf-8"));
+      const pkgPath = path8.join(this._extensionUri.fsPath, "package.json");
+      if (fs8.existsSync(pkgPath)) {
+        const pkg = JSON.parse(fs8.readFileSync(pkgPath, "utf-8"));
         if (pkg.version)
           return pkg.version;
       }
@@ -2502,9 +3556,10 @@ var SidebarViewProvider = class {
   setCustomWorkspaceRoot(folderPath) {
     this.customWorkspaceRoot = folderPath;
     this.workspaceRoot = folderPath;
+    this.literatureService.setWorkspaceRoot(folderPath);
   }
   getActiveWorkspaceRoot() {
-    if (this.customWorkspaceRoot && fs6.existsSync(this.customWorkspaceRoot)) {
+    if (this.customWorkspaceRoot && fs8.existsSync(this.customWorkspaceRoot)) {
       return this.customWorkspaceRoot;
     }
     const folders = vscode.workspace.workspaceFolders;
@@ -2515,8 +3570,8 @@ var SidebarViewProvider = class {
         if (matchingFolder) {
           const fsPath2 = matchingFolder.uri.fsPath;
           if (fsPath2.endsWith("/extension") || fsPath2.endsWith("\\extension")) {
-            const parent = path6.dirname(fsPath2);
-            if (fs6.existsSync(path6.join(parent, "agent")) || fs6.existsSync(path6.join(parent, "prompts")) || fs6.existsSync(path6.join(parent, "analysis"))) {
+            const parent = path8.dirname(fsPath2);
+            if (fs8.existsSync(path8.join(parent, "agent")) || fs8.existsSync(path8.join(parent, "prompts")) || fs8.existsSync(path8.join(parent, "analysis"))) {
               return parent;
             }
           }
@@ -2525,8 +3580,8 @@ var SidebarViewProvider = class {
       }
       const fsPath = folders[0].uri.fsPath;
       if (fsPath.endsWith("/extension") || fsPath.endsWith("\\extension")) {
-        const parent = path6.dirname(fsPath);
-        if (fs6.existsSync(path6.join(parent, "agent")) || fs6.existsSync(path6.join(parent, "prompts")) || fs6.existsSync(path6.join(parent, "analysis"))) {
+        const parent = path8.dirname(fsPath);
+        if (fs8.existsSync(path8.join(parent, "agent")) || fs8.existsSync(path8.join(parent, "prompts")) || fs8.existsSync(path8.join(parent, "analysis"))) {
           return parent;
         }
       }
@@ -2534,12 +3589,12 @@ var SidebarViewProvider = class {
     }
     const activeDoc = vscode.window.activeTextEditor?.document;
     if (activeDoc && activeDoc.uri.scheme === "file") {
-      const docDir = path6.dirname(activeDoc.uri.fsPath);
-      if (fs6.existsSync(path6.join(docDir, "agent")) || fs6.existsSync(path6.join(docDir, "prompts")) || fs6.existsSync(path6.join(docDir, "analysis"))) {
+      const docDir = path8.dirname(activeDoc.uri.fsPath);
+      if (fs8.existsSync(path8.join(docDir, "agent")) || fs8.existsSync(path8.join(docDir, "prompts")) || fs8.existsSync(path8.join(docDir, "analysis"))) {
         return docDir;
       }
-      const parentDir = path6.dirname(docDir);
-      if (fs6.existsSync(path6.join(parentDir, "agent")) || fs6.existsSync(path6.join(parentDir, "prompts")) || fs6.existsSync(path6.join(parentDir, "analysis"))) {
+      const parentDir = path8.dirname(docDir);
+      if (fs8.existsSync(path8.join(parentDir, "agent")) || fs8.existsSync(path8.join(parentDir, "prompts")) || fs8.existsSync(path8.join(parentDir, "analysis"))) {
         return parentDir;
       }
       return docDir;
@@ -2558,6 +3613,7 @@ var SidebarViewProvider = class {
       const changed = newRoot !== this.workspaceRoot;
       this.workspaceRoot = newRoot;
       this.tools.setWorkspaceRoot(this.workspaceRoot);
+      this.literatureService.setWorkspaceRoot(this.workspaceRoot);
       if (this.orchestrator) {
         if (changed) {
           await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
@@ -2747,11 +3803,11 @@ var SidebarViewProvider = class {
               return;
             }
             const targetRelPath = data.relPath || "";
-            const targetPath = path6.isAbsolute(targetRelPath) ? targetRelPath : path6.join(this.workspaceRoot, targetRelPath);
+            const targetPath = path8.isAbsolute(targetRelPath) ? targetRelPath : path8.join(this.workspaceRoot, targetRelPath);
             try {
-              if (!fs6.existsSync(targetPath)) {
-                fs6.mkdirSync(path6.dirname(targetPath), { recursive: true });
-                fs6.writeFileSync(targetPath, "", "utf-8");
+              if (!fs8.existsSync(targetPath)) {
+                fs8.mkdirSync(path8.dirname(targetPath), { recursive: true });
+                fs8.writeFileSync(targetPath, "", "utf-8");
               }
               const doc = await vscode.workspace.openTextDocument(targetPath);
               await vscode.window.showTextDocument(doc);
@@ -2766,7 +3822,7 @@ var SidebarViewProvider = class {
               return;
             }
             const fileName = data.fileName || "";
-            const targetPath = fileName.includes("/") || fileName.includes("\\") ? path6.join(this.workspaceRoot, fileName) : path6.join(this.workspaceRoot, "analysis", fileName);
+            const targetPath = fileName.includes("/") || fileName.includes("\\") ? path8.join(this.workspaceRoot, fileName) : path8.join(this.workspaceRoot, "analysis", fileName);
             try {
               const doc = await vscode.workspace.openTextDocument(targetPath);
               await vscode.window.showTextDocument(doc);
@@ -2800,6 +3856,7 @@ var SidebarViewProvider = class {
               this.customWorkspaceRoot = selectedPath;
               this.workspaceRoot = selectedPath;
               this.tools.setWorkspaceRoot(this.workspaceRoot);
+              this.literatureService.setWorkspaceRoot(this.workspaceRoot);
               if (this.orchestrator) {
                 await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
               }
@@ -2822,11 +3879,11 @@ var SidebarViewProvider = class {
               vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
               return;
             }
-            const standardDirs = ["analysis", "agent", "code", "data", path6.join("data", "raw"), "docs", "logs", "tools"];
+            const standardDirs = ["analysis", "agent", "code", "data", path8.join("data", "raw"), "docs", "logs", "tools"];
             for (const d of standardDirs) {
-              const fullDir = path6.join(this.workspaceRoot, d);
-              if (!fs6.existsSync(fullDir)) {
-                fs6.mkdirSync(fullDir, { recursive: true });
+              const fullDir = path8.join(this.workspaceRoot, d);
+              if (!fs8.existsSync(fullDir)) {
+                fs8.mkdirSync(fullDir, { recursive: true });
               }
             }
             await this.refreshPhases();
@@ -2843,6 +3900,126 @@ var SidebarViewProvider = class {
           }
           case "requestState": {
             await this.refreshState();
+            this.sendCorpusState();
+            break;
+          }
+          case "literatureGetState":
+          case "corpusGetState": {
+            this.sendLiteratureState();
+            break;
+          }
+          case "literatureSelect":
+          case "corpusSelect": {
+            try {
+              this.literatureService.setActiveLiterature(data.fileName);
+              this.sendLiteratureState();
+              await this.refreshState();
+            } catch (err) {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: ${err.message}`);
+            }
+            break;
+          }
+          case "literatureCreate":
+          case "corpusCreate": {
+            try {
+              const created = await this.literatureService.createDatabase(data.name);
+              vscode.window.showInformationMessage(`TidyProteomicsAgent: Created literature database '${created.fileName}'`);
+              this.sendLiteratureState();
+              await this.refreshState();
+            } catch (err) {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: ${err.message}`);
+            }
+            break;
+          }
+          case "literatureToggleSynthesis":
+          case "corpusToggleSynthesis": {
+            this.literatureService.setUseInSynthesis(!!data.enabled);
+            this.sendLiteratureState();
+            await this.refreshState();
+            break;
+          }
+          case "literatureStats":
+          case "corpusStats": {
+            const statsRes = await this.literatureService.getStats(data.fileName);
+            if (this._view && this._view.webview) {
+              const stats = statsRes.stats || statsRes.data?.stats || statsRes.data?.totals;
+              this._view.webview.postMessage({ type: "literatureStats", result: statsRes, stats });
+              this._view.webview.postMessage({ type: "corpusStats", result: statsRes, stats });
+            }
+            break;
+          }
+          case "literatureSearch":
+          case "corpusSearch": {
+            const searchRes = await this.literatureService.search(data.query, data.limit || 50, data.fileName);
+            if (this._view && this._view.webview) {
+              const results = searchRes.results || searchRes.data?.results || searchRes.data?.rows || [];
+              this._view.webview.postMessage({ type: "literatureSearchResult", result: searchRes, results });
+              this._view.webview.postMessage({ type: "corpusSearchResult", result: searchRes, results });
+            }
+            break;
+          }
+          case "literaturePickFolder":
+          case "corpusPickFolder": {
+            const chosen = await vscode.window.showOpenDialog({
+              canSelectFiles: false,
+              canSelectFolders: true,
+              canSelectMany: false,
+              openLabel: "Select Literature Folder"
+            });
+            if (chosen && chosen.length > 0) {
+              const folderPath = chosen[0].fsPath;
+              try {
+                this.literatureService.scanIngestFolder(folderPath);
+                this.sendLiteratureState();
+                vscode.window.showInformationMessage(`TidyProteomicsAgent: Found ${this.literatureService.getViewState().queue.length} document(s) for ingestion queue.`);
+              } catch (err) {
+                vscode.window.showErrorMessage(`TidyProteomicsAgent: ${err.message}`);
+              }
+            }
+            break;
+          }
+          case "literatureClearQueue":
+          case "corpusClearQueue": {
+            this.literatureService.clearQueue();
+            this.sendLiteratureState();
+            break;
+          }
+          case "literatureStartIngest":
+          case "corpusStartIngest": {
+            const cfg = this.client.getConfig();
+            if (cfg.provider !== "ollama" && !cfg.apiKey) {
+              vscode.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key in the Provider tab before running literature extraction.");
+              return;
+            }
+            const activeDb = data.fileName || this.literatureService.getConfig().activeLiterature || this.literatureService.getConfig().activeCorpus;
+            if (!activeDb) {
+              vscode.window.showErrorMessage("TidyProteomicsAgent: Please select or create an active literature database first.");
+              return;
+            }
+            this.sendLiteratureState();
+            this.ingestionRunner.runIngestion(activeDb).then(async (res) => {
+              this.sendLiteratureState();
+              const statsRes = await this.literatureService.getStats(activeDb);
+              if (this._view && this._view.webview) {
+                const stats = statsRes.stats || statsRes.data?.stats || statsRes.data?.totals;
+                this._view.webview.postMessage({ type: "literatureStats", result: statsRes, stats });
+                this._view.webview.postMessage({ type: "corpusStats", result: statsRes, stats });
+              }
+              if (res.success) {
+                vscode.window.showInformationMessage(`TidyProteomicsAgent: Indexed ${res.processed} document(s) into ${activeDb}!`);
+              } else {
+                vscode.window.showWarningMessage(`TidyProteomicsAgent: Ingestion finished with ${res.errors} error(s). See log for details.`);
+              }
+            }).catch((err) => {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: Ingestion error - ${err.message}`);
+              this.sendLiteratureState();
+            });
+            break;
+          }
+          case "literatureAbortIngest":
+          case "corpusAbortIngest": {
+            this.ingestionRunner.abort();
+            vscode.window.showInformationMessage("TidyProteomicsAgent: Aborting ingestion...");
             break;
           }
         }
@@ -2863,6 +4040,7 @@ var SidebarViewProvider = class {
         this.workspaceRoot = chosen2[0].fsPath;
         this.customWorkspaceRoot = this.workspaceRoot;
         this.tools.setWorkspaceRoot(this.workspaceRoot);
+        this.literatureService.setWorkspaceRoot(this.workspaceRoot);
         if (this.orchestrator) {
           await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
         }
@@ -2877,7 +4055,7 @@ var SidebarViewProvider = class {
     const items = [
       {
         label: "$(symbol-structure) Differential Expression Pipeline",
-        description: "Full 8-phase workflow (Install, Inspect, Normalize, Impute, Expression, Enrichment, Observations, Report)",
+        description: "Full 11-phase workflow (Install, Inspect, Normalize, Impute, Expression, Enrichment, Observations, Knowledge, WebSearch, Literature, Synthesis)",
         id: "differential_expression"
       },
       {
@@ -2905,6 +4083,7 @@ var SidebarViewProvider = class {
         this.workspaceRoot = chosen[0].fsPath;
         this.customWorkspaceRoot = this.workspaceRoot;
         this.tools.setWorkspaceRoot(this.workspaceRoot);
+        this.literatureService.setWorkspaceRoot(this.workspaceRoot);
         if (this.orchestrator) {
           await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
         }
@@ -2919,59 +4098,70 @@ var SidebarViewProvider = class {
     }
     try {
       const candidatePaths = [
-        path6.join(this._extensionUri.fsPath, "templates"),
-        path6.join(this._extensionUri.fsPath, "extension", "templates"),
-        path6.join(this.context.extensionPath, "templates"),
-        path6.join(this.context.extensionPath, "extension", "templates"),
-        path6.join(__dirname, "..", "templates"),
-        path6.join(__dirname, "..", "..", "templates"),
-        path6.join(__dirname, "templates"),
-        path6.join(this.workspaceRoot, "extension", "templates"),
-        path6.join(this.workspaceRoot, "templates")
+        path8.join(this._extensionUri.fsPath, "templates"),
+        path8.join(this._extensionUri.fsPath, "extension", "templates"),
+        path8.join(this.context.extensionPath, "templates"),
+        path8.join(this.context.extensionPath, "extension", "templates"),
+        path8.join(__dirname, "..", "templates"),
+        path8.join(__dirname, "..", "..", "templates"),
+        path8.join(__dirname, "templates"),
+        path8.join(this.workspaceRoot, "extension", "templates"),
+        path8.join(this.workspaceRoot, "templates")
       ];
-      const templateBase = candidatePaths.find((p) => fs6.existsSync(p));
+      const templateBase = candidatePaths.find((p) => fs8.existsSync(p));
       if (!templateBase) {
         vscode.window.showErrorMessage(
           "TidyProteomicsAgent: Template directory not found in extension or workspace."
         );
         return false;
       }
-      const standardDirs = ["analysis", "agent", "code", "data", path6.join("data", "raw"), "docs", "logs", "tools"];
+      const standardDirs = ["analysis", "agent", "code", "data", path8.join("data", "raw"), "docs", "logs", "tools"];
       for (const d of standardDirs) {
-        const fullDir = path6.join(this.workspaceRoot, d);
-        if (!fs6.existsSync(fullDir)) {
-          fs6.mkdirSync(fullDir, { recursive: true });
+        const fullDir = path8.join(this.workspaceRoot, d);
+        if (!fs8.existsSync(fullDir)) {
+          fs8.mkdirSync(fullDir, { recursive: true });
         }
       }
       const copyFileSafe = (src, dest, overwrite = false) => {
-        if (fs6.existsSync(src)) {
-          if (overwrite || !fs6.existsSync(dest)) {
-            fs6.mkdirSync(path6.dirname(dest), { recursive: true });
-            fs6.copyFileSync(src, dest);
+        if (fs8.existsSync(src)) {
+          if (overwrite || !fs8.existsSync(dest)) {
+            fs8.mkdirSync(path8.dirname(dest), { recursive: true });
+            fs8.copyFileSync(src, dest);
           }
         }
       };
-      const sharedDir = path6.join(templateBase, "shared");
-      if (fs6.existsSync(sharedDir)) {
-        copyFileSafe(path6.join(sharedDir, "code", "00_install.R"), path6.join(this.workspaceRoot, "code", "00_install.R"), true);
-        copyFileSafe(path6.join(sharedDir, "tools", "lint_tidyproteomics.R"), path6.join(this.workspaceRoot, "tools", "lint_tidyproteomics.R"), true);
-        copyFileSafe(path6.join(sharedDir, "agent", "PROTOCOL.md"), path6.join(this.workspaceRoot, "agent", "PROTOCOL.md"), true);
-        copyFileSafe(path6.join(sharedDir, "agent", "SKILL.md"), path6.join(this.workspaceRoot, "agent", "SKILL.md"), true);
-        copyFileSafe(path6.join(sharedDir, "docs", "experiment.md"), path6.join(this.workspaceRoot, "docs", "experiment.md"), false);
-        copyFileSafe(path6.join(sharedDir, "docs", "notes.md"), path6.join(this.workspaceRoot, "docs", "notes.md"), false);
-        copyFileSafe(path6.join(sharedDir, "docs", "concept.md"), path6.join(this.workspaceRoot, "docs", "concept.md"), false);
-        copyFileSafe(path6.join(sharedDir, ".gitignore"), path6.join(this.workspaceRoot, ".gitignore"), false);
-        copyFileSafe(path6.join(sharedDir, "logs", ".gitkeep"), path6.join(this.workspaceRoot, "logs", ".gitkeep"), false);
-        copyFileSafe(path6.join(sharedDir, "data", "raw", ".gitkeep"), path6.join(this.workspaceRoot, "data", "raw", ".gitkeep"), false);
+      const sharedDir = path8.join(templateBase, "shared");
+      if (fs8.existsSync(sharedDir)) {
+        copyFileSafe(path8.join(sharedDir, "code", "00_install.R"), path8.join(this.workspaceRoot, "code", "00_install.R"), true);
+        copyFileSafe(path8.join(sharedDir, "tools", "lint_tidyproteomics.R"), path8.join(this.workspaceRoot, "tools", "lint_tidyproteomics.R"), true);
+        copyFileSafe(path8.join(sharedDir, "agent", "PROTOCOL.md"), path8.join(this.workspaceRoot, "agent", "PROTOCOL.md"), true);
+        copyFileSafe(path8.join(sharedDir, "agent", "SKILL.md"), path8.join(this.workspaceRoot, "agent", "SKILL.md"), true);
+        copyFileSafe(path8.join(sharedDir, "docs", "experiment.md"), path8.join(this.workspaceRoot, "docs", "experiment.md"), false);
+        copyFileSafe(path8.join(sharedDir, "docs", "notes.md"), path8.join(this.workspaceRoot, "docs", "notes.md"), false);
+        copyFileSafe(path8.join(sharedDir, "docs", "concept.md"), path8.join(this.workspaceRoot, "docs", "concept.md"), false);
+        copyFileSafe(path8.join(sharedDir, ".gitignore"), path8.join(this.workspaceRoot, ".gitignore"), false);
+        copyFileSafe(path8.join(sharedDir, "logs", ".gitkeep"), path8.join(this.workspaceRoot, "logs", ".gitkeep"), false);
+        copyFileSafe(path8.join(sharedDir, "data", "raw", ".gitkeep"), path8.join(this.workspaceRoot, "data", "raw", ".gitkeep"), false);
+        const literatureToolsDir = path8.join(sharedDir, "tools", "literature");
+        if (fs8.existsSync(literatureToolsDir)) {
+          const lFiles = fs8.readdirSync(literatureToolsDir).filter((f) => f.endsWith(".R"));
+          for (const lf of lFiles) {
+            copyFileSafe(path8.join(literatureToolsDir, lf), path8.join(this.workspaceRoot, "tools", "literature", lf), true);
+          }
+        }
+        const literatureDir = path8.join(this.workspaceRoot, "literature");
+        if (!fs8.existsSync(literatureDir)) {
+          fs8.mkdirSync(literatureDir, { recursive: true });
+        }
       }
-      let pipelineDir = path6.join(templateBase, "pipelines", pipelineId);
-      if (!fs6.existsSync(pipelineDir)) {
-        pipelineDir = path6.join(templateBase, "pipelines", "differential_expression");
+      let pipelineDir = path8.join(templateBase, "pipelines", pipelineId);
+      if (!fs8.existsSync(pipelineDir)) {
+        pipelineDir = path8.join(templateBase, "pipelines", "differential_expression");
       }
-      if (fs6.existsSync(pipelineDir)) {
-        const pFiles = fs6.readdirSync(pipelineDir).filter((f) => f.endsWith(".md"));
+      if (fs8.existsSync(pipelineDir)) {
+        const pFiles = fs8.readdirSync(pipelineDir).filter((f) => f.endsWith(".md"));
         for (const pf of pFiles) {
-          copyFileSafe(path6.join(pipelineDir, pf), path6.join(this.workspaceRoot, "analysis", pf), true);
+          copyFileSafe(path8.join(pipelineDir, pf), path8.join(this.workspaceRoot, "analysis", pf), true);
         }
       } else {
         vscode.window.showWarningMessage(`TidyProteomicsAgent: Pipeline templates not found in ${templateBase}/pipelines.`);
@@ -2983,8 +4173,8 @@ var SidebarViewProvider = class {
         this.sendStateUpdate(state);
       const pipelineDisplayName = pipelineId === "quality_control_only" ? "Quality Control & Exploration" : "Standard Differential Expression";
       vscode.window.showInformationMessage(`TidyProteomicsAgent: Workspace initialized with ${pipelineDisplayName} pipeline!`);
-      const targetFocusFile = path6.join(this.workspaceRoot, "docs", "experiment.md");
-      if (fs6.existsSync(targetFocusFile)) {
+      const targetFocusFile = path8.join(this.workspaceRoot, "docs", "experiment.md");
+      if (fs8.existsSync(targetFocusFile)) {
         try {
           const doc = await vscode.workspace.openTextDocument(targetFocusFile);
           await vscode.window.showTextDocument(doc);
@@ -2998,6 +4188,14 @@ var SidebarViewProvider = class {
     }
   }
   startPipeline() {
+    if (!this.workspaceRoot) {
+      vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+      return;
+    }
+    if (this.orchestrator && this.orchestrator.getPhases().length === 0) {
+      vscode.window.showInformationMessage("TidyProteomicsAgent: No analysis tasks found to execute. Please initialize an analysis pipeline first.");
+      return;
+    }
     this.syncActiveModelSummary().catch(() => {
     });
     this.orchestrator?.runFullPipeline().catch((err) => {
@@ -3052,6 +4250,48 @@ var SidebarViewProvider = class {
       }
     }
   }
+  sendLiteratureState() {
+    if (this._view && this._view.webview) {
+      try {
+        const root = this.getActiveWorkspaceRoot();
+        if (root && root !== this.workspaceRoot) {
+          this.workspaceRoot = root;
+          this.literatureService.setWorkspaceRoot(root);
+        }
+        const state = this.literatureService.getViewState(this.ingestionRunner.getIsRunning() ? "ingesting" : void 0);
+        const p1 = this._view.webview.postMessage({ type: "literatureState", state });
+        if (p1 && typeof p1.then === "function") {
+          p1.then(void 0, (err) => {
+            console.warn("[SidebarViewProvider] Failed to post literatureState:", err);
+          });
+        }
+        const p2 = this._view.webview.postMessage({ type: "corpusState", state });
+        if (p2 && typeof p2.then === "function") {
+          p2.then(void 0, (err) => {
+            console.warn("[SidebarViewProvider] Failed to post corpusState:", err);
+          });
+        }
+      } catch (err) {
+        console.warn("[SidebarViewProvider] Exception posting literatureState:", err);
+      }
+    }
+  }
+  sendCorpusState() {
+    this.sendLiteratureState();
+  }
+  sendLiteratureProgress(event) {
+    if (this._view && this._view.webview) {
+      try {
+        this._view.webview.postMessage({ type: "literatureProgress", event });
+        this._view.webview.postMessage({ type: "corpusProgress", event });
+      } catch (err) {
+        console.warn("[SidebarViewProvider] Exception posting literatureProgress:", err);
+      }
+    }
+  }
+  sendCorpusProgress(event) {
+    this.sendLiteratureProgress(event);
+  }
   sendLog(text) {
     if (this._view && this._view.webview) {
       try {
@@ -3072,14 +4312,14 @@ var SidebarViewProvider = class {
   _cachedIcons;
   _loadIcons() {
     const icons = {};
-    const mediaDir = path6.join(this._extensionUri.fsPath, "media");
+    const mediaDir = path8.join(this._extensionUri.fsPath, "media");
     try {
-      if (fs6.existsSync(mediaDir)) {
-        const files = fs6.readdirSync(mediaDir);
+      if (fs8.existsSync(mediaDir)) {
+        const files = fs8.readdirSync(mediaDir);
         for (const file of files) {
           if (file.endsWith(".svg")) {
             const key = file.replace(".svg", "");
-            let content = fs6.readFileSync(path6.join(mediaDir, file), "utf-8");
+            let content = fs8.readFileSync(path8.join(mediaDir, file), "utf-8");
             content = content.replace(/<\?xml[^>]*\?>/g, "").trim();
             content = content.replace(/\s(width|height)="[^"]*"/g, "");
             if (key === "robot") {
@@ -3212,14 +4452,138 @@ var SidebarViewProvider = class {
     /* Segmented Tab Bar */
     .tab-bar {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 6px;
       padding: 3px;
       margin-bottom: 12px;
-      gap: 3px;
+      gap: 2px;
       flex: 0 0 auto;
+    }
+
+    .badge-parsing_pdf { background: #3b82f6; color: #fff; animation: pulse 1.5s infinite; }
+    .badge-llm_extraction { background: #8b5cf6; color: #fff; animation: pulse 1.5s infinite; }
+    .badge-normalization { background: #f59e0b; color: #fff; animation: pulse 1.5s infinite; }
+    .badge-indexed { background: var(--success); color: #fff; }
+    .badge-skipped { background: #71717a; color: #fff; }
+
+    /* Corpus Tab Styles */
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      margin-top: 6px;
+      margin-bottom: 8px;
+    }
+    .metric-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 6px 4px;
+      text-align: center;
+    }
+    .metric-num {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--primary);
+      font-variant-numeric: tabular-nums;
+    }
+    .metric-label {
+      font-size: 8.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 8px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      margin-top: 6px;
+    }
+    .toggle-label {
+      font-size: 10.5px;
+      font-weight: 600;
+      color: var(--fg);
+    }
+    .toggle-desc {
+      font-size: 9px;
+      color: var(--muted);
+    }
+    .queue-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 5px 8px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      margin-bottom: 4px;
+      font-size: 10.5px;
+    }
+    .queue-item-left {
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+    .queue-item-title {
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-family: var(--vscode-editor-font-family, monospace);
+    }
+    .queue-item-sub {
+      font-size: 9px;
+      color: var(--muted);
+    }
+    .search-result-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 10px;
+      margin-top: 6px;
+    }
+    .search-result-table th, .search-result-table td {
+      border: 1px solid var(--border);
+      padding: 4px 6px;
+      text-align: left;
+      vertical-align: top;
+    }
+    .search-result-table th {
+      background: rgba(127, 127, 127, 0.08);
+      font-size: 9px;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .quote-box {
+      font-style: italic;
+      color: #bfdbfe;
+      font-size: 9px;
+      margin-top: 2px;
+      line-height: 1.3;
+    }
+    #corpusSynthesisToggle:checked + #corpusSynthesisSlider {
+      background: var(--primary) !important;
+    }
+    #corpusSynthesisSlider:before {
+      position: absolute;
+      content: "";
+      height: 12px;
+      width: 12px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      border-radius: 50%;
+      transition: .2s;
+    }
+    #corpusSynthesisToggle:checked + #corpusSynthesisSlider:before {
+      transform: translateX(16px);
     }
     .tab-bar button.tab-btn {
       background: transparent !important;
@@ -3294,7 +4658,21 @@ var SidebarViewProvider = class {
     .tab-pane.active {
       display: block !important;
     }
-    #pane-pipeline.active {
+    #pane-pipeline.active,
+    #pane-literature.active {
+      display: flex !important;
+      flex-direction: column;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    #activePipelineDashboard {
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    #activePipelineDashboard[style*="display: block"],
+    #activePipelineDashboard[style*="display: flex"] {
       display: flex !important;
       flex-direction: column;
       flex: 1 1 auto;
@@ -3306,7 +4684,7 @@ var SidebarViewProvider = class {
     }
 
     /* Containers & Cards */
-    .section {
+    .section, .card {
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 6px;
@@ -3314,20 +4692,29 @@ var SidebarViewProvider = class {
       margin-bottom: 10px;
       flex: 0 0 auto;
     }
-    .terminal-section {
+    .terminal-section,
+    .queue-section {
       display: flex !important;
       flex-direction: column;
       flex: 1 1 auto;
       min-height: 150px;
       margin-bottom: 0 !important;
     }
-    .terminal-section .section-header {
+    .terminal-section .section-header,
+    .queue-section .section-header {
       flex: 0 0 auto;
     }
     .terminal-section .terminal {
-      flex: 1 1 auto;
-      height: 100%;
+      flex: 1 1 0;
       min-height: 110px;
+      height: auto;
+    }
+    .queue-section .queue-list,
+    #literatureQueueList {
+      flex: 1 1 0;
+      min-height: 80px;
+      overflow-y: auto;
+      margin-bottom: 8px;
     }
     .section-header {
       display: flex;
@@ -3428,9 +4815,9 @@ var SidebarViewProvider = class {
       padding: 6px 8px;
       margin-bottom: 5px;
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 6px;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 5px;
       transition: border-color 0.15s ease, background 0.15s ease;
     }
     .task-card:hover {
@@ -3441,6 +4828,70 @@ var SidebarViewProvider = class {
       border-color: var(--primary);
       background: rgba(59, 130, 246, 0.08);
       box-shadow: 0 0 8px rgba(59, 130, 246, 0.25);
+    }
+    .task-card.task-card-failed {
+      border-color: rgba(239, 68, 68, 0.5);
+      background: rgba(239, 68, 68, 0.04);
+    }
+    .task-main-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      width: 100%;
+    }
+    .task-insight-box {
+      background: rgba(239, 68, 68, 0.09);
+      border: 1px solid rgba(239, 68, 68, 0.25);
+      border-radius: 4px;
+      padding: 5px 7px;
+      font-size: 10px;
+      line-height: 1.35;
+    }
+    .task-insight-header {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-weight: 700;
+      color: #f87171;
+      font-size: 9.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      margin-bottom: 3px;
+    }
+    .task-insight-icon {
+      font-size: 11px;
+    }
+    .task-insight-title {
+      font-weight: 700;
+    }
+    .task-insight-body {
+      color: #fecaca;
+      word-break: break-word;
+      font-family: var(--vscode-font-family, sans-serif);
+    }
+    .task-insight-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 5px;
+      flex-wrap: wrap;
+    }
+    .btn-insight-link {
+      background: rgba(239, 68, 68, 0.2) !important;
+      color: #ffffff !important;
+      border: 1px solid rgba(239, 68, 68, 0.45) !important;
+      border-radius: 3px !important;
+      padding: 2px 7px !important;
+      font-size: 9.5px !important;
+      font-weight: 600 !important;
+      cursor: pointer;
+      line-height: 1.3 !important;
+      transition: all 0.15s ease;
+    }
+    .btn-insight-link:hover {
+      background: rgba(239, 68, 68, 0.35) !important;
+      border-color: rgba(239, 68, 68, 0.7) !important;
+      color: #ffffff !important;
     }
     .task-left {
       display: flex;
@@ -3512,6 +4963,7 @@ var SidebarViewProvider = class {
       color: var(--muted);
       min-width: 32px;
       text-align: right;
+      white-space: pre;
     }
 
     /* File Cards (Memory & Protocol) */
@@ -3634,8 +5086,8 @@ var SidebarViewProvider = class {
       white-space: pre;
       word-break: normal;
       color: var(--terminal-fg);
-      flex: 1 1 auto;
-      height: 100%;
+      flex: 1 1 0;
+      height: auto;
       min-height: 110px;
     }
 
@@ -3768,67 +5220,112 @@ var SidebarViewProvider = class {
       <span class="tab-label">Directory</span>
       <span class="tab-indicator" id="dirIndicator"></span>
     </button>
+    <button type="button" class="tab-btn" data-tab="literature" onclick="window.switchTab && window.switchTab('literature')" title="Literature Database & Ingestion">
+      <span class="tab-icon">${icons["database"] || ""}</span>
+      <span class="tab-label">Literature</span>
+      <span class="tab-indicator" id="literatureIndicator"></span>
+    </button>
   </div>
 
   <!-- TAB 1: PIPELINE -->
   <div class="tab-pane active" id="pane-pipeline">
-    <!-- Pipeline Execution Controls -->
-    <div class="section">
-      <div style="display:flex; gap:4px; margin-bottom:8px;">
-        <button id="startPipelineBtn" style="width:100%;">${icons["play"] || ""} Run Active Pipeline</button>
-        <button id="stopBtn" class="btn-stop" style="display:none; width:100%;">${icons["stop"] || ""} Stop Pipeline</button>
-      </div>
+    <!-- Loading Container (shown briefly while initializing) -->
+    <div id="loadingPipelineContainer" style="text-align:center; padding:15px; color:var(--muted); font-size:11px;">
+      Scanning analysis pipeline...
+    </div>
 
-      <div class="section-header">
-        <div style="display:flex; align-items:center; gap:6px;">
-          <h3>${icons["rocket-lunch"] || ""} Analysis Tasks</h3>
-          <button type="button" id="refreshTasksBtn" class="btn-icon" title="Reload tasks and sync progress from disk">${icons["refresh"] || "\u21BB"}</button>
+    <!-- State A: No Workspace Folder Open -->
+    <div id="noFolderContainer" style="display:none; text-align:center; padding:15px; color:var(--muted);">
+      No folder opened in VS Code.<br><br>Use <b>File &gt; Open Folder...</b> or the <b>Directory</b> tab to choose a folder.
+    </div>
+
+    <!-- State B: Initialize Analysis Pipeline (shown ONLY when analysis/ is missing or empty) -->
+    <div id="initPipelineSection" style="display:none;">
+      <div style="background:var(--vscode-sideBar-background); border:1px solid var(--vscode-widget-border, #333); border-radius:6px; padding:12px; margin:4px 0;">
+        <div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
+          <span style="font-size:15px; display:inline-flex; align-items:center;">${icons["rocket-lunch"] || ""}</span>
+          <div style="font-weight:600; font-size:12px; color:var(--vscode-foreground);">Initialize Analysis Pipeline</div>
         </div>
-        <span style="font-size:9px; color:var(--muted);" id="phaseCountLabel">0 Tasks</span>
-      </div>
-      <div class="section-desc">Select tasks to execute. Click task name to edit in VS Code.</div>
-
-      <!-- Dynamic Phase Checklist -->
-      <div id="phaseContainer">
-        <div style="text-align:center; padding:10px; color:var(--muted);">Loading phases...</div>
+        <div style="font-size:11px; color:var(--muted); line-height:1.4; margin-bottom:10px;">
+          No analysis tasks found in this directory. Choose a pipeline to initialize your workspace with subdirectories, R setup scripts, and templates:
+        </div>
+        <div style="margin-bottom:8px;">
+          <label style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--muted); display:block; margin-bottom:4px;">Pipeline Template</label>
+          <select id="pipelineTemplateSelect" style="width:100%; box-sizing:border-box; padding:5px 8px; font-size:11px; background:var(--vscode-input-background, #252526); color:var(--vscode-input-foreground, #cccccc); border:1px solid var(--vscode-input-border, #3c3c3c); border-radius:4px; outline:none;">
+            <option value="differential_expression">Differential Expression (11-Phase Pipeline)</option>
+            <option value="quality_control_only">Quality Control &amp; Exploration (2-Phase QC)</option>
+          </select>
+        </div>
+        <div id="pipelineDescription" style="font-size:10px; color:var(--muted); margin-bottom:12px; background:rgba(255,255,255,0.03); padding:6px 8px; border-radius:4px; border-left:3px solid var(--primary, #007acc); line-height:1.4;">
+          <b>Phases:</b> 00_INSTALL \u2794 01_INSPECT \u2794 02_NORMALIZE \u2794 03_IMPUTE \u2794 04_EXPRESSION \u2794 05_ENRICHMENT \u2794 06_OBSERVATIONS \u2794 07_KNOWLEDGE \u2794 08_WEBSEARCH \u2794 09_LITERATURE \u2794 10_SYNTHESIS.<br>
+          <i>Includes environment readiness, QC inspection, normalization benchmarking, imputation, differential expression, pathway enrichment, primary observations, internal knowledge, web search, literature database interrogation, and final manuscript synthesis report.</i>
+        </div>
+        <button type="button" id="initWorkspaceBtn" data-action="initWorkspace" class="btn-primary" style="width:100%; padding:7px 10px; font-size:11px; font-weight:600; display:flex; align-items:center; justify-content:center; gap:6px; cursor:pointer;">
+          <span>${icons["sparkles"] || ""}</span> Initialize Working Directory
+        </button>
       </div>
     </div>
 
-    <!-- Tokens -->
-    <div class="section">
-      <div class="section-header">
-        <h3>${icons["coins"] || ""} Tokens</h3>
-      </div>
-      <table class="tokens-table">
-        <thead>
-          <tr>
-            <th>Prompt</th>
-            <th>Cached ${icons["sparkles"] || ""}</th>
-            <th>Response</th>
-            <th>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td id="promptTokens">0</td>
-            <td id="cachedTokens" style="color:var(--success);">0</td>
-            <td id="responseTokens">0</td>
-            <td id="totalTokens">0</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <!-- State C: Active Pipeline Dashboard (shown when analysis/ exists and has tasks) -->
+    <div id="activePipelineDashboard" style="display:none;">
+      <!-- Pipeline Execution Controls -->
+      <div class="section">
+        <div style="display:flex; gap:4px; margin-bottom:8px;">
+          <button id="startPipelineBtn" style="width:100%;">${icons["play"] || ""} Run Analysis Pipeline</button>
+          <button id="stopBtn" class="btn-stop" style="display:none; width:100%;">${icons["stop"] || ""} Stop Pipeline</button>
+        </div>
 
-    <!-- Live Sub-Loop Terminal Feed -->
-    <div class="section terminal-section">
-      <div class="section-header">
-        <h3>${icons["terminal"] || ""} Sub-Loop Live Feed</h3>
-        <div style="display:flex; gap:4px;">
-          <button class="btn-sm" id="viewChatLogBtn" title="Open logs/llm_chat.md in VS Code">${icons["list"] || ""} Chat Log</button>
-          <button class="btn-sm" id="clearLogBtn">Clear</button>
+        <div class="section-header">
+          <div style="display:flex; align-items:center; gap:6px;">
+            <h3>${icons["rocket-lunch"] || ""} Analysis Tasks</h3>
+            <button type="button" id="refreshTasksBtn" class="btn-icon" title="Reload tasks and sync progress from disk">${icons["refresh"] || "\u21BB"}</button>
+          </div>
+          <span style="font-size:9px; color:var(--muted);" id="phaseCountLabel">0 Tasks</span>
+        </div>
+        <div class="section-desc">Select tasks to execute. Click task name to edit in VS Code.</div>
+
+        <!-- Dynamic Phase Checklist -->
+        <div id="phaseContainer">
+          <div style="text-align:center; padding:10px; color:var(--muted);">Loading phases...</div>
         </div>
       </div>
-      <div class="terminal" id="terminalLog">TidyProteomicsAgent ready. Phases discovered from analysis/*.md.</div>
+
+      <!-- Tokens -->
+      <div class="section">
+        <div class="section-header">
+          <h3>${icons["coins"] || ""} Tokens</h3>
+        </div>
+        <table class="tokens-table">
+          <thead>
+            <tr>
+              <th>Prompt</th>
+              <th>Cached ${icons["sparkles"] || ""}</th>
+              <th>Response</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td id="promptTokens">0</td>
+              <td id="cachedTokens" style="color:var(--success);">0</td>
+              <td id="responseTokens">0</td>
+              <td id="totalTokens">0</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Live Sub-Loop Terminal Feed -->
+      <div class="section terminal-section">
+        <div class="section-header">
+          <h3>${icons["terminal"] || ""} Sub-Loop Live Feed</h3>
+          <div style="display:flex; gap:4px;">
+            <button class="btn-sm" id="viewChatLogBtn" title="Open logs/llm_chat.md in VS Code">${icons["list"] || ""} Chat Log</button>
+            <button class="btn-sm" id="clearLogBtn">Clear</button>
+          </div>
+        </div>
+        <div class="terminal" id="terminalLog">TidyProteomicsAgent ready. Phases discovered from analysis/*.md.</div>
+      </div>
     </div>
   </div>
 
@@ -4039,6 +5536,133 @@ var SidebarViewProvider = class {
     </div>
   </div>
 
+  <!-- TAB 5: LITERATURE -->
+  <div class="tab-pane" id="pane-literature" style="display:none;">
+    <!-- Literature Selector & Creator Section -->
+    <div class="section">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+        <h3 style="margin:0; font-size:11px; font-weight:600; display:flex; align-items:center; gap:5px;">
+          ${icons["database"] || ""} Literature Knowledge Database
+        </h3>
+        <span class="badge badge-idle" id="literatureActiveBadge">NO DATABASE</span>
+      </div>
+
+      <div style="margin-bottom:8px;">
+        <label style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--muted); display:block; margin-bottom:4px;">Active Literature Database</label>
+        <select id="literatureSelect" style="width:100%; box-sizing:border-box; padding:5px 8px; font-size:11px; background:var(--vscode-input-background, #252526); color:var(--vscode-input-foreground, #cccccc); border:1px solid var(--vscode-input-border, #3c3c3c); border-radius:4px; outline:none;">
+          <option value="">(No database selected)</option>
+        </select>
+      </div>
+
+      <!-- New Literature Input -->
+      <div style="display:flex; gap:6px; margin-bottom:8px;">
+        <input type="text" id="newLiteratureInput" placeholder="New database name (e.g. p97_vcp)..." style="flex:1; padding:4px 8px; font-size:11px; background:var(--vscode-input-background, #252526); color:var(--vscode-input-foreground, #cccccc); border:1px solid var(--vscode-input-border, #3c3c3c); border-radius:4px; outline:none;" />
+        <button type="button" class="btn-sm" id="createLiteratureBtn" style="white-space:nowrap;">${icons["sparkles"] || ""} Create</button>
+      </div>
+
+      <!-- Toggle: Use in Synthesis Pipeline -->
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Use Active Database in Synthesis</div>
+          <div class="toggle-desc">Orchestrates two-way R interrogation in Phase 06/07</div>
+        </div>
+        <label style="position:relative; display:inline-block; width:34px; height:18px; margin:0; flex-shrink:0;">
+          <input type="checkbox" id="literatureSynthesisToggle" style="opacity:0; width:0; height:0;" />
+          <span style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:var(--vscode-input-border, #444); border-radius:18px; transition:0.2s;" id="literatureSynthesisSlider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Live Inspector Metrics Section -->
+    <div class="section">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+        <h3 style="margin:0; font-size:11px; font-weight:600; display:flex; align-items:center; gap:5px;">
+          ${icons["stats"] || ""} Literature Metrics
+        </h3>
+        <button type="button" id="refreshLiteratureStatsBtn" class="btn-icon" title="Refresh metrics from DuckDB" style="padding:2px 4px; font-size:10px;">
+          ${icons["refresh"] || "\u21BB"}
+        </button>
+      </div>
+
+      <div class="metric-grid">
+        <div class="metric-card">
+          <div class="metric-num" id="metricStudies">0</div>
+          <div class="metric-label">Studies</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-num" id="metricContexts">0</div>
+          <div class="metric-label">Contexts</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-num" id="metricAssertions">0</div>
+          <div class="metric-label">Assertions</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-num" id="metricSymbols">0</div>
+          <div class="metric-label">Symbols</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-num" id="metricOrganisms">0</div>
+          <div class="metric-label">Organisms</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-num" id="metricPerturbations">0</div>
+          <div class="metric-label">Perturbations</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Preview Search Section -->
+    <div class="section">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+        <h3 style="margin:0; font-size:11px; font-weight:600; display:flex; align-items:center; gap:5px;">
+          ${icons["summary"] || ""} Assertion Search
+        </h3>
+      </div>
+      <div style="display:flex; gap:6px; margin-bottom:6px;">
+        <input type="text" id="literatureSearchInput" placeholder="Search gene, alias, or module (e.g. VCP, ERAD)..." style="flex:1; padding:4px 8px; font-size:11px; background:var(--vscode-input-background, #252526); color:var(--vscode-input-foreground, #cccccc); border:1px solid var(--vscode-input-border, #3c3c3c); border-radius:4px; outline:none;" />
+        <button type="button" class="btn-sm btn-secondary" id="literatureSearchBtn">Search</button>
+      </div>
+      <div id="literatureSearchResults" style="max-height:180px; overflow-y:auto; font-size:10.5px; border:1px solid var(--border); border-radius:4px; padding:4px; background:var(--bg);">
+        <div style="color:var(--muted); font-size:10px; text-align:center; padding:10px;">Enter a query above to search assertions in the active literature database.</div>
+      </div>
+    </div>
+
+    <!-- PDF & Supplementary Table Ingestion Queue Section -->
+    <div class="section queue-section">
+      <div class="section-header">
+        <h3 style="margin:0; font-size:11px; font-weight:600; display:flex; align-items:center; gap:5px;">
+          ${icons["layers"] || ""} Ingestion Queue
+        </h3>
+        <span class="badge badge-idle" id="ingestQueueBadge">0 FILES</span>
+      </div>
+
+      <div style="display:flex; gap:6px; margin-bottom:8px; flex:0 0 auto;">
+        <button type="button" class="btn-secondary btn-sm" id="pickFolderBtn" style="flex:1;">
+          ${icons["folder-open"] || ""} Select Literature Folder...
+        </button>
+        <button type="button" class="btn-secondary btn-sm" id="clearQueueBtn" title="Clear pending queue">
+          Clear
+        </button>
+      </div>
+
+      <div id="literatureQueueList" class="queue-list">
+        <div style="color:var(--muted); font-size:10px; text-align:center; padding:12px;">
+          No documents in queue.<br>Select a folder containing PDFs or supplementary tables (.xlsx/.csv).
+        </div>
+      </div>
+
+      <div style="display:flex; gap:6px; flex:0 0 auto;">
+        <button type="button" class="btn-primary btn-sm" id="startIngestBtn" style="flex:1; padding:6px; font-weight:600;">
+          ${icons["play"] || ""} Run Ingestion Pipeline
+        </button>
+        <button type="button" class="btn-stop btn-sm" id="abortIngestBtn" style="display:none; padding:6px; font-weight:600;">
+          ${icons["stop"] || ""} Abort
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script>
     // Global Error Logger for diagnostics
     window.addEventListener("error", function (e) {
@@ -4070,12 +5694,16 @@ var SidebarViewProvider = class {
         panes.forEach(function (p) {
           if (p.id === "pane-" + tabId) {
             p.classList.add("active");
-            p.style.display = "block";
+            p.style.display = (tabId === "pipeline" || tabId === "literature" || tabId === "corpus") ? "flex" : "block";
           } else {
             p.classList.remove("active");
             p.style.display = "none";
           }
         });
+
+        if (tabId === "literature" || tabId === "corpus") {
+          vscode.postMessage({ type: "literatureGetState" });
+        }
 
         try {
           const current = vscode.getState() || {};
@@ -4104,7 +5732,10 @@ var SidebarViewProvider = class {
     const pipelineIndicator = document.getElementById("pipelineIndicator");
     const providerIndicator = document.getElementById("providerIndicator");
     const dirIndicator = document.getElementById("dirIndicator");
-
+    const loadingPipelineContainer = document.getElementById("loadingPipelineContainer");
+    const noFolderContainer = document.getElementById("noFolderContainer");
+    const initPipelineSection = document.getElementById("initPipelineSection");
+    const activePipelineDashboard = document.getElementById("activePipelineDashboard");
     const startPipelineBtn = document.getElementById("startPipelineBtn");
     const stopBtn = document.getElementById("stopBtn");
     const phaseContainer = document.getElementById("phaseContainer");
@@ -4213,7 +5844,7 @@ var SidebarViewProvider = class {
           if (selectEl.value === "quality_control_only") {
             descEl.innerHTML = "<b>Phases:</b> 00_INSTALL \u2794 01_INSPECT.<br><i>Includes: Workspace readiness, data import, replicate CV analysis, quantifiable fraction evaluation, and PCA separation.</i>";
           } else {
-            descEl.innerHTML = "<b>Phases:</b> 00_INSTALL \u2794 01_INSPECT \u2794 02_NORMALIZE \u2794 03_IMPUTE \u2794 04_EXPRESSION \u2794 05_ENRICHMENT \u2794 06_OBSERVATIONS \u2794 07_SYNTHESIS.<br><i>Includes: Environment readiness, QC inspection, normalization benchmarking, imputation, differential expression, pathway enrichment, literature observations, and synthesis report.</i>";
+            descEl.innerHTML = "<b>Phases:</b> 00_INSTALL \u2794 01_INSPECT \u2794 02_NORMALIZE \u2794 03_IMPUTE \u2794 04_EXPRESSION \u2794 05_ENRICHMENT \u2794 06_OBSERVATIONS \u2794 07_KNOWLEDGE \u2794 08_WEBSEARCH \u2794 09_LITERATURE \u2794 10_SYNTHESIS.<br><i>Includes: Environment readiness, QC inspection, normalization benchmarking, imputation, differential expression, pathway enrichment, primary observations, internal knowledge, web search, literature database interrogation, and final manuscript synthesis report.</i>";
           }
         }
       }
@@ -4415,6 +6046,284 @@ var SidebarViewProvider = class {
     const initPipelineQuickBtn = document.getElementById("initPipelineQuickBtn");
     if (initPipelineQuickBtn) initPipelineQuickBtn.addEventListener("click", () => vscode.postMessage({ type: "promptInitWorkspace" }));
 
+    function escapeAttr(str) {
+      if (!str) return "";
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+        .replace(/</g, "&lt;");
+    }
+
+    // Literature Tab Elements
+    let currentActiveLiterature = "";
+    const literatureSelect = document.getElementById("literatureSelect") || document.getElementById("corpusSelect");
+    const newLiteratureInput = document.getElementById("newLiteratureInput") || document.getElementById("newCorpusInput");
+    const createLiteratureBtn = document.getElementById("createLiteratureBtn") || document.getElementById("createCorpusBtn");
+    const literatureSynthesisToggle = document.getElementById("literatureSynthesisToggle") || document.getElementById("corpusSynthesisToggle");
+    const literatureActiveBadge = document.getElementById("literatureActiveBadge") || document.getElementById("corpusActiveBadge");
+    const refreshLiteratureStatsBtn = document.getElementById("refreshLiteratureStatsBtn") || document.getElementById("refreshCorpusStatsBtn");
+    const metricStudies = document.getElementById("metricStudies");
+    const metricContexts = document.getElementById("metricContexts");
+    const metricAssertions = document.getElementById("metricAssertions");
+    const metricSymbols = document.getElementById("metricSymbols");
+    const metricOrganisms = document.getElementById("metricOrganisms");
+    const metricPerturbations = document.getElementById("metricPerturbations");
+    const literatureSearchInput = document.getElementById("literatureSearchInput") || document.getElementById("corpusSearchInput");
+    const literatureSearchBtn = document.getElementById("literatureSearchBtn") || document.getElementById("corpusSearchBtn");
+    const literatureSearchResults = document.getElementById("literatureSearchResults") || document.getElementById("corpusSearchResults");
+    const ingestQueueBadge = document.getElementById("ingestQueueBadge");
+    const pickFolderBtn = document.getElementById("pickFolderBtn");
+    const clearQueueBtn = document.getElementById("clearQueueBtn");
+    const literatureQueueList = document.getElementById("literatureQueueList") || document.getElementById("corpusQueueList");
+    const startIngestBtn = document.getElementById("startIngestBtn");
+    const abortIngestBtn = document.getElementById("abortIngestBtn");
+    const literatureIndicator = document.getElementById("literatureIndicator") || document.getElementById("corpusIndicator");
+
+    if (literatureSelect) {
+      literatureSelect.addEventListener("change", function () {
+        const val = literatureSelect.value;
+        vscode.postMessage({ type: "literatureSelect", fileName: val });
+        if (val) {
+          vscode.postMessage({ type: "literatureStats", fileName: val });
+        } else {
+          renderLiteratureStats({ study_count: 0, context_count: 0, assertion_count: 0, unique_symbols: 0, organism_count: 0, perturbation_count: 0 });
+        }
+      });
+    }
+
+    if (createLiteratureBtn && newLiteratureInput) {
+      createLiteratureBtn.addEventListener("click", function () {
+        const name = (newLiteratureInput.value || "").trim();
+        if (!name) return;
+        vscode.postMessage({ type: "literatureCreate", name: name });
+        newLiteratureInput.value = "";
+      });
+      newLiteratureInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") {
+          createLiteratureBtn.click();
+        }
+      });
+    }
+
+    if (literatureSynthesisToggle) {
+      literatureSynthesisToggle.addEventListener("change", function () {
+        vscode.postMessage({ type: "literatureToggleSynthesis", enabled: !!literatureSynthesisToggle.checked });
+      });
+    }
+
+    if (refreshLiteratureStatsBtn) {
+      refreshLiteratureStatsBtn.addEventListener("click", function () {
+        refreshLiteratureStatsBtn.style.transform = "rotate(360deg)";
+        refreshLiteratureStatsBtn.style.transition = "transform 0.5s ease";
+        setTimeout(function () {
+          refreshLiteratureStatsBtn.style.transform = "none";
+          refreshLiteratureStatsBtn.style.transition = "none";
+        }, 500);
+        const val = (literatureSelect && literatureSelect.value) || currentActiveLiterature || "";
+        if (val) {
+          vscode.postMessage({ type: "literatureStats", fileName: val });
+        } else {
+          renderLiteratureStats({ study_count: 0, context_count: 0, assertion_count: 0, unique_symbols: 0, organism_count: 0, perturbation_count: 0 });
+        }
+      });
+    }
+
+    function doLiteratureSearch() {
+      if (!literatureSearchInput) return;
+      const q = (literatureSearchInput.value || "").trim();
+      if (!q) return;
+      const val = literatureSelect ? literatureSelect.value : "";
+      vscode.postMessage({ type: "literatureSearch", query: q, limit: 50, fileName: val });
+    }
+
+    if (literatureSearchBtn) {
+      literatureSearchBtn.addEventListener("click", doLiteratureSearch);
+    }
+    if (literatureSearchInput) {
+      literatureSearchInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") doLiteratureSearch();
+      });
+    }
+
+    if (pickFolderBtn) {
+      pickFolderBtn.addEventListener("click", function () {
+        vscode.postMessage({ type: "literaturePickFolder" });
+      });
+    }
+
+    if (clearQueueBtn) {
+      clearQueueBtn.addEventListener("click", function () {
+        vscode.postMessage({ type: "literatureClearQueue" });
+      });
+    }
+
+    if (startIngestBtn) {
+      startIngestBtn.addEventListener("click", function () {
+        const val = literatureSelect ? literatureSelect.value : "";
+        vscode.postMessage({ type: "literatureStartIngest", fileName: val });
+      });
+    }
+
+    if (abortIngestBtn) {
+      abortIngestBtn.addEventListener("click", function () {
+        vscode.postMessage({ type: "literatureAbortIngest" });
+      });
+    }
+
+    function renderLiteratureState(state) {
+      if (!state) return;
+
+      const activeDb = state.activeLiterature || state.activeCorpus || (state.config && (state.config.activeLiterature || state.config.activeCorpus)) || "";
+      const useInSynthesis = !!(state.useInSynthesis !== undefined ? state.useInSynthesis : (state.config && state.config.useInSynthesis));
+      const isIngesting = !!(state.isIngesting !== undefined ? state.isIngesting : state.busy === "ingesting");
+
+      if (literatureSelect) {
+        let optionsHtml = '<option value="">(No database selected)</option>';
+        const dbs = state.literature || state.corpora;
+        if (Array.isArray(dbs)) {
+          for (const c of dbs) {
+            const isSel = c.fileName === activeDb ? " selected" : "";
+            optionsHtml += '<option value="' + escapeAttr(c.fileName) + '"' + isSel + '>' + escapeHtml(c.fileName) + '</option>';
+          }
+        }
+        literatureSelect.innerHTML = optionsHtml;
+        literatureSelect.value = activeDb;
+      }
+
+      if (literatureActiveBadge) {
+        if (activeDb) {
+          literatureActiveBadge.textContent = "ACTIVE";
+          literatureActiveBadge.className = "badge badge-completed";
+        } else {
+          literatureActiveBadge.textContent = "NO DATABASE";
+          literatureActiveBadge.className = "badge badge-idle";
+        }
+      }
+
+      if (literatureSynthesisToggle) {
+        literatureSynthesisToggle.checked = useInSynthesis;
+      }
+
+      if (literatureIndicator) {
+        literatureIndicator.className = (activeDb && useInSynthesis) ? "tab-indicator active" : "tab-indicator";
+      }
+
+      if (literatureQueueList) {
+        const queue = state.queue || [];
+        if (ingestQueueBadge) {
+          ingestQueueBadge.textContent = queue.length + " FILE" + (queue.length === 1 ? "" : "S");
+        }
+        if (queue.length === 0) {
+          literatureQueueList.innerHTML = '<div style="color:var(--muted); font-size:10px; text-align:center; padding:12px;">No documents in queue.<br>Select a folder containing PDFs or supplementary tables (.xlsx/.csv).</div>';
+        } else {
+          let qHtml = "";
+          for (const item of queue) {
+            let badgeClass = "badge-idle";
+            if (item.stage === "indexed") badgeClass = "badge-indexed";
+            else if (item.stage === "failed") badgeClass = "badge-error";
+            else if (item.stage === "skipped") badgeClass = "badge-skipped";
+            else if (item.stage === "parsing_pdf") badgeClass = "badge-parsing_pdf";
+            else if (item.stage === "llm_extraction") badgeClass = "badge-llm_extraction";
+            else if (item.stage === "normalization") badgeClass = "badge-normalization";
+
+            qHtml += '<div class="queue-item">' +
+              '<div class="queue-item-left">' +
+                '<div class="queue-item-title" title="' + escapeAttr(item.absPath) + '">' + escapeHtml(item.fileName) + '</div>' +
+                '<div style="font-size:9px; color:var(--muted);">' +
+                  (item.pageCount ? item.pageCount + ' pages \u2022 ' : '') +
+                  (item.message ? escapeHtml(item.message) : '') +
+                '</div>' +
+              '</div>' +
+              '<span class="badge ' + badgeClass + '">' + escapeHtml(item.stage.toUpperCase()) + '</span>' +
+            '</div>';
+          }
+          literatureQueueList.innerHTML = qHtml;
+        }
+      }
+
+      currentActiveLiterature = activeDb;
+
+      if (isIngesting) {
+        if (startIngestBtn) {
+          startIngestBtn.disabled = true;
+          startIngestBtn.style.opacity = "0.5";
+        }
+        if (abortIngestBtn) abortIngestBtn.style.display = "inline-flex";
+      } else {
+        if (startIngestBtn) {
+          startIngestBtn.disabled = false;
+          startIngestBtn.style.opacity = "1";
+        }
+        if (abortIngestBtn) abortIngestBtn.style.display = "none";
+      }
+
+      const hasStats = state.stats && (state.stats.study_count !== undefined || state.stats.studies !== undefined);
+      if (activeDb && !hasStats) {
+        vscode.postMessage({ type: "literatureStats", fileName: activeDb });
+      } else if (state.stats) {
+        renderLiteratureStats(state.stats);
+      } else if (!activeDb) {
+        renderLiteratureStats({ study_count: 0, context_count: 0, assertion_count: 0, unique_symbols: 0, organism_count: 0, perturbation_count: 0 });
+      }
+    }
+    const renderCorpusState = renderLiteratureState;
+
+    function renderLiteratureStats(stats) {
+      if (!stats) return;
+      const studies = stats.study_count ?? stats.studies ?? 0;
+      const contexts = stats.context_count ?? stats.contexts ?? 0;
+      const assertions = stats.assertion_count ?? stats.assertions ?? 0;
+      const symbols = stats.unique_symbols ?? stats.symbols ?? 0;
+      const organisms = stats.organism_count ?? stats.organisms ?? 0;
+      const perturbations = stats.perturbation_count ?? stats.perturbations ?? 0;
+
+      if (metricStudies) metricStudies.textContent = String(studies);
+      if (metricContexts) metricContexts.textContent = String(contexts);
+      if (metricAssertions) metricAssertions.textContent = String(assertions);
+      if (metricSymbols) metricSymbols.textContent = String(symbols);
+      if (metricOrganisms) metricOrganisms.textContent = String(organisms);
+      if (metricPerturbations) metricPerturbations.textContent = String(perturbations);
+    }
+    const renderCorpusStats = renderLiteratureStats;
+
+    function renderLiteratureSearchResults(res) {
+      if (!literatureSearchResults) return;
+      if (!res || !res.ok) {
+        literatureSearchResults.innerHTML = '<div style="color:var(--error); padding:6px;">Search failed: ' + escapeHtml(res?.error || "Unknown error") + '</div>';
+        return;
+      }
+      const data = res.data || res;
+      const rows = res.results || res.rows || data.results || data.rows || [];
+      const query = res.query || data.query || "";
+      if (rows.length === 0) {
+        literatureSearchResults.innerHTML = '<div style="color:var(--muted); padding:8px; text-align:center;">No matching assertions found for "' + escapeHtml(query) + '"</div>';
+        return;
+      }
+
+      let html = '<div style="margin-bottom:4px; font-weight:600; color:var(--muted); font-size:9.5px;">Found ' + rows.length + ' assertion(s):</div>';
+      for (const r of rows) {
+        const symbol = r.canonical_human_symbol || r.raw_entity_name || "Unknown";
+        const rel = r.relationship_type || "";
+        const mod = r.functional_module ? ' \u2022 ' + escapeHtml(r.functional_module) : "";
+        const ctx = (r.model_name ? escapeHtml(r.model_name) : "") + (r.perturbation_target ? ' (' + escapeHtml(r.perturbation_target) + ')' : "");
+        const quote = r.evidence_quote ? '<div style="font-style:italic; color:var(--muted); font-size:9.5px; margin-top:2px;">"' + escapeHtml(r.evidence_quote) + '"</div>' : "";
+        const study = r.title ? '<div style="color:var(--primary); font-size:9px; margin-top:2px;">Ref: ' + escapeHtml(r.title) + (r.year ? ' (' + r.year + ')' : '') + '</div>' : "";
+
+        html += '<div style="border-bottom:1px solid var(--border); padding:5px 0;">' +
+          '<div style="display:flex; justify-content:space-between; align-items:baseline;">' +
+            '<span style="font-weight:700; color:var(--fg);">' + escapeHtml(symbol) + '</span>' +
+            '<span class="badge badge-idle" style="font-size:8px;">' + escapeHtml(rel) + '</span>' +
+          '</div>' +
+          '<div style="color:var(--fg); font-size:10px;">' + ctx + mod + '</div>' +
+          quote +
+          study +
+        '</div>';
+      }
+      literatureSearchResults.innerHTML = html;
+    }
+    const renderCorpusSearchResults = renderLiteratureSearchResults;
+
     function escapeHtml(str) {
       if (!str) return "";
       return String(str)
@@ -4423,6 +6332,10 @@ var SidebarViewProvider = class {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#39;");
+    }
+
+    function padTimer(str) {
+      return String(str || "").padStart(7, " ");
     }
 
     let tickerInterval = null;
@@ -4443,7 +6356,7 @@ var SidebarViewProvider = class {
                 const startMs = new Date(startStr).getTime();
                 if (!isNaN(startMs)) {
                   const sec = Math.max(0, Math.round((Date.now() - startMs) / 1000));
-                  durEl.textContent = sec + "s";
+                  durEl.textContent = padTimer(sec + "s");
                 }
               }
             });
@@ -4481,6 +6394,13 @@ var SidebarViewProvider = class {
 
         if (dirIndicator) {
           dirIndicator.className = wsPath ? "tab-indicator" : "tab-indicator alert";
+        }
+
+        const litCfg = state.literature || state.knowledgeCorpus;
+        const ind = literatureIndicator || corpusIndicator;
+        if (ind && litCfg) {
+          const act = litCfg.activeLiterature || litCfg.activeCorpus;
+          ind.className = (act && litCfg.useInSynthesis) ? "tab-indicator active" : "tab-indicator";
         }
 
         // Provider API Key alert
@@ -4530,42 +6450,45 @@ var SidebarViewProvider = class {
           pipelineIndicator.className = anyRunning ? "tab-indicator running" : "tab-indicator";
         }
 
-        if (startPipelineBtn) startPipelineBtn.style.display = anyRunning ? "none" : "block";
-        if (stopBtn) stopBtn.style.display = anyRunning ? "block" : "none";
+        if (loadingPipelineContainer) {
+          loadingPipelineContainer.style.display = "none";
+        }
 
-        // Render Dynamic Analysis Tasks (Tab 1)
-        if (phaseContainer) {
-          let phaseHtml = "";
-          const phaseCount = state.phases ? state.phases.length : 0;
+        const phaseCount = state.phases ? state.phases.length : 0;
+        const analysisFolder = state.folders ? state.folders.find(function (f) { return f.name === "analysis"; }) : null;
+        const isMissingOrEmpty = state.isAnalysisMissingOrEmpty !== undefined
+          ? state.isAnalysisMissingOrEmpty
+          : (!wsPath || !analysisFolder || !analysisFolder.exists || !analysisFolder.itemCount || analysisFolder.itemCount === 0 || phaseCount === 0);
+
+        if (!wsPath) {
+          if (noFolderContainer) noFolderContainer.style.display = "block";
+          if (initPipelineSection) initPipelineSection.style.display = "none";
+          if (activePipelineDashboard) activePipelineDashboard.style.display = "none";
+          syncRunTicker(false);
+        } else if (isMissingOrEmpty) {
+          if (noFolderContainer) noFolderContainer.style.display = "none";
+          if (initPipelineSection) initPipelineSection.style.display = "block";
+          if (activePipelineDashboard) activePipelineDashboard.style.display = "none";
+
+          // Ensure init button is reset to default state if returning from an operation
+          const initBtn = document.getElementById("initWorkspaceBtn");
+          if (initBtn) {
+            initBtn.removeAttribute("disabled");
+            initBtn.innerHTML = '<span>' + (ICONS["sparkles"] || "") + '</span> Initialize Working Directory';
+          }
+          syncRunTicker(false);
+        } else {
+          if (noFolderContainer) noFolderContainer.style.display = "none";
+          if (initPipelineSection) initPipelineSection.style.display = "none";
+          if (activePipelineDashboard) activePipelineDashboard.style.display = "flex";
+
+          if (startPipelineBtn) startPipelineBtn.style.display = anyRunning ? "none" : "block";
+          if (stopBtn) stopBtn.style.display = anyRunning ? "block" : "none";
           if (phaseCountLabel) phaseCountLabel.textContent = phaseCount + " Task" + (phaseCount === 1 ? "" : "s");
 
-          if (!wsPath) {
-            phaseHtml = '<div style="text-align:center; padding:15px; color:var(--muted);">No folder opened in VS Code.<br><br>Use <b>File &gt; Open Folder...</b> or the <b>Directory</b> tab to choose a folder.</div>';
-          } else if (phaseCount === 0) {
-            phaseHtml = '<div style="background:var(--vscode-sideBar-background); border:1px solid var(--vscode-widget-border, #333); border-radius:6px; padding:12px; margin:4px 0;">' +
-              '<div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">' +
-                '<span style="font-size:15px; display:inline-flex; align-items:center;">' + (ICONS["rocket-lunch"] || "") + '</span>' +
-                '<div style="font-weight:600; font-size:12px; color:var(--vscode-foreground);">Initialize Analysis Pipeline</div>' +
-              '</div>' +
-              '<div style="font-size:11px; color:var(--muted); line-height:1.4; margin-bottom:10px;">' +
-                'No analysis tasks found in this directory. Choose a pipeline to initialize your workspace with subdirectories, R setup scripts, and templates:' +
-              '</div>' +
-              '<div style="margin-bottom:8px;">' +
-                '<label style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--muted); display:block; margin-bottom:4px;">Pipeline Template</label>' +
-                '<select id="pipelineTemplateSelect" style="width:100%; box-sizing:border-box; padding:5px 8px; font-size:11px; background:var(--vscode-input-background, #252526); color:var(--vscode-input-foreground, #cccccc); border:1px solid var(--vscode-input-border, #3c3c3c); border-radius:4px; outline:none;">' +
-                  '<option value="differential_expression">Differential Expression (8-Phase Pipeline)</option>' +
-                  '<option value="quality_control_only">Quality Control &amp; Exploration (2-Phase QC)</option>' +
-                '</select>' +
-              '</div>' +
-              '<div id="pipelineDescription" style="font-size:10px; color:var(--muted); margin-bottom:12px; background:rgba(255,255,255,0.03); padding:6px 8px; border-radius:4px; border-left:3px solid var(--primary, #007acc); line-height:1.4;">' +
-                '<b>Phases:</b> 00_INSTALL \u2794 01_INSPECT \u2794 02_NORMALIZE \u2794 03_IMPUTE \u2794 04_EXPRESSION \u2794 05_ENRICHMENT \u2794 06_OBSERVATIONS \u2794 07_SYNTHESIS.<br>' +
-                '<i>Includes environment readiness, QC inspection, normalization benchmarking, imputation, differential expression, pathway enrichment, literature observations, and final synthesis report.</i>' +
-              '</div>' +
-              '<button type="button" id="initWorkspaceBtn" data-action="initWorkspace" class="btn-primary" style="width:100%; padding:7px 10px; font-size:11px; font-weight:600; display:flex; align-items:center; justify-content:center; gap:6px; cursor:pointer;">' +
-                '<span>' + (ICONS["sparkles"] || "") + '</span> Initialize Working Directory' +
-              '</button>' +
-            '</div>';
-          } else {
+          // Render Dynamic Analysis Tasks (Tab 1)
+          if (phaseContainer) {
+            let phaseHtml = "";
             for (let i = 0; i < state.phases.length; i++) {
               const p = state.phases[i];
               if (!p) continue;
@@ -4598,6 +6521,7 @@ var SidebarViewProvider = class {
                 displayStatus = "FAILED";
                 badgeClass = "badge badge-failed";
                 durationText = "err";
+                cardClass += " task-card-failed";
               } else if (state.isFullPipelineRunning && anyRunning && p.enabled !== false && runningIndex !== -1 && i > runningIndex) {
                 displayStatus = "QUEUED";
                 badgeClass = "badge badge-queued";
@@ -4605,6 +6529,7 @@ var SidebarViewProvider = class {
               } else if (p.durationSeconds !== undefined && p.durationSeconds !== null && p.durationSeconds > 0) {
                 durationText = p.durationSeconds + "sec";
               }
+              durationText = padTimer(durationText);
 
               const rawFileName = p.fileName || "";
               let taskName = rawFileName;
@@ -4630,21 +6555,55 @@ var SidebarViewProvider = class {
               const runBtnTitle = anyRunning ? "Pipeline is currently executing" : ("Run " + safeTaskName);
               const startTimeAttr = (rawStatus === "running" && p.startTime) ? (' data-start-time="' + escapeHtml(p.startTime) + '"') : '';
 
+              let failInsightHtml = "";
+              if (rawStatus === "failed" && (p.error || p.summary)) {
+                const errorText = String(p.error || p.summary || "").trim();
+                const lines = errorText.split(String.fromCharCode(10)).map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
+                const firstLine = lines[0] || "Phase failed or halted.";
+                const remainingLines = lines.slice(1).join(" ");
+                const displayMsg = remainingLines ? (firstLine + " \u2014 " + remainingLines) : firstLine;
+                const cleanMsg = displayMsg.replace(/^[\u274C\u26A0\uFE0F*# ]+/, "").trim();
+                const shortMsg = cleanMsg.length > 250 ? cleanMsg.slice(0, 247) + "..." : cleanMsg;
+
+                const hasExpDoc = /experiment.md/i.test(errorText);
+                const hasNotesDoc = /notes.md/i.test(errorText);
+
+                let linksHtml = "";
+                if (hasExpDoc) {
+                  linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/experiment.md">Edit docs/experiment.md \u2197</button>';
+                }
+                if (hasNotesDoc) {
+                  linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/notes.md">View docs/notes.md \u2197</button>';
+                }
+
+                failInsightHtml = '<div class="task-insight-box" title="' + escapeHtml(errorText) + '">' +
+                  '<div class="task-insight-header">' +
+                    '<span class="task-insight-icon">\u26A0\uFE0F</span>' +
+                    '<span class="task-insight-title">Action Required</span>' +
+                  '</div>' +
+                  '<div class="task-insight-body">' + escapeHtml(shortMsg) + '</div>' +
+                  (linksHtml ? ('<div class="task-insight-actions">' + linksHtml + '</div>') : '') +
+                '</div>';
+              }
+
               phaseHtml += '<div class="' + cardClass + '"' + startTimeAttr + '>' +
-                '<div class="task-left">' +
-                  '<input type="checkbox" ' + checked + ' data-phase-id="' + escapeHtml(p.id) + '" title="Include in pipeline" ' + (anyRunning ? "disabled" : "") + ' />' +
-                  '<span class="task-name" data-action="openPhase" data-file="' + safeFileName + '" title="Click to edit ' + safeFileName + ' in VS Code">' + safeTaskName + '</span>' +
+                '<div class="task-main-row">' +
+                  '<div class="task-left">' +
+                    '<input type="checkbox" ' + checked + ' data-phase-id="' + escapeHtml(p.id) + '" title="Include in pipeline" ' + (anyRunning ? "disabled" : "") + ' />' +
+                    '<span class="task-name" data-action="openPhase" data-file="' + safeFileName + '" title="Click to edit ' + safeFileName + ' in VS Code">' + safeTaskName + '</span>' +
+                  '</div>' +
+                  '<div class="task-right">' +
+                    '<button type="button" class="btn-run" data-action="runPhase" data-id="' + escapeHtml(p.id) + '" ' + runDisabled + ' title="' + escapeHtml(runBtnTitle) + '">' + (ICONS["play"] || "") + ' RUN</button>' +
+                    '<span class="' + badgeClass + '">' + escapeHtml(displayStatus) + '</span>' +
+                    '<span class="task-duration">' + escapeHtml(durationText) + '</span>' +
+                  '</div>' +
                 '</div>' +
-                '<div class="task-right">' +
-                  '<button type="button" class="btn-run" data-action="runPhase" data-id="' + escapeHtml(p.id) + '" ' + runDisabled + ' title="' + escapeHtml(runBtnTitle) + '">' + (ICONS["play"] || "") + ' RUN</button>' +
-                  '<span class="' + badgeClass + '">' + escapeHtml(displayStatus) + '</span>' +
-                  '<span class="task-duration">' + escapeHtml(durationText) + '</span>' +
-                '</div>' +
+                failInsightHtml +
               '</div>';
             }
+            phaseContainer.innerHTML = phaseHtml;
+            syncRunTicker(anyRunning);
           }
-          phaseContainer.innerHTML = phaseHtml;
-          syncRunTicker(anyRunning);
         }
 
         // Render Memory & Protocol Files (Tab 2)
@@ -4720,6 +6679,17 @@ var SidebarViewProvider = class {
           renderState(message.state);
         } else if (message.type === "log") {
           appendLog(message.text);
+        } else if (message.type === "literatureState" || message.type === "corpusState") {
+          renderLiteratureState(message.state);
+        } else if (message.type === "literatureStats" || message.type === "corpusStats") {
+          const stats = message.stats || (message.result && (message.result.stats || (message.result.data && (message.result.data.stats || message.result.data.totals))));
+          if (stats) {
+            renderLiteratureStats(stats);
+          }
+        } else if (message.type === "literatureSearchResult" || message.type === "corpusSearchResult") {
+          renderLiteratureSearchResults(message.result || message);
+        } else if (message.type === "literatureProgress" || message.type === "corpusProgress") {
+          vscode.postMessage({ type: "literatureGetState" });
         }
       } catch (err) {
         console.error("[TidyProteomicsAgent] Error in webview message handler:", err);
@@ -4797,11 +6767,11 @@ function activate(context) {
     for (const folder of targetFolders) {
       try {
         const folderPath = folder.fsPath || folder.uri?.fsPath || "";
-        if (!folderPath || !fs7.existsSync(folderPath)) {
+        if (!folderPath || !fs9.existsSync(folderPath)) {
           continue;
         }
-        const analysisDir = path7.join(folderPath, "analysis");
-        if (fs7.existsSync(analysisDir)) {
+        const analysisDir = path9.join(folderPath, "analysis");
+        if (fs9.existsSync(analysisDir)) {
           const analysisWatcher = vscode2.workspace.createFileSystemWatcher(
             new vscode2.RelativePattern(vscode2.Uri.file(analysisDir), "*.md")
           );
@@ -4813,8 +6783,8 @@ function activate(context) {
           }));
           watchers.push(analysisWatcher);
         }
-        const agentDir = path7.join(folderPath, "agent");
-        if (fs7.existsSync(agentDir)) {
+        const agentDir = path9.join(folderPath, "agent");
+        if (fs9.existsSync(agentDir)) {
           const agentWatcher = vscode2.workspace.createFileSystemWatcher(
             new vscode2.RelativePattern(vscode2.Uri.file(agentDir), "*.md")
           );
@@ -4826,8 +6796,8 @@ function activate(context) {
           }));
           watchers.push(agentWatcher);
         }
-        const promptsDir = path7.join(folderPath, "prompts");
-        if (fs7.existsSync(promptsDir)) {
+        const promptsDir = path9.join(folderPath, "prompts");
+        if (fs9.existsSync(promptsDir)) {
           const promptsWatcher = vscode2.workspace.createFileSystemWatcher(
             new vscode2.RelativePattern(vscode2.Uri.file(promptsDir), "*.md")
           );
@@ -4839,8 +6809,8 @@ function activate(context) {
           }));
           watchers.push(promptsWatcher);
         }
-        const docsDir = path7.join(folderPath, "docs");
-        if (fs7.existsSync(docsDir)) {
+        const docsDir = path9.join(folderPath, "docs");
+        if (fs9.existsSync(docsDir)) {
           const notesWatcher = vscode2.workspace.createFileSystemWatcher(
             new vscode2.RelativePattern(vscode2.Uri.file(docsDir), "notes.md")
           );

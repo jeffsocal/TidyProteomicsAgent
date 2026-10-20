@@ -26,8 +26,11 @@ Unlike standard conversational agents (e.g. Cline) that accumulate all file insp
      - `03_IMPUTE.md`: Missingness assessment (MAR vs MNAR) & quantitative imputation
      - `04_EXPRESSION.md`: Contrast modeling, moderated t-statistics (`limma`) & volcano plots
      - `05_ENRICHMENT.md`: Annotation adequacy assessment & multi-category pathway enrichment
-     - `06_OBSERVATIONS.md`: Targeted data extraction & biological literature notes
-     - `07_SYNTHESIS.md`: Publication-grade manuscript compilation
+     - `06_OBSERVATIONS.md`: Targeted data extraction & primary data-derived observations (`docs/observations.md`)
+     - `07_KNOWLEDGE.md`: Internal knowledge contextualization, first-layer conclusions & web search keyphrases (`docs/knowledge.md`)
+     - `08_WEBSEARCH.md`: Web search corroboration, second-layer conclusions & literature strategy (`docs/websearch.md`)
+     - `09_LITERATURE.md`: Literature Knowledge Database interrogation, reverse-interrogation & third-layer conclusions (`docs/literature.md`)
+     - `10_SYNTHESIS.md`: Publication-grade manuscript compilation from `docs/*` (`docs/scientific_report.md`)
    - Tool calls, command executions, and self-correction retries stay local to the active phase.
    - Upon meeting phase checkpoints, the local trajectory is **completely discarded from memory**.
    - Subsequent phases start with a pristine, unpolluted context window reading only disk state!
@@ -47,7 +50,7 @@ extension/
 │   ├── tools/
 │   │   └── ToolRegistry.ts         # Native tools: execute_command, read_file, write_file,
 │   │                               # replace_file_content, list_directory, check_checkpoint_gate,
-│   │                               # complete_phase
+│   │                               # complete_phase, fail_phase
 │   ├── llm/
 │   │   └── ProviderClient.ts       # Multi-provider client: Anthropic (prompt-caching),
 │   │                               # OpenRouter, Remote Hosted Ollama, Google Gemini, OpenAI

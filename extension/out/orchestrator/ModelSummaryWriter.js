@@ -87,7 +87,7 @@ Agent: ${agentStr}
 ---
 
 ## Agent Document Header Standard
-All agent-authored documents and reports (including \`docs/observations.md\`, \`docs/scientific_report.md\`, and any other generated markdown reports) must reference this specification and place the following metadata block immediately below the title:
+All agent-authored documents and reports (including \`docs/observations.md\`, \`docs/knowledge.md\`, \`docs/websearch.md\`, \`docs/literature.md\`, \`docs/scientific_report.md\`, and any other generated markdown reports) must reference this specification and place the following metadata block immediately below the title:
 
 \`\`\`markdown
 Title

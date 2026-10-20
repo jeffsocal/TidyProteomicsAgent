@@ -1,6 +1,15 @@
-### Phase 6: Checkpoint Verification, Literature Observations & Note Construction
+### Phase 6: Primary Data-Derived Observations & Extraction
 
-In this phase, you (the LLM) will construct and execute an extraction script `code/06_observations.R` using the saved `data/tidyproteomics_data.rds` object. This extracts targeted summaries from `tidyproteomics` directly to the terminal and log (`logs/06_observations.log`), avoiding token overflows from large CSV files. You will then perform targeted literature corroboration (via web search or offline biological literature synthesis) and author `docs/observations.md` as structured observation notes for the final report (`docs/scientific_report.md` in Phase 7).
+In this phase, you (the LLM) will construct and execute an extraction script `code/06_observations.R` using the saved `data/tidyproteomics_data.rds` object. This extracts targeted summaries from `tidyproteomics` directly to the terminal and log (`logs/06_observations.log`), avoiding token overflows from large CSV files. 
+
+You will summarize the primary quantitative data derived so far across all evaluated contrasts:
+- Overall dataset dimensions, quantified identifiers, and quality checkpoint status.
+- Target perturbation status (if a specific target gene was defined in `docs/experiment.md`) or untargeted discovery scope.
+- Quantitative threshold counts ($|\log_2\text{FC}| \ge 1.0, q \le 0.05$), total upregulated, total downregulated per contrast.
+- Top significantly expressed proteins (Markdown tables of top 10 upregulated and top 10 downregulated features with $\log_2\text{FC}$ and $q$-values).
+- Top significant pathway enrichments across analyzed annotation categories (GO, Reactome, etc.).
+
+You will then author `docs/observations.md` strictly documenting these primary data-derived observations without premature speculation or external literature synthesis (which will be systematically developed layer-by-layer in subsequent phases: internal knowledge in Phase 7, web search in Phase 8, and literature database interrogation in Phase 9).
 
 ---
 
@@ -128,55 +137,52 @@ stopifnot("Expression data extraction failed" = length(expr_tables) > 0)
 cat("PHASE_6_EXTRACTION_CHECKPOINT_PASS\n")
 ```
 
-- **CLI Verification**: For log inspection, use native command-line utilities (e.g. `head -n 20 logs/06_observations.log`, `grep -i "pass" ...`) instead of dumping full raw files into the prompt context. Note: Markdown tables in the log can be directly transferred into `docs/observations.md`.
+- **CLI Verification**: For log inspection, use native command-line utilities (e.g. `head -n 30 logs/06_observations.log`, `grep -i "pass" ...`) instead of dumping full raw files into the prompt context. Note: Markdown tables in the log can be directly transferred into `docs/observations.md`.
 
 ---
 
-#### 2. Targeted Literature Corroboration & Web Search
-Actively corroborate the extracted quantitative results with published literature:
-- **Target Function & Perturbation Phenotype (or Biomarker Landscape)**:
-  - If a specific target gene was investigated: Query published studies on the target's molecular role, known phenotypes, and biological pathways in the model system documented in `docs/experiment.md`.
-  - If an untargeted discovery screen: Query the primary dysregulated biomarker clusters and disease/phenotype associations relevant to the study design.
-- **Top Biomarker Context**:
-  - For top upregulated features: Search whether they are known compensatory factors, stress sensors, accumulation markers, or pathway effectors.
-  - For top downregulated features: Search whether they are cofactors, interaction partners, or downstream destabilized targets.
-- **Enriched Pathway Corroboration**: Search key terms from enriched pathways to identify published proteomic studies showing concordant pathway signatures.
-- **Offline / Local Model Fallback**: If active web search tools are unavailable in your runtime environment, rely on your biological literature knowledge and any experimental background provided in `docs/experiment.md` (or optional `agent/BIOLOGY.md` if supplied by the researcher). Cite standard literature references by Author (Year). Never invent or hallucinate numerical PMIDs or DOIs.
-
----
-
-#### 3. Direct Construction of `docs/observations.md`
+#### 2. Direct Construction of `docs/observations.md`
 Write the file `docs/observations.md` directly, referencing `docs/llm.md` for active model details. Ensure it begins with the standard document header immediately below the title:
 
-# Observations and Literature Corroboration
+```markdown
+# Primary Data-Derived Observations
 
 Created: YYYY-MM-DD HH:MM
 Author: PROVIDER | LLM-MODEL
 Agent: TidyProteomicsAgent vX.X.X
+```
 
-Ensure the document is organized into the following clear, structured sections:
+Organize the document strictly into the following structured sections:
 
-1. **Analysis Checkpoint Verification**:
-   - Status (PASS/FAIL) for Target Perturbation (if targeted; or "NOT APPLICABLE - UNTARGETED SCREEN") and Artifact Verification (`data/tidyproteomics_data.rds`, tables in `data/`, plots in `data/`).
-   - Summary of dataset dimensions: total features quantified (`proteins` or `peptides`), total significantly changed ($|\log_2\text{FC}| \ge 1.0$, $q \le 0.05$), count upregulated, count downregulated per contrast.
-2. **Target Efficacy / Leading Biomarker Metrics**:
-   - Quantitative breakdown of the primary target (if targeted) or leading master regulator / key functional hub (if untargeted screening): Gene Symbol / Accession, $\log_2\text{FC}$, $p$-value, $q$-value, and percent change.
+1. **Analysis Checkpoint & Dataset Dimensions Summary**:
+   - Status (PASS/FAIL) for Target Perturbation (if targeted; or "NOT APPLICABLE - UNTARGETED DISCOVERY SCREEN") and Artifact Verification (`data/tidyproteomics_data.rds`, tables in `data/`, plots in `data/`).
+   - Summary of dataset dimensions: total features quantified (`proteins` or `peptides`), total significantly altered ($|\log_2\text{FC}| \ge 1.0$, $q \le 0.05$), count upregulated, count downregulated per contrast.
+2. **Target Efficacy / Leading Perturbation Status**:
+   - Quantitative breakdown of the primary target (if targeted) or leading master regulator / key functional hub (if untargeted screening): Gene Symbol / Accession, $\log_2\text{FC}$, fold change, $p$-value, $q$-value, and percent change.
    - Comparison with experimental expectations stated in `docs/experiment.md`.
-3. **Dysregulated Biomarker Profiles (Tables & Functional Annotations)**:
-   - **Top Upregulated Features Table**: Columns for Rank, Available Identifiers (Gene Symbol / Accession, Description), $\log_2\text{FC}$, $q$-value, and Bolstered Biological Role (from literature). (Copy pre-formatted markdown table from `logs/06_observations.log`).
-   - **Top Downregulated Features Table**: Columns for Rank, Available Identifiers (Gene Symbol / Accession, Description), $\log_2\text{FC}$, $q$-value, and Bolstered Biological Role (from literature). (Copy pre-formatted markdown table from `logs/06_observations.log`).
-   - Notable complex subunits, co-factors, or client shifts highlighted with concise callout notes.
-4. **Pathway Enrichment Landscape**:
-   - Summary table of significant terms across analyzed annotation categories (Category, Term / Pathway Name, Direction / Enrichment Score, $q$-value).
-   - Primary biological themes identified across contrasts.
-5. **Mechanistic Synthesis & Hypothesis Alignment**:
-   - Integrated biological interpretation connecting the observed quantitative shifts to the literature findings.
-   - Direct assessment against the hypothesis in `docs/experiment.md`: Which aspects are validated? Are there unexpected or novel phenotypic signatures?
-6. **Literature References**:
-   - Formatted list of key studies: Author, Year, Title, and verified PMID/DOI (only if verified via web search or provided in study documentation). For offline citations without verified IDs, cite Author (Year) and publication venue.
+3. **Top Significantly Upregulated Proteins**:
+   - Structured markdown table: Rank, Identifier (Gene Symbol / Accession), Description, $\log_2\text{FC}$, $q$-value. (Directly copy pre-formatted markdown table from `logs/06_observations.log`).
+4. **Top Significantly Downregulated Proteins**:
+   - Structured markdown table: Rank, Identifier (Gene Symbol / Accession), Description, $\log_2\text{FC}$, $q$-value. (Directly copy pre-formatted markdown table from `logs/06_observations.log`).
+5. **Top Significant Pathway Enrichments**:
+   - Summary table of significant terms across analyzed annotation categories (Category/Term, Annotation Name, Direction / Enrichment Score, $q$-value).
+   - Primary biological themes identified across contrasts based directly on statistical enrichment.
+6. **Primary Empirical Data Summary**:
+   - Objective, factual synthesis of data-derived observations directly grounded in the quantitative tables and figures.
+   - Pure empirical observation: no premature speculation or external literature synthesis (this is developed systematically in Phases 7, 8, and 9).
+
+---
+
+#### 3. Critical Constraints
+- **Absolute Data Grounding**: Every numerical value ($\log_2\text{FC}$, $p$-value, $q$-value, feature count, pathway score) MUST strictly match `logs/06_observations.log` and the exported CSV tables. Never fabricate or extrapolate numbers.
+- **Pure Empirical Scope**: Do not synthesize external literature in this phase. Document what the mass spectrometry data directly demonstrates.
 
 ---
 
 #### 4. Phase Completion Gate
+- [ ] **Checkpoint Gate**:
+  1. `code/06_observations.R` executed with status code 0 and output logged to `logs/06_observations.log`.
+  2. `logs/06_observations.log` ends with `PHASE_6_EXTRACTION_CHECKPOINT_PASS`.
+  3. `docs/observations.md` exists on disk with non-zero size and conforms to the structure above.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "06_OBSERVATIONS", summary = "Observation notes compiled in docs/observations.md with verified biomarker metrics, markdown tables, and grounded biological literature corroboration.")`
+  - Invoke `complete_phase(phaseName = "06_OBSERVATIONS", summary = "Primary data-derived observations extracted and compiled in docs/observations.md with verified biomarker metrics, markdown tables, and pathway enrichment summaries.")`

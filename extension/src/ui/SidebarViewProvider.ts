@@ -6,6 +6,8 @@ import { writeActiveModelSummaryFile } from "../orchestrator/ModelSummaryWriter"
 import { ProviderClient } from "../llm/ProviderClient";
 import { ToolRegistry } from "../tools/ToolRegistry";
 import { LLMConfig, LLMProviderType, PipelineState } from "../types";
+import { LiteratureService, KnowledgeCorpusService } from "../literature/LiteratureService";
+import { IngestionRunner } from "../literature/IngestionRunner";
 
 export class SidebarViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "tidyproteomicsagent.sidebarView";
@@ -13,6 +15,9 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
   private orchestrator?: PipelineOrchestrator;
   private client: ProviderClient;
   private tools: ToolRegistry;
+  private literatureService: LiteratureService;
+  private corpusService: LiteratureService;
+  private ingestionRunner: IngestionRunner;
   private workspaceRoot: string;
   private customWorkspaceRoot?: string;
   public onFolderChangedCallback?: (folderPath: string) => void;
@@ -22,6 +27,13 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
     private readonly context: vscode.ExtensionContext
   ) {
     this.workspaceRoot = this.getActiveWorkspaceRoot();
+
+    this.literatureService = new LiteratureService(
+      this.workspaceRoot,
+      this._extensionUri.fsPath,
+      () => vscode.workspace.getConfiguration("tidyproteomicsagent").get<string>("rscriptPath")
+    );
+    this.corpusService = this.literatureService;
 
     // Read stored config with preference to workspace configuration & SecretStorage
     const wsConfig = vscode.workspace.getConfiguration("tidyproteomicsagent");
@@ -48,7 +60,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       (secretKey) => {
         if (secretKey) {
           this.client.updateConfig({ apiKey: secretKey });
-          this.syncActiveModelSummary().catch(() => {});
+          this.syncActiveModelSummary().catch(() => { });
           this.refreshState().catch(() => { });
         }
       },
@@ -68,7 +80,18 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       this.getExtensionVersion()
     );
 
-    this.syncActiveModelSummary().catch(() => {});
+    this.ingestionRunner = new IngestionRunner(
+      this.literatureService,
+      this.client,
+      this._extensionUri.fsPath,
+      (ev) => {
+        this.sendLiteratureProgress(ev);
+        this.sendLiteratureState();
+      },
+      (log) => this.sendLog(log)
+    );
+
+    this.syncActiveModelSummary().catch(() => { });
 
     // Watch for VS Code settings changes
     context.subscriptions.push(
@@ -100,7 +123,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
         const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
         if (pkg.version) return pkg.version;
       }
-    } catch (_) {}
+    } catch (_) { }
     return "0.1.0";
   }
 
@@ -120,6 +143,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
   public setCustomWorkspaceRoot(folderPath: string) {
     this.customWorkspaceRoot = folderPath;
     this.workspaceRoot = folderPath;
+    this.literatureService.setWorkspaceRoot(folderPath);
   }
 
   public getActiveWorkspaceRoot(): string {
@@ -184,6 +208,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       const changed = newRoot !== this.workspaceRoot;
       this.workspaceRoot = newRoot;
       this.tools.setWorkspaceRoot(this.workspaceRoot);
+      this.literatureService.setWorkspaceRoot(this.workspaceRoot);
       if (this.orchestrator) {
         if (changed) {
           await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
@@ -273,7 +298,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
 
     // Initial state push once webview is mounted
     setTimeout(() => {
-      this.syncActiveModelSummary().catch(() => {});
+      this.syncActiveModelSummary().catch(() => { });
       this.refreshPhases().catch(() => { });
     }, 150);
 
@@ -317,7 +342,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
               await wsConfig.update("baseUrl", data.baseUrl, vscode.ConfigurationTarget.Global);
               await wsConfig.update("maxTokens", maxTokens, vscode.ConfigurationTarget.Global);
               await wsConfig.update("timeoutSeconds", timeoutSeconds, vscode.ConfigurationTarget.Global);
-            } catch (_) {}
+            } catch (_) { }
 
             await this.context.globalState.update("tidyproteomicsagent.provider", data.provider);
             await this.context.globalState.update("tidyproteomicsagent.model", data.model);
@@ -445,6 +470,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
               this.customWorkspaceRoot = selectedPath;
               this.workspaceRoot = selectedPath;
               this.tools.setWorkspaceRoot(this.workspaceRoot);
+              this.literatureService.setWorkspaceRoot(this.workspaceRoot);
               if (this.orchestrator) {
                 await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
               }
@@ -488,6 +514,126 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
           }
           case "requestState": {
             await this.refreshState();
+            this.sendCorpusState();
+            break;
+          }
+          case "literatureGetState":
+          case "corpusGetState": {
+            this.sendLiteratureState();
+            break;
+          }
+          case "literatureSelect":
+          case "corpusSelect": {
+            try {
+              this.literatureService.setActiveLiterature(data.fileName);
+              this.sendLiteratureState();
+              await this.refreshState();
+            } catch (err: any) {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: ${err.message}`);
+            }
+            break;
+          }
+          case "literatureCreate":
+          case "corpusCreate": {
+            try {
+              const created = await this.literatureService.createDatabase(data.name);
+              vscode.window.showInformationMessage(`TidyProteomicsAgent: Created literature database '${created.fileName}'`);
+              this.sendLiteratureState();
+              await this.refreshState();
+            } catch (err: any) {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: ${err.message}`);
+            }
+            break;
+          }
+          case "literatureToggleSynthesis":
+          case "corpusToggleSynthesis": {
+            this.literatureService.setUseInSynthesis(!!data.enabled);
+            this.sendLiteratureState();
+            await this.refreshState();
+            break;
+          }
+          case "literatureStats":
+          case "corpusStats": {
+            const statsRes = await this.literatureService.getStats(data.fileName);
+            if (this._view && this._view.webview) {
+              const stats = (statsRes as any).stats || (statsRes as any).data?.stats || (statsRes as any).data?.totals;
+              this._view.webview.postMessage({ type: "literatureStats", result: statsRes, stats });
+              this._view.webview.postMessage({ type: "corpusStats", result: statsRes, stats });
+            }
+            break;
+          }
+          case "literatureSearch":
+          case "corpusSearch": {
+            const searchRes = await this.literatureService.search(data.query, data.limit || 50, data.fileName);
+            if (this._view && this._view.webview) {
+              const results = (searchRes as any).results || (searchRes as any).data?.results || (searchRes as any).data?.rows || [];
+              this._view.webview.postMessage({ type: "literatureSearchResult", result: searchRes, results });
+              this._view.webview.postMessage({ type: "corpusSearchResult", result: searchRes, results });
+            }
+            break;
+          }
+          case "literaturePickFolder":
+          case "corpusPickFolder": {
+            const chosen = await vscode.window.showOpenDialog({
+              canSelectFiles: false,
+              canSelectFolders: true,
+              canSelectMany: false,
+              openLabel: "Select Literature Folder",
+            });
+            if (chosen && chosen.length > 0) {
+              const folderPath = chosen[0].fsPath;
+              try {
+                this.literatureService.scanIngestFolder(folderPath);
+                this.sendLiteratureState();
+                vscode.window.showInformationMessage(`TidyProteomicsAgent: Found ${this.literatureService.getViewState().queue.length} document(s) for ingestion queue.`);
+              } catch (err: any) {
+                vscode.window.showErrorMessage(`TidyProteomicsAgent: ${err.message}`);
+              }
+            }
+            break;
+          }
+          case "literatureClearQueue":
+          case "corpusClearQueue": {
+            this.literatureService.clearQueue();
+            this.sendLiteratureState();
+            break;
+          }
+          case "literatureStartIngest":
+          case "corpusStartIngest": {
+            const cfg = this.client.getConfig();
+            if (cfg.provider !== "ollama" && !cfg.apiKey) {
+              vscode.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key in the Provider tab before running literature extraction.");
+              return;
+            }
+            const activeDb = data.fileName || this.literatureService.getConfig().activeLiterature || this.literatureService.getConfig().activeCorpus;
+            if (!activeDb) {
+              vscode.window.showErrorMessage("TidyProteomicsAgent: Please select or create an active literature database first.");
+              return;
+            }
+            this.sendLiteratureState();
+            this.ingestionRunner.runIngestion(activeDb).then(async (res) => {
+              this.sendLiteratureState();
+              const statsRes = await this.literatureService.getStats(activeDb);
+              if (this._view && this._view.webview) {
+                const stats = (statsRes as any).stats || (statsRes as any).data?.stats || (statsRes as any).data?.totals;
+                this._view.webview.postMessage({ type: "literatureStats", result: statsRes, stats });
+                this._view.webview.postMessage({ type: "corpusStats", result: statsRes, stats });
+              }
+              if (res.success) {
+                vscode.window.showInformationMessage(`TidyProteomicsAgent: Indexed ${res.processed} document(s) into ${activeDb}!`);
+              } else {
+                vscode.window.showWarningMessage(`TidyProteomicsAgent: Ingestion finished with ${res.errors} error(s). See log for details.`);
+              }
+            }).catch((err: any) => {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: Ingestion error - ${err.message}`);
+              this.sendLiteratureState();
+            });
+            break;
+          }
+          case "literatureAbortIngest":
+          case "corpusAbortIngest": {
+            this.ingestionRunner.abort();
+            vscode.window.showInformationMessage("TidyProteomicsAgent: Aborting ingestion...");
             break;
           }
         }
@@ -509,6 +655,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
         this.workspaceRoot = chosen[0].fsPath;
         this.customWorkspaceRoot = this.workspaceRoot;
         this.tools.setWorkspaceRoot(this.workspaceRoot);
+        this.literatureService.setWorkspaceRoot(this.workspaceRoot);
         if (this.orchestrator) {
           await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
         }
@@ -524,7 +671,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
     const items = [
       {
         label: "$(symbol-structure) Differential Expression Pipeline",
-        description: "Full 8-phase workflow (Install, Inspect, Normalize, Impute, Expression, Enrichment, Observations, Report)",
+        description: "Full 11-phase workflow (Install, Inspect, Normalize, Impute, Expression, Enrichment, Observations, Knowledge, WebSearch, Literature, Synthesis)",
         id: "differential_expression",
       },
       {
@@ -555,6 +702,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
         this.workspaceRoot = chosen[0].fsPath;
         this.customWorkspaceRoot = this.workspaceRoot;
         this.tools.setWorkspaceRoot(this.workspaceRoot);
+        this.literatureService.setWorkspaceRoot(this.workspaceRoot);
         if (this.orchestrator) {
           await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
         }
@@ -621,6 +769,19 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
         copyFileSafe(path.join(sharedDir, ".gitignore"), path.join(this.workspaceRoot, ".gitignore"), false);
         copyFileSafe(path.join(sharedDir, "logs", ".gitkeep"), path.join(this.workspaceRoot, "logs", ".gitkeep"), false);
         copyFileSafe(path.join(sharedDir, "data", "raw", ".gitkeep"), path.join(this.workspaceRoot, "data", "raw", ".gitkeep"), false);
+
+        // Copy literature R tools and ensure ./literature/ directory exists
+        const literatureToolsDir = path.join(sharedDir, "tools", "literature");
+        if (fs.existsSync(literatureToolsDir)) {
+          const lFiles = fs.readdirSync(literatureToolsDir).filter((f) => f.endsWith(".R"));
+          for (const lf of lFiles) {
+            copyFileSafe(path.join(literatureToolsDir, lf), path.join(this.workspaceRoot, "tools", "literature", lf), true);
+          }
+        }
+        const literatureDir = path.join(this.workspaceRoot, "literature");
+        if (!fs.existsSync(literatureDir)) {
+          fs.mkdirSync(literatureDir, { recursive: true });
+        }
       }
 
       // 4. Copy selected pipeline markdown files
@@ -657,7 +818,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
         try {
           const doc = await vscode.workspace.openTextDocument(targetFocusFile);
           await vscode.window.showTextDocument(doc);
-        } catch (_) {}
+        } catch (_) { }
       }
 
       return true;
@@ -668,7 +829,15 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
   }
 
   public startPipeline() {
-    this.syncActiveModelSummary().catch(() => {});
+    if (!this.workspaceRoot) {
+      vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+      return;
+    }
+    if (this.orchestrator && this.orchestrator.getPhases().length === 0) {
+      vscode.window.showInformationMessage("TidyProteomicsAgent: No analysis tasks found to execute. Please initialize an analysis pipeline first.");
+      return;
+    }
+    this.syncActiveModelSummary().catch(() => { });
     this.orchestrator?.runFullPipeline().catch((err) => {
       vscode.window.showErrorMessage(`TidyProteomicsAgent: Pipeline error - ${err.message}`);
     });
@@ -724,6 +893,52 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
         console.warn("[SidebarViewProvider] Exception posting stateUpdate:", err);
       }
     }
+  }
+
+  private sendLiteratureState() {
+    if (this._view && this._view.webview) {
+      try {
+        const root = this.getActiveWorkspaceRoot();
+        if (root && root !== this.workspaceRoot) {
+          this.workspaceRoot = root;
+          this.literatureService.setWorkspaceRoot(root);
+        }
+        const state = this.literatureService.getViewState(this.ingestionRunner.getIsRunning() ? "ingesting" : undefined);
+        const p1 = this._view.webview.postMessage({ type: "literatureState", state });
+        if (p1 && typeof p1.then === "function") {
+          p1.then(undefined, (err) => {
+            console.warn("[SidebarViewProvider] Failed to post literatureState:", err);
+          });
+        }
+        const p2 = this._view.webview.postMessage({ type: "corpusState", state });
+        if (p2 && typeof p2.then === "function") {
+          p2.then(undefined, (err) => {
+            console.warn("[SidebarViewProvider] Failed to post corpusState:", err);
+          });
+        }
+      } catch (err) {
+        console.warn("[SidebarViewProvider] Exception posting literatureState:", err);
+      }
+    }
+  }
+
+  private sendCorpusState() {
+    this.sendLiteratureState();
+  }
+
+  private sendLiteratureProgress(event: any) {
+    if (this._view && this._view.webview) {
+      try {
+        this._view.webview.postMessage({ type: "literatureProgress", event });
+        this._view.webview.postMessage({ type: "corpusProgress", event });
+      } catch (err) {
+        console.warn("[SidebarViewProvider] Exception posting literatureProgress:", err);
+      }
+    }
+  }
+
+  private sendCorpusProgress(event: any) {
+    this.sendLiteratureProgress(event);
   }
 
   private sendLog(text: string) {
@@ -897,14 +1112,138 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
     /* Segmented Tab Bar */
     .tab-bar {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 6px;
       padding: 3px;
       margin-bottom: 12px;
-      gap: 3px;
+      gap: 2px;
       flex: 0 0 auto;
+    }
+
+    .badge-parsing_pdf { background: #3b82f6; color: #fff; animation: pulse 1.5s infinite; }
+    .badge-llm_extraction { background: #8b5cf6; color: #fff; animation: pulse 1.5s infinite; }
+    .badge-normalization { background: #f59e0b; color: #fff; animation: pulse 1.5s infinite; }
+    .badge-indexed { background: var(--success); color: #fff; }
+    .badge-skipped { background: #71717a; color: #fff; }
+
+    /* Corpus Tab Styles */
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      margin-top: 6px;
+      margin-bottom: 8px;
+    }
+    .metric-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 6px 4px;
+      text-align: center;
+    }
+    .metric-num {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--primary);
+      font-variant-numeric: tabular-nums;
+    }
+    .metric-label {
+      font-size: 8.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 8px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      margin-top: 6px;
+    }
+    .toggle-label {
+      font-size: 10.5px;
+      font-weight: 600;
+      color: var(--fg);
+    }
+    .toggle-desc {
+      font-size: 9px;
+      color: var(--muted);
+    }
+    .queue-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 5px 8px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      margin-bottom: 4px;
+      font-size: 10.5px;
+    }
+    .queue-item-left {
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+    .queue-item-title {
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-family: var(--vscode-editor-font-family, monospace);
+    }
+    .queue-item-sub {
+      font-size: 9px;
+      color: var(--muted);
+    }
+    .search-result-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 10px;
+      margin-top: 6px;
+    }
+    .search-result-table th, .search-result-table td {
+      border: 1px solid var(--border);
+      padding: 4px 6px;
+      text-align: left;
+      vertical-align: top;
+    }
+    .search-result-table th {
+      background: rgba(127, 127, 127, 0.08);
+      font-size: 9px;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .quote-box {
+      font-style: italic;
+      color: #bfdbfe;
+      font-size: 9px;
+      margin-top: 2px;
+      line-height: 1.3;
+    }
+    #corpusSynthesisToggle:checked + #corpusSynthesisSlider {
+      background: var(--primary) !important;
+    }
+    #corpusSynthesisSlider:before {
+      position: absolute;
+      content: "";
+      height: 12px;
+      width: 12px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      border-radius: 50%;
+      transition: .2s;
+    }
+    #corpusSynthesisToggle:checked + #corpusSynthesisSlider:before {
+      transform: translateX(16px);
     }
     .tab-bar button.tab-btn {
       background: transparent !important;
@@ -979,7 +1318,21 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
     .tab-pane.active {
       display: block !important;
     }
-    #pane-pipeline.active {
+    #pane-pipeline.active,
+    #pane-literature.active {
+      display: flex !important;
+      flex-direction: column;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    #activePipelineDashboard {
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    #activePipelineDashboard[style*="display: block"],
+    #activePipelineDashboard[style*="display: flex"] {
       display: flex !important;
       flex-direction: column;
       flex: 1 1 auto;
@@ -991,7 +1344,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
     }
 
     /* Containers & Cards */
-    .section {
+    .section, .card {
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 6px;
@@ -999,20 +1352,29 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       margin-bottom: 10px;
       flex: 0 0 auto;
     }
-    .terminal-section {
+    .terminal-section,
+    .queue-section {
       display: flex !important;
       flex-direction: column;
       flex: 1 1 auto;
       min-height: 150px;
       margin-bottom: 0 !important;
     }
-    .terminal-section .section-header {
+    .terminal-section .section-header,
+    .queue-section .section-header {
       flex: 0 0 auto;
     }
     .terminal-section .terminal {
-      flex: 1 1 auto;
-      height: 100%;
+      flex: 1 1 0;
       min-height: 110px;
+      height: auto;
+    }
+    .queue-section .queue-list,
+    #literatureQueueList {
+      flex: 1 1 0;
+      min-height: 80px;
+      overflow-y: auto;
+      margin-bottom: 8px;
     }
     .section-header {
       display: flex;
@@ -1113,9 +1475,9 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       padding: 6px 8px;
       margin-bottom: 5px;
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 6px;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 5px;
       transition: border-color 0.15s ease, background 0.15s ease;
     }
     .task-card:hover {
@@ -1126,6 +1488,70 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       border-color: var(--primary);
       background: rgba(59, 130, 246, 0.08);
       box-shadow: 0 0 8px rgba(59, 130, 246, 0.25);
+    }
+    .task-card.task-card-failed {
+      border-color: rgba(239, 68, 68, 0.5);
+      background: rgba(239, 68, 68, 0.04);
+    }
+    .task-main-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      width: 100%;
+    }
+    .task-insight-box {
+      background: rgba(239, 68, 68, 0.09);
+      border: 1px solid rgba(239, 68, 68, 0.25);
+      border-radius: 4px;
+      padding: 5px 7px;
+      font-size: 10px;
+      line-height: 1.35;
+    }
+    .task-insight-header {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-weight: 700;
+      color: #f87171;
+      font-size: 9.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      margin-bottom: 3px;
+    }
+    .task-insight-icon {
+      font-size: 11px;
+    }
+    .task-insight-title {
+      font-weight: 700;
+    }
+    .task-insight-body {
+      color: #fecaca;
+      word-break: break-word;
+      font-family: var(--vscode-font-family, sans-serif);
+    }
+    .task-insight-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 5px;
+      flex-wrap: wrap;
+    }
+    .btn-insight-link {
+      background: rgba(239, 68, 68, 0.2) !important;
+      color: #ffffff !important;
+      border: 1px solid rgba(239, 68, 68, 0.45) !important;
+      border-radius: 3px !important;
+      padding: 2px 7px !important;
+      font-size: 9.5px !important;
+      font-weight: 600 !important;
+      cursor: pointer;
+      line-height: 1.3 !important;
+      transition: all 0.15s ease;
+    }
+    .btn-insight-link:hover {
+      background: rgba(239, 68, 68, 0.35) !important;
+      border-color: rgba(239, 68, 68, 0.7) !important;
+      color: #ffffff !important;
     }
     .task-left {
       display: flex;
@@ -1197,6 +1623,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       color: var(--muted);
       min-width: 32px;
       text-align: right;
+      white-space: pre;
     }
 
     /* File Cards (Memory & Protocol) */
@@ -1319,8 +1746,8 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       white-space: pre;
       word-break: normal;
       color: var(--terminal-fg);
-      flex: 1 1 auto;
-      height: 100%;
+      flex: 1 1 0;
+      height: auto;
       min-height: 110px;
     }
 
@@ -1453,67 +1880,112 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       <span class="tab-label">Directory</span>
       <span class="tab-indicator" id="dirIndicator"></span>
     </button>
+    <button type="button" class="tab-btn" data-tab="literature" onclick="window.switchTab && window.switchTab('literature')" title="Literature Database & Ingestion">
+      <span class="tab-icon">${icons["database"] || ""}</span>
+      <span class="tab-label">Literature</span>
+      <span class="tab-indicator" id="literatureIndicator"></span>
+    </button>
   </div>
 
   <!-- TAB 1: PIPELINE -->
   <div class="tab-pane active" id="pane-pipeline">
-    <!-- Pipeline Execution Controls -->
-    <div class="section">
-      <div style="display:flex; gap:4px; margin-bottom:8px;">
-        <button id="startPipelineBtn" style="width:100%;">${icons["play"] || ""} Run Active Pipeline</button>
-        <button id="stopBtn" class="btn-stop" style="display:none; width:100%;">${icons["stop"] || ""} Stop Pipeline</button>
-      </div>
+    <!-- Loading Container (shown briefly while initializing) -->
+    <div id="loadingPipelineContainer" style="text-align:center; padding:15px; color:var(--muted); font-size:11px;">
+      Scanning analysis pipeline...
+    </div>
 
-      <div class="section-header">
-        <div style="display:flex; align-items:center; gap:6px;">
-          <h3>${icons["rocket-lunch"] || ""} Analysis Tasks</h3>
-          <button type="button" id="refreshTasksBtn" class="btn-icon" title="Reload tasks and sync progress from disk">${icons["refresh"] || "↻"}</button>
+    <!-- State A: No Workspace Folder Open -->
+    <div id="noFolderContainer" style="display:none; text-align:center; padding:15px; color:var(--muted);">
+      No folder opened in VS Code.<br><br>Use <b>File &gt; Open Folder...</b> or the <b>Directory</b> tab to choose a folder.
+    </div>
+
+    <!-- State B: Initialize Analysis Pipeline (shown ONLY when analysis/ is missing or empty) -->
+    <div id="initPipelineSection" style="display:none;">
+      <div style="background:var(--vscode-sideBar-background); border:1px solid var(--vscode-widget-border, #333); border-radius:6px; padding:12px; margin:4px 0;">
+        <div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
+          <span style="font-size:15px; display:inline-flex; align-items:center;">${icons["rocket-lunch"] || ""}</span>
+          <div style="font-weight:600; font-size:12px; color:var(--vscode-foreground);">Initialize Analysis Pipeline</div>
         </div>
-        <span style="font-size:9px; color:var(--muted);" id="phaseCountLabel">0 Tasks</span>
-      </div>
-      <div class="section-desc">Select tasks to execute. Click task name to edit in VS Code.</div>
-
-      <!-- Dynamic Phase Checklist -->
-      <div id="phaseContainer">
-        <div style="text-align:center; padding:10px; color:var(--muted);">Loading phases...</div>
+        <div style="font-size:11px; color:var(--muted); line-height:1.4; margin-bottom:10px;">
+          No analysis tasks found in this directory. Choose a pipeline to initialize your workspace with subdirectories, R setup scripts, and templates:
+        </div>
+        <div style="margin-bottom:8px;">
+          <label style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--muted); display:block; margin-bottom:4px;">Pipeline Template</label>
+          <select id="pipelineTemplateSelect" style="width:100%; box-sizing:border-box; padding:5px 8px; font-size:11px; background:var(--vscode-input-background, #252526); color:var(--vscode-input-foreground, #cccccc); border:1px solid var(--vscode-input-border, #3c3c3c); border-radius:4px; outline:none;">
+            <option value="differential_expression">Differential Expression (11-Phase Pipeline)</option>
+            <option value="quality_control_only">Quality Control &amp; Exploration (2-Phase QC)</option>
+          </select>
+        </div>
+        <div id="pipelineDescription" style="font-size:10px; color:var(--muted); margin-bottom:12px; background:rgba(255,255,255,0.03); padding:6px 8px; border-radius:4px; border-left:3px solid var(--primary, #007acc); line-height:1.4;">
+          <b>Phases:</b> 00_INSTALL ➔ 01_INSPECT ➔ 02_NORMALIZE ➔ 03_IMPUTE ➔ 04_EXPRESSION ➔ 05_ENRICHMENT ➔ 06_OBSERVATIONS ➔ 07_KNOWLEDGE ➔ 08_WEBSEARCH ➔ 09_LITERATURE ➔ 10_SYNTHESIS.<br>
+          <i>Includes environment readiness, QC inspection, normalization benchmarking, imputation, differential expression, pathway enrichment, primary observations, internal knowledge, web search, literature database interrogation, and final manuscript synthesis report.</i>
+        </div>
+        <button type="button" id="initWorkspaceBtn" data-action="initWorkspace" class="btn-primary" style="width:100%; padding:7px 10px; font-size:11px; font-weight:600; display:flex; align-items:center; justify-content:center; gap:6px; cursor:pointer;">
+          <span>${icons["sparkles"] || ""}</span> Initialize Working Directory
+        </button>
       </div>
     </div>
 
-    <!-- Tokens -->
-    <div class="section">
-      <div class="section-header">
-        <h3>${icons["coins"] || ""} Tokens</h3>
-      </div>
-      <table class="tokens-table">
-        <thead>
-          <tr>
-            <th>Prompt</th>
-            <th>Cached ${icons["sparkles"] || ""}</th>
-            <th>Response</th>
-            <th>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td id="promptTokens">0</td>
-            <td id="cachedTokens" style="color:var(--success);">0</td>
-            <td id="responseTokens">0</td>
-            <td id="totalTokens">0</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <!-- State C: Active Pipeline Dashboard (shown when analysis/ exists and has tasks) -->
+    <div id="activePipelineDashboard" style="display:none;">
+      <!-- Pipeline Execution Controls -->
+      <div class="section">
+        <div style="display:flex; gap:4px; margin-bottom:8px;">
+          <button id="startPipelineBtn" style="width:100%;">${icons["play"] || ""} Run Analysis Pipeline</button>
+          <button id="stopBtn" class="btn-stop" style="display:none; width:100%;">${icons["stop"] || ""} Stop Pipeline</button>
+        </div>
 
-    <!-- Live Sub-Loop Terminal Feed -->
-    <div class="section terminal-section">
-      <div class="section-header">
-        <h3>${icons["terminal"] || ""} Sub-Loop Live Feed</h3>
-        <div style="display:flex; gap:4px;">
-          <button class="btn-sm" id="viewChatLogBtn" title="Open logs/llm_chat.md in VS Code">${icons["list"] || ""} Chat Log</button>
-          <button class="btn-sm" id="clearLogBtn">Clear</button>
+        <div class="section-header">
+          <div style="display:flex; align-items:center; gap:6px;">
+            <h3>${icons["rocket-lunch"] || ""} Analysis Tasks</h3>
+            <button type="button" id="refreshTasksBtn" class="btn-icon" title="Reload tasks and sync progress from disk">${icons["refresh"] || "↻"}</button>
+          </div>
+          <span style="font-size:9px; color:var(--muted);" id="phaseCountLabel">0 Tasks</span>
+        </div>
+        <div class="section-desc">Select tasks to execute. Click task name to edit in VS Code.</div>
+
+        <!-- Dynamic Phase Checklist -->
+        <div id="phaseContainer">
+          <div style="text-align:center; padding:10px; color:var(--muted);">Loading phases...</div>
         </div>
       </div>
-      <div class="terminal" id="terminalLog">TidyProteomicsAgent ready. Phases discovered from analysis/*.md.</div>
+
+      <!-- Tokens -->
+      <div class="section">
+        <div class="section-header">
+          <h3>${icons["coins"] || ""} Tokens</h3>
+        </div>
+        <table class="tokens-table">
+          <thead>
+            <tr>
+              <th>Prompt</th>
+              <th>Cached ${icons["sparkles"] || ""}</th>
+              <th>Response</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td id="promptTokens">0</td>
+              <td id="cachedTokens" style="color:var(--success);">0</td>
+              <td id="responseTokens">0</td>
+              <td id="totalTokens">0</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Live Sub-Loop Terminal Feed -->
+      <div class="section terminal-section">
+        <div class="section-header">
+          <h3>${icons["terminal"] || ""} Sub-Loop Live Feed</h3>
+          <div style="display:flex; gap:4px;">
+            <button class="btn-sm" id="viewChatLogBtn" title="Open logs/llm_chat.md in VS Code">${icons["list"] || ""} Chat Log</button>
+            <button class="btn-sm" id="clearLogBtn">Clear</button>
+          </div>
+        </div>
+        <div class="terminal" id="terminalLog">TidyProteomicsAgent ready. Phases discovered from analysis/*.md.</div>
+      </div>
     </div>
   </div>
 
@@ -1724,6 +2196,133 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
     </div>
   </div>
 
+  <!-- TAB 5: LITERATURE -->
+  <div class="tab-pane" id="pane-literature" style="display:none;">
+    <!-- Literature Selector & Creator Section -->
+    <div class="section">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+        <h3 style="margin:0; font-size:11px; font-weight:600; display:flex; align-items:center; gap:5px;">
+          ${icons["database"] || ""} Literature Knowledge Database
+        </h3>
+        <span class="badge badge-idle" id="literatureActiveBadge">NO DATABASE</span>
+      </div>
+
+      <div style="margin-bottom:8px;">
+        <label style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--muted); display:block; margin-bottom:4px;">Active Literature Database</label>
+        <select id="literatureSelect" style="width:100%; box-sizing:border-box; padding:5px 8px; font-size:11px; background:var(--vscode-input-background, #252526); color:var(--vscode-input-foreground, #cccccc); border:1px solid var(--vscode-input-border, #3c3c3c); border-radius:4px; outline:none;">
+          <option value="">(No database selected)</option>
+        </select>
+      </div>
+
+      <!-- New Literature Input -->
+      <div style="display:flex; gap:6px; margin-bottom:8px;">
+        <input type="text" id="newLiteratureInput" placeholder="New database name (e.g. p97_vcp)..." style="flex:1; padding:4px 8px; font-size:11px; background:var(--vscode-input-background, #252526); color:var(--vscode-input-foreground, #cccccc); border:1px solid var(--vscode-input-border, #3c3c3c); border-radius:4px; outline:none;" />
+        <button type="button" class="btn-sm" id="createLiteratureBtn" style="white-space:nowrap;">${icons["sparkles"] || ""} Create</button>
+      </div>
+
+      <!-- Toggle: Use in Synthesis Pipeline -->
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Use Active Database in Synthesis</div>
+          <div class="toggle-desc">Orchestrates two-way R interrogation in Phase 06/07</div>
+        </div>
+        <label style="position:relative; display:inline-block; width:34px; height:18px; margin:0; flex-shrink:0;">
+          <input type="checkbox" id="literatureSynthesisToggle" style="opacity:0; width:0; height:0;" />
+          <span style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:var(--vscode-input-border, #444); border-radius:18px; transition:0.2s;" id="literatureSynthesisSlider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Live Inspector Metrics Section -->
+    <div class="section">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+        <h3 style="margin:0; font-size:11px; font-weight:600; display:flex; align-items:center; gap:5px;">
+          ${icons["stats"] || ""} Literature Metrics
+        </h3>
+        <button type="button" id="refreshLiteratureStatsBtn" class="btn-icon" title="Refresh metrics from DuckDB" style="padding:2px 4px; font-size:10px;">
+          ${icons["refresh"] || "↻"}
+        </button>
+      </div>
+
+      <div class="metric-grid">
+        <div class="metric-card">
+          <div class="metric-num" id="metricStudies">0</div>
+          <div class="metric-label">Studies</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-num" id="metricContexts">0</div>
+          <div class="metric-label">Contexts</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-num" id="metricAssertions">0</div>
+          <div class="metric-label">Assertions</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-num" id="metricSymbols">0</div>
+          <div class="metric-label">Symbols</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-num" id="metricOrganisms">0</div>
+          <div class="metric-label">Organisms</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-num" id="metricPerturbations">0</div>
+          <div class="metric-label">Perturbations</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Preview Search Section -->
+    <div class="section">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+        <h3 style="margin:0; font-size:11px; font-weight:600; display:flex; align-items:center; gap:5px;">
+          ${icons["summary"] || ""} Assertion Search
+        </h3>
+      </div>
+      <div style="display:flex; gap:6px; margin-bottom:6px;">
+        <input type="text" id="literatureSearchInput" placeholder="Search gene, alias, or module (e.g. VCP, ERAD)..." style="flex:1; padding:4px 8px; font-size:11px; background:var(--vscode-input-background, #252526); color:var(--vscode-input-foreground, #cccccc); border:1px solid var(--vscode-input-border, #3c3c3c); border-radius:4px; outline:none;" />
+        <button type="button" class="btn-sm btn-secondary" id="literatureSearchBtn">Search</button>
+      </div>
+      <div id="literatureSearchResults" style="max-height:180px; overflow-y:auto; font-size:10.5px; border:1px solid var(--border); border-radius:4px; padding:4px; background:var(--bg);">
+        <div style="color:var(--muted); font-size:10px; text-align:center; padding:10px;">Enter a query above to search assertions in the active literature database.</div>
+      </div>
+    </div>
+
+    <!-- PDF & Supplementary Table Ingestion Queue Section -->
+    <div class="section queue-section">
+      <div class="section-header">
+        <h3 style="margin:0; font-size:11px; font-weight:600; display:flex; align-items:center; gap:5px;">
+          ${icons["layers"] || ""} Ingestion Queue
+        </h3>
+        <span class="badge badge-idle" id="ingestQueueBadge">0 FILES</span>
+      </div>
+
+      <div style="display:flex; gap:6px; margin-bottom:8px; flex:0 0 auto;">
+        <button type="button" class="btn-secondary btn-sm" id="pickFolderBtn" style="flex:1;">
+          ${icons["folder-open"] || ""} Select Literature Folder...
+        </button>
+        <button type="button" class="btn-secondary btn-sm" id="clearQueueBtn" title="Clear pending queue">
+          Clear
+        </button>
+      </div>
+
+      <div id="literatureQueueList" class="queue-list">
+        <div style="color:var(--muted); font-size:10px; text-align:center; padding:12px;">
+          No documents in queue.<br>Select a folder containing PDFs or supplementary tables (.xlsx/.csv).
+        </div>
+      </div>
+
+      <div style="display:flex; gap:6px; flex:0 0 auto;">
+        <button type="button" class="btn-primary btn-sm" id="startIngestBtn" style="flex:1; padding:6px; font-weight:600;">
+          ${icons["play"] || ""} Run Ingestion Pipeline
+        </button>
+        <button type="button" class="btn-stop btn-sm" id="abortIngestBtn" style="display:none; padding:6px; font-weight:600;">
+          ${icons["stop"] || ""} Abort
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script>
     // Global Error Logger for diagnostics
     window.addEventListener("error", function (e) {
@@ -1755,12 +2354,16 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
         panes.forEach(function (p) {
           if (p.id === "pane-" + tabId) {
             p.classList.add("active");
-            p.style.display = "block";
+            p.style.display = (tabId === "pipeline" || tabId === "literature" || tabId === "corpus") ? "flex" : "block";
           } else {
             p.classList.remove("active");
             p.style.display = "none";
           }
         });
+
+        if (tabId === "literature" || tabId === "corpus") {
+          vscode.postMessage({ type: "literatureGetState" });
+        }
 
         try {
           const current = vscode.getState() || {};
@@ -1789,7 +2392,10 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
     const pipelineIndicator = document.getElementById("pipelineIndicator");
     const providerIndicator = document.getElementById("providerIndicator");
     const dirIndicator = document.getElementById("dirIndicator");
-
+    const loadingPipelineContainer = document.getElementById("loadingPipelineContainer");
+    const noFolderContainer = document.getElementById("noFolderContainer");
+    const initPipelineSection = document.getElementById("initPipelineSection");
+    const activePipelineDashboard = document.getElementById("activePipelineDashboard");
     const startPipelineBtn = document.getElementById("startPipelineBtn");
     const stopBtn = document.getElementById("stopBtn");
     const phaseContainer = document.getElementById("phaseContainer");
@@ -1898,7 +2504,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
           if (selectEl.value === "quality_control_only") {
             descEl.innerHTML = "<b>Phases:</b> 00_INSTALL ➔ 01_INSPECT.<br><i>Includes: Workspace readiness, data import, replicate CV analysis, quantifiable fraction evaluation, and PCA separation.</i>";
           } else {
-            descEl.innerHTML = "<b>Phases:</b> 00_INSTALL ➔ 01_INSPECT ➔ 02_NORMALIZE ➔ 03_IMPUTE ➔ 04_EXPRESSION ➔ 05_ENRICHMENT ➔ 06_OBSERVATIONS ➔ 07_SYNTHESIS.<br><i>Includes: Environment readiness, QC inspection, normalization benchmarking, imputation, differential expression, pathway enrichment, literature observations, and synthesis report.</i>";
+            descEl.innerHTML = "<b>Phases:</b> 00_INSTALL ➔ 01_INSPECT ➔ 02_NORMALIZE ➔ 03_IMPUTE ➔ 04_EXPRESSION ➔ 05_ENRICHMENT ➔ 06_OBSERVATIONS ➔ 07_KNOWLEDGE ➔ 08_WEBSEARCH ➔ 09_LITERATURE ➔ 10_SYNTHESIS.<br><i>Includes: Environment readiness, QC inspection, normalization benchmarking, imputation, differential expression, pathway enrichment, primary observations, internal knowledge, web search, literature database interrogation, and final manuscript synthesis report.</i>";
           }
         }
       }
@@ -2100,6 +2706,284 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
     const initPipelineQuickBtn = document.getElementById("initPipelineQuickBtn");
     if (initPipelineQuickBtn) initPipelineQuickBtn.addEventListener("click", () => vscode.postMessage({ type: "promptInitWorkspace" }));
 
+    function escapeAttr(str) {
+      if (!str) return "";
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+        .replace(/</g, "&lt;");
+    }
+
+    // Literature Tab Elements
+    let currentActiveLiterature = "";
+    const literatureSelect = document.getElementById("literatureSelect") || document.getElementById("corpusSelect");
+    const newLiteratureInput = document.getElementById("newLiteratureInput") || document.getElementById("newCorpusInput");
+    const createLiteratureBtn = document.getElementById("createLiteratureBtn") || document.getElementById("createCorpusBtn");
+    const literatureSynthesisToggle = document.getElementById("literatureSynthesisToggle") || document.getElementById("corpusSynthesisToggle");
+    const literatureActiveBadge = document.getElementById("literatureActiveBadge") || document.getElementById("corpusActiveBadge");
+    const refreshLiteratureStatsBtn = document.getElementById("refreshLiteratureStatsBtn") || document.getElementById("refreshCorpusStatsBtn");
+    const metricStudies = document.getElementById("metricStudies");
+    const metricContexts = document.getElementById("metricContexts");
+    const metricAssertions = document.getElementById("metricAssertions");
+    const metricSymbols = document.getElementById("metricSymbols");
+    const metricOrganisms = document.getElementById("metricOrganisms");
+    const metricPerturbations = document.getElementById("metricPerturbations");
+    const literatureSearchInput = document.getElementById("literatureSearchInput") || document.getElementById("corpusSearchInput");
+    const literatureSearchBtn = document.getElementById("literatureSearchBtn") || document.getElementById("corpusSearchBtn");
+    const literatureSearchResults = document.getElementById("literatureSearchResults") || document.getElementById("corpusSearchResults");
+    const ingestQueueBadge = document.getElementById("ingestQueueBadge");
+    const pickFolderBtn = document.getElementById("pickFolderBtn");
+    const clearQueueBtn = document.getElementById("clearQueueBtn");
+    const literatureQueueList = document.getElementById("literatureQueueList") || document.getElementById("corpusQueueList");
+    const startIngestBtn = document.getElementById("startIngestBtn");
+    const abortIngestBtn = document.getElementById("abortIngestBtn");
+    const literatureIndicator = document.getElementById("literatureIndicator") || document.getElementById("corpusIndicator");
+
+    if (literatureSelect) {
+      literatureSelect.addEventListener("change", function () {
+        const val = literatureSelect.value;
+        vscode.postMessage({ type: "literatureSelect", fileName: val });
+        if (val) {
+          vscode.postMessage({ type: "literatureStats", fileName: val });
+        } else {
+          renderLiteratureStats({ study_count: 0, context_count: 0, assertion_count: 0, unique_symbols: 0, organism_count: 0, perturbation_count: 0 });
+        }
+      });
+    }
+
+    if (createLiteratureBtn && newLiteratureInput) {
+      createLiteratureBtn.addEventListener("click", function () {
+        const name = (newLiteratureInput.value || "").trim();
+        if (!name) return;
+        vscode.postMessage({ type: "literatureCreate", name: name });
+        newLiteratureInput.value = "";
+      });
+      newLiteratureInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") {
+          createLiteratureBtn.click();
+        }
+      });
+    }
+
+    if (literatureSynthesisToggle) {
+      literatureSynthesisToggle.addEventListener("change", function () {
+        vscode.postMessage({ type: "literatureToggleSynthesis", enabled: !!literatureSynthesisToggle.checked });
+      });
+    }
+
+    if (refreshLiteratureStatsBtn) {
+      refreshLiteratureStatsBtn.addEventListener("click", function () {
+        refreshLiteratureStatsBtn.style.transform = "rotate(360deg)";
+        refreshLiteratureStatsBtn.style.transition = "transform 0.5s ease";
+        setTimeout(function () {
+          refreshLiteratureStatsBtn.style.transform = "none";
+          refreshLiteratureStatsBtn.style.transition = "none";
+        }, 500);
+        const val = (literatureSelect && literatureSelect.value) || currentActiveLiterature || "";
+        if (val) {
+          vscode.postMessage({ type: "literatureStats", fileName: val });
+        } else {
+          renderLiteratureStats({ study_count: 0, context_count: 0, assertion_count: 0, unique_symbols: 0, organism_count: 0, perturbation_count: 0 });
+        }
+      });
+    }
+
+    function doLiteratureSearch() {
+      if (!literatureSearchInput) return;
+      const q = (literatureSearchInput.value || "").trim();
+      if (!q) return;
+      const val = literatureSelect ? literatureSelect.value : "";
+      vscode.postMessage({ type: "literatureSearch", query: q, limit: 50, fileName: val });
+    }
+
+    if (literatureSearchBtn) {
+      literatureSearchBtn.addEventListener("click", doLiteratureSearch);
+    }
+    if (literatureSearchInput) {
+      literatureSearchInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") doLiteratureSearch();
+      });
+    }
+
+    if (pickFolderBtn) {
+      pickFolderBtn.addEventListener("click", function () {
+        vscode.postMessage({ type: "literaturePickFolder" });
+      });
+    }
+
+    if (clearQueueBtn) {
+      clearQueueBtn.addEventListener("click", function () {
+        vscode.postMessage({ type: "literatureClearQueue" });
+      });
+    }
+
+    if (startIngestBtn) {
+      startIngestBtn.addEventListener("click", function () {
+        const val = literatureSelect ? literatureSelect.value : "";
+        vscode.postMessage({ type: "literatureStartIngest", fileName: val });
+      });
+    }
+
+    if (abortIngestBtn) {
+      abortIngestBtn.addEventListener("click", function () {
+        vscode.postMessage({ type: "literatureAbortIngest" });
+      });
+    }
+
+    function renderLiteratureState(state) {
+      if (!state) return;
+
+      const activeDb = state.activeLiterature || state.activeCorpus || (state.config && (state.config.activeLiterature || state.config.activeCorpus)) || "";
+      const useInSynthesis = !!(state.useInSynthesis !== undefined ? state.useInSynthesis : (state.config && state.config.useInSynthesis));
+      const isIngesting = !!(state.isIngesting !== undefined ? state.isIngesting : state.busy === "ingesting");
+
+      if (literatureSelect) {
+        let optionsHtml = '<option value="">(No database selected)</option>';
+        const dbs = state.literature || state.corpora;
+        if (Array.isArray(dbs)) {
+          for (const c of dbs) {
+            const isSel = c.fileName === activeDb ? " selected" : "";
+            optionsHtml += '<option value="' + escapeAttr(c.fileName) + '"' + isSel + '>' + escapeHtml(c.fileName) + '</option>';
+          }
+        }
+        literatureSelect.innerHTML = optionsHtml;
+        literatureSelect.value = activeDb;
+      }
+
+      if (literatureActiveBadge) {
+        if (activeDb) {
+          literatureActiveBadge.textContent = "ACTIVE";
+          literatureActiveBadge.className = "badge badge-completed";
+        } else {
+          literatureActiveBadge.textContent = "NO DATABASE";
+          literatureActiveBadge.className = "badge badge-idle";
+        }
+      }
+
+      if (literatureSynthesisToggle) {
+        literatureSynthesisToggle.checked = useInSynthesis;
+      }
+
+      if (literatureIndicator) {
+        literatureIndicator.className = (activeDb && useInSynthesis) ? "tab-indicator active" : "tab-indicator";
+      }
+
+      if (literatureQueueList) {
+        const queue = state.queue || [];
+        if (ingestQueueBadge) {
+          ingestQueueBadge.textContent = queue.length + " FILE" + (queue.length === 1 ? "" : "S");
+        }
+        if (queue.length === 0) {
+          literatureQueueList.innerHTML = '<div style="color:var(--muted); font-size:10px; text-align:center; padding:12px;">No documents in queue.<br>Select a folder containing PDFs or supplementary tables (.xlsx/.csv).</div>';
+        } else {
+          let qHtml = "";
+          for (const item of queue) {
+            let badgeClass = "badge-idle";
+            if (item.stage === "indexed") badgeClass = "badge-indexed";
+            else if (item.stage === "failed") badgeClass = "badge-error";
+            else if (item.stage === "skipped") badgeClass = "badge-skipped";
+            else if (item.stage === "parsing_pdf") badgeClass = "badge-parsing_pdf";
+            else if (item.stage === "llm_extraction") badgeClass = "badge-llm_extraction";
+            else if (item.stage === "normalization") badgeClass = "badge-normalization";
+
+            qHtml += '<div class="queue-item">' +
+              '<div class="queue-item-left">' +
+                '<div class="queue-item-title" title="' + escapeAttr(item.absPath) + '">' + escapeHtml(item.fileName) + '</div>' +
+                '<div style="font-size:9px; color:var(--muted);">' +
+                  (item.pageCount ? item.pageCount + ' pages • ' : '') +
+                  (item.message ? escapeHtml(item.message) : '') +
+                '</div>' +
+              '</div>' +
+              '<span class="badge ' + badgeClass + '">' + escapeHtml(item.stage.toUpperCase()) + '</span>' +
+            '</div>';
+          }
+          literatureQueueList.innerHTML = qHtml;
+        }
+      }
+
+      currentActiveLiterature = activeDb;
+
+      if (isIngesting) {
+        if (startIngestBtn) {
+          startIngestBtn.disabled = true;
+          startIngestBtn.style.opacity = "0.5";
+        }
+        if (abortIngestBtn) abortIngestBtn.style.display = "inline-flex";
+      } else {
+        if (startIngestBtn) {
+          startIngestBtn.disabled = false;
+          startIngestBtn.style.opacity = "1";
+        }
+        if (abortIngestBtn) abortIngestBtn.style.display = "none";
+      }
+
+      const hasStats = state.stats && (state.stats.study_count !== undefined || state.stats.studies !== undefined);
+      if (activeDb && !hasStats) {
+        vscode.postMessage({ type: "literatureStats", fileName: activeDb });
+      } else if (state.stats) {
+        renderLiteratureStats(state.stats);
+      } else if (!activeDb) {
+        renderLiteratureStats({ study_count: 0, context_count: 0, assertion_count: 0, unique_symbols: 0, organism_count: 0, perturbation_count: 0 });
+      }
+    }
+    const renderCorpusState = renderLiteratureState;
+
+    function renderLiteratureStats(stats) {
+      if (!stats) return;
+      const studies = stats.study_count ?? stats.studies ?? 0;
+      const contexts = stats.context_count ?? stats.contexts ?? 0;
+      const assertions = stats.assertion_count ?? stats.assertions ?? 0;
+      const symbols = stats.unique_symbols ?? stats.symbols ?? 0;
+      const organisms = stats.organism_count ?? stats.organisms ?? 0;
+      const perturbations = stats.perturbation_count ?? stats.perturbations ?? 0;
+
+      if (metricStudies) metricStudies.textContent = String(studies);
+      if (metricContexts) metricContexts.textContent = String(contexts);
+      if (metricAssertions) metricAssertions.textContent = String(assertions);
+      if (metricSymbols) metricSymbols.textContent = String(symbols);
+      if (metricOrganisms) metricOrganisms.textContent = String(organisms);
+      if (metricPerturbations) metricPerturbations.textContent = String(perturbations);
+    }
+    const renderCorpusStats = renderLiteratureStats;
+
+    function renderLiteratureSearchResults(res) {
+      if (!literatureSearchResults) return;
+      if (!res || !res.ok) {
+        literatureSearchResults.innerHTML = '<div style="color:var(--error); padding:6px;">Search failed: ' + escapeHtml(res?.error || "Unknown error") + '</div>';
+        return;
+      }
+      const data = res.data || res;
+      const rows = res.results || res.rows || data.results || data.rows || [];
+      const query = res.query || data.query || "";
+      if (rows.length === 0) {
+        literatureSearchResults.innerHTML = '<div style="color:var(--muted); padding:8px; text-align:center;">No matching assertions found for "' + escapeHtml(query) + '"</div>';
+        return;
+      }
+
+      let html = '<div style="margin-bottom:4px; font-weight:600; color:var(--muted); font-size:9.5px;">Found ' + rows.length + ' assertion(s):</div>';
+      for (const r of rows) {
+        const symbol = r.canonical_human_symbol || r.raw_entity_name || "Unknown";
+        const rel = r.relationship_type || "";
+        const mod = r.functional_module ? ' • ' + escapeHtml(r.functional_module) : "";
+        const ctx = (r.model_name ? escapeHtml(r.model_name) : "") + (r.perturbation_target ? ' (' + escapeHtml(r.perturbation_target) + ')' : "");
+        const quote = r.evidence_quote ? '<div style="font-style:italic; color:var(--muted); font-size:9.5px; margin-top:2px;">"' + escapeHtml(r.evidence_quote) + '"</div>' : "";
+        const study = r.title ? '<div style="color:var(--primary); font-size:9px; margin-top:2px;">Ref: ' + escapeHtml(r.title) + (r.year ? ' (' + r.year + ')' : '') + '</div>' : "";
+
+        html += '<div style="border-bottom:1px solid var(--border); padding:5px 0;">' +
+          '<div style="display:flex; justify-content:space-between; align-items:baseline;">' +
+            '<span style="font-weight:700; color:var(--fg);">' + escapeHtml(symbol) + '</span>' +
+            '<span class="badge badge-idle" style="font-size:8px;">' + escapeHtml(rel) + '</span>' +
+          '</div>' +
+          '<div style="color:var(--fg); font-size:10px;">' + ctx + mod + '</div>' +
+          quote +
+          study +
+        '</div>';
+      }
+      literatureSearchResults.innerHTML = html;
+    }
+    const renderCorpusSearchResults = renderLiteratureSearchResults;
+
     function escapeHtml(str) {
       if (!str) return "";
       return String(str)
@@ -2108,6 +2992,10 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#39;");
+    }
+
+    function padTimer(str) {
+      return String(str || "").padStart(7, " ");
     }
 
     let tickerInterval = null;
@@ -2128,7 +3016,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
                 const startMs = new Date(startStr).getTime();
                 if (!isNaN(startMs)) {
                   const sec = Math.max(0, Math.round((Date.now() - startMs) / 1000));
-                  durEl.textContent = sec + "s";
+                  durEl.textContent = padTimer(sec + "s");
                 }
               }
             });
@@ -2166,6 +3054,13 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
 
         if (dirIndicator) {
           dirIndicator.className = wsPath ? "tab-indicator" : "tab-indicator alert";
+        }
+
+        const litCfg = state.literature || state.knowledgeCorpus;
+        const ind = literatureIndicator || corpusIndicator;
+        if (ind && litCfg) {
+          const act = litCfg.activeLiterature || litCfg.activeCorpus;
+          ind.className = (act && litCfg.useInSynthesis) ? "tab-indicator active" : "tab-indicator";
         }
 
         // Provider API Key alert
@@ -2215,42 +3110,45 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
           pipelineIndicator.className = anyRunning ? "tab-indicator running" : "tab-indicator";
         }
 
-        if (startPipelineBtn) startPipelineBtn.style.display = anyRunning ? "none" : "block";
-        if (stopBtn) stopBtn.style.display = anyRunning ? "block" : "none";
+        if (loadingPipelineContainer) {
+          loadingPipelineContainer.style.display = "none";
+        }
 
-        // Render Dynamic Analysis Tasks (Tab 1)
-        if (phaseContainer) {
-          let phaseHtml = "";
-          const phaseCount = state.phases ? state.phases.length : 0;
+        const phaseCount = state.phases ? state.phases.length : 0;
+        const analysisFolder = state.folders ? state.folders.find(function (f) { return f.name === "analysis"; }) : null;
+        const isMissingOrEmpty = state.isAnalysisMissingOrEmpty !== undefined
+          ? state.isAnalysisMissingOrEmpty
+          : (!wsPath || !analysisFolder || !analysisFolder.exists || !analysisFolder.itemCount || analysisFolder.itemCount === 0 || phaseCount === 0);
+
+        if (!wsPath) {
+          if (noFolderContainer) noFolderContainer.style.display = "block";
+          if (initPipelineSection) initPipelineSection.style.display = "none";
+          if (activePipelineDashboard) activePipelineDashboard.style.display = "none";
+          syncRunTicker(false);
+        } else if (isMissingOrEmpty) {
+          if (noFolderContainer) noFolderContainer.style.display = "none";
+          if (initPipelineSection) initPipelineSection.style.display = "block";
+          if (activePipelineDashboard) activePipelineDashboard.style.display = "none";
+
+          // Ensure init button is reset to default state if returning from an operation
+          const initBtn = document.getElementById("initWorkspaceBtn");
+          if (initBtn) {
+            initBtn.removeAttribute("disabled");
+            initBtn.innerHTML = '<span>' + (ICONS["sparkles"] || "") + '</span> Initialize Working Directory';
+          }
+          syncRunTicker(false);
+        } else {
+          if (noFolderContainer) noFolderContainer.style.display = "none";
+          if (initPipelineSection) initPipelineSection.style.display = "none";
+          if (activePipelineDashboard) activePipelineDashboard.style.display = "flex";
+
+          if (startPipelineBtn) startPipelineBtn.style.display = anyRunning ? "none" : "block";
+          if (stopBtn) stopBtn.style.display = anyRunning ? "block" : "none";
           if (phaseCountLabel) phaseCountLabel.textContent = phaseCount + " Task" + (phaseCount === 1 ? "" : "s");
 
-          if (!wsPath) {
-            phaseHtml = '<div style="text-align:center; padding:15px; color:var(--muted);">No folder opened in VS Code.<br><br>Use <b>File &gt; Open Folder...</b> or the <b>Directory</b> tab to choose a folder.</div>';
-          } else if (phaseCount === 0) {
-            phaseHtml = '<div style="background:var(--vscode-sideBar-background); border:1px solid var(--vscode-widget-border, #333); border-radius:6px; padding:12px; margin:4px 0;">' +
-              '<div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">' +
-                '<span style="font-size:15px; display:inline-flex; align-items:center;">' + (ICONS["rocket-lunch"] || "") + '</span>' +
-                '<div style="font-weight:600; font-size:12px; color:var(--vscode-foreground);">Initialize Analysis Pipeline</div>' +
-              '</div>' +
-              '<div style="font-size:11px; color:var(--muted); line-height:1.4; margin-bottom:10px;">' +
-                'No analysis tasks found in this directory. Choose a pipeline to initialize your workspace with subdirectories, R setup scripts, and templates:' +
-              '</div>' +
-              '<div style="margin-bottom:8px;">' +
-                '<label style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--muted); display:block; margin-bottom:4px;">Pipeline Template</label>' +
-                '<select id="pipelineTemplateSelect" style="width:100%; box-sizing:border-box; padding:5px 8px; font-size:11px; background:var(--vscode-input-background, #252526); color:var(--vscode-input-foreground, #cccccc); border:1px solid var(--vscode-input-border, #3c3c3c); border-radius:4px; outline:none;">' +
-                  '<option value="differential_expression">Differential Expression (8-Phase Pipeline)</option>' +
-                  '<option value="quality_control_only">Quality Control &amp; Exploration (2-Phase QC)</option>' +
-                '</select>' +
-              '</div>' +
-              '<div id="pipelineDescription" style="font-size:10px; color:var(--muted); margin-bottom:12px; background:rgba(255,255,255,0.03); padding:6px 8px; border-radius:4px; border-left:3px solid var(--primary, #007acc); line-height:1.4;">' +
-                '<b>Phases:</b> 00_INSTALL ➔ 01_INSPECT ➔ 02_NORMALIZE ➔ 03_IMPUTE ➔ 04_EXPRESSION ➔ 05_ENRICHMENT ➔ 06_OBSERVATIONS ➔ 07_SYNTHESIS.<br>' +
-                '<i>Includes environment readiness, QC inspection, normalization benchmarking, imputation, differential expression, pathway enrichment, literature observations, and final synthesis report.</i>' +
-              '</div>' +
-              '<button type="button" id="initWorkspaceBtn" data-action="initWorkspace" class="btn-primary" style="width:100%; padding:7px 10px; font-size:11px; font-weight:600; display:flex; align-items:center; justify-content:center; gap:6px; cursor:pointer;">' +
-                '<span>' + (ICONS["sparkles"] || "") + '</span> Initialize Working Directory' +
-              '</button>' +
-            '</div>';
-          } else {
+          // Render Dynamic Analysis Tasks (Tab 1)
+          if (phaseContainer) {
+            let phaseHtml = "";
             for (let i = 0; i < state.phases.length; i++) {
               const p = state.phases[i];
               if (!p) continue;
@@ -2283,6 +3181,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
                 displayStatus = "FAILED";
                 badgeClass = "badge badge-failed";
                 durationText = "err";
+                cardClass += " task-card-failed";
               } else if (state.isFullPipelineRunning && anyRunning && p.enabled !== false && runningIndex !== -1 && i > runningIndex) {
                 displayStatus = "QUEUED";
                 badgeClass = "badge badge-queued";
@@ -2290,6 +3189,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
               } else if (p.durationSeconds !== undefined && p.durationSeconds !== null && p.durationSeconds > 0) {
                 durationText = p.durationSeconds + "sec";
               }
+              durationText = padTimer(durationText);
 
               const rawFileName = p.fileName || "";
               let taskName = rawFileName;
@@ -2315,21 +3215,55 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
               const runBtnTitle = anyRunning ? "Pipeline is currently executing" : ("Run " + safeTaskName);
               const startTimeAttr = (rawStatus === "running" && p.startTime) ? (' data-start-time="' + escapeHtml(p.startTime) + '"') : '';
 
+              let failInsightHtml = "";
+              if (rawStatus === "failed" && (p.error || p.summary)) {
+                const errorText = String(p.error || p.summary || "").trim();
+                const lines = errorText.split(String.fromCharCode(10)).map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
+                const firstLine = lines[0] || "Phase failed or halted.";
+                const remainingLines = lines.slice(1).join(" ");
+                const displayMsg = remainingLines ? (firstLine + " — " + remainingLines) : firstLine;
+                const cleanMsg = displayMsg.replace(/^[❌⚠️*# ]+/, "").trim();
+                const shortMsg = cleanMsg.length > 250 ? cleanMsg.slice(0, 247) + "..." : cleanMsg;
+
+                const hasExpDoc = /experiment\.md/i.test(errorText);
+                const hasNotesDoc = /notes\.md/i.test(errorText);
+
+                let linksHtml = "";
+                if (hasExpDoc) {
+                  linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/experiment.md">Edit docs/experiment.md ↗</button>';
+                }
+                if (hasNotesDoc) {
+                  linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/notes.md">View docs/notes.md ↗</button>';
+                }
+
+                failInsightHtml = '<div class="task-insight-box" title="' + escapeHtml(errorText) + '">' +
+                  '<div class="task-insight-header">' +
+                    '<span class="task-insight-icon">⚠️</span>' +
+                    '<span class="task-insight-title">Action Required</span>' +
+                  '</div>' +
+                  '<div class="task-insight-body">' + escapeHtml(shortMsg) + '</div>' +
+                  (linksHtml ? ('<div class="task-insight-actions">' + linksHtml + '</div>') : '') +
+                '</div>';
+              }
+
               phaseHtml += '<div class="' + cardClass + '"' + startTimeAttr + '>' +
-                '<div class="task-left">' +
-                  '<input type="checkbox" ' + checked + ' data-phase-id="' + escapeHtml(p.id) + '" title="Include in pipeline" ' + (anyRunning ? "disabled" : "") + ' />' +
-                  '<span class="task-name" data-action="openPhase" data-file="' + safeFileName + '" title="Click to edit ' + safeFileName + ' in VS Code">' + safeTaskName + '</span>' +
+                '<div class="task-main-row">' +
+                  '<div class="task-left">' +
+                    '<input type="checkbox" ' + checked + ' data-phase-id="' + escapeHtml(p.id) + '" title="Include in pipeline" ' + (anyRunning ? "disabled" : "") + ' />' +
+                    '<span class="task-name" data-action="openPhase" data-file="' + safeFileName + '" title="Click to edit ' + safeFileName + ' in VS Code">' + safeTaskName + '</span>' +
+                  '</div>' +
+                  '<div class="task-right">' +
+                    '<button type="button" class="btn-run" data-action="runPhase" data-id="' + escapeHtml(p.id) + '" ' + runDisabled + ' title="' + escapeHtml(runBtnTitle) + '">' + (ICONS["play"] || "") + ' RUN</button>' +
+                    '<span class="' + badgeClass + '">' + escapeHtml(displayStatus) + '</span>' +
+                    '<span class="task-duration">' + escapeHtml(durationText) + '</span>' +
+                  '</div>' +
                 '</div>' +
-                '<div class="task-right">' +
-                  '<button type="button" class="btn-run" data-action="runPhase" data-id="' + escapeHtml(p.id) + '" ' + runDisabled + ' title="' + escapeHtml(runBtnTitle) + '">' + (ICONS["play"] || "") + ' RUN</button>' +
-                  '<span class="' + badgeClass + '">' + escapeHtml(displayStatus) + '</span>' +
-                  '<span class="task-duration">' + escapeHtml(durationText) + '</span>' +
-                '</div>' +
+                failInsightHtml +
               '</div>';
             }
+            phaseContainer.innerHTML = phaseHtml;
+            syncRunTicker(anyRunning);
           }
-          phaseContainer.innerHTML = phaseHtml;
-          syncRunTicker(anyRunning);
         }
 
         // Render Memory & Protocol Files (Tab 2)
@@ -2405,6 +3339,17 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
           renderState(message.state);
         } else if (message.type === "log") {
           appendLog(message.text);
+        } else if (message.type === "literatureState" || message.type === "corpusState") {
+          renderLiteratureState(message.state);
+        } else if (message.type === "literatureStats" || message.type === "corpusStats") {
+          const stats = message.stats || (message.result && (message.result.stats || (message.result.data && (message.result.data.stats || message.result.data.totals))));
+          if (stats) {
+            renderLiteratureStats(stats);
+          }
+        } else if (message.type === "literatureSearchResult" || message.type === "corpusSearchResult") {
+          renderLiteratureSearchResults(message.result || message);
+        } else if (message.type === "literatureProgress" || message.type === "corpusProgress") {
+          vscode.postMessage({ type: "literatureGetState" });
         }
       } catch (err) {
         console.error("[TidyProteomicsAgent] Error in webview message handler:", err);
