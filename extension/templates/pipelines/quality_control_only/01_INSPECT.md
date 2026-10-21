@@ -89,16 +89,28 @@ Construct and execute `code/01_inspect.R`, capturing full execution output to `l
   4. `annot_terms` outputs all functional category names available in the dataset (e.g., Gene Ontology, Reactome, UniProt keywords).
   5. Count diagnostic plot (`data/plot_proteins_counts.png` or `data/plot_peptides_counts.png`) exists in `data/` with non-zero file size.
 
-#### Phase 1.4: Experimental Alignment & Hypothesis Verification (`docs/experiment.md` is Read-Only)
-- [ ] **READ-ONLY INSPECTION**: Inspect `docs/experiment.md` (user-maintained specification) to extract:
-  1. **User Working Hypothesis & Rationale**: Understand the underlying biological inquiry.
-  2. **Biological System & Model**: Note the expected cell line, tissue, or organism.
-  3. **Investigated Target(s) / Discovery Scope**: Note the primary target gene/protein symbol and accession if targeted (e.g., a specific knockdown, knockout, or drug target), or explicitly note "Untargeted / Discovery Screen" if conducting an untargeted differential proteome screen.
-  4. **Decided Contrast Designations**: Note the user's defined control and treatment groups for downstream differential expression analysis (`treatment` vs `control`).
-- [ ] **Data Alignment Check**: Cross-reference the user's defined contrast groups against the extracted `sample_names` in stdout. Confirm that the dataset contains the required sample conditions.
+#### Phase 1.4: Experimental Alignment, Contrast Scaffolding & Hypothesis Verification
+- [ ] **Inspect User Hypothesis & Parameters (`docs/experiment.md` Sections 1 & 2)**:
+  - Extract the working hypothesis, biological model, and investigated target(s) / discovery scope from Sections 1 and 2.
+  - **CRITICAL**: Never overwrite, modify, or delete Sections 1 or 2 of `docs/experiment.md` (reserved strictly for researcher input).
+- [ ] **Sample Group & Batch Pattern Audit (`sample_names`)**:
+  - Inspect the discovered `sample_names` output from Phase 1.3.
+  - Check whether `sample_names` contain technical batch suffixes (e.g. `_batch\d+`, `_plate\d+`, `_run\d+`, `_rep\d+`), multiple technical replicates, or compound delimiters.
+- [ ] **Proactive Section 3 Scaffolding in `docs/experiment.md`**:
+  - Inspect Section 3 (`## 3. Sample Grouping, Recoding & Contrast Designations`) in `docs/experiment.md`.
+  - If Section 3 contains `*(Pending Phase 1 data ingestion)*`, is missing, or contains unconfigured tables:
+    - **Scaffold Section 3**: Update Section 3 of `docs/experiment.md` directly using standardized visual badges:
+      1. Section 3.A: Label with `ℹ️ [AUTO-GENERATED REFERENCE - READ ONLY]:` and list all discovered sample groups with replicate counts.
+      2. Section 3.B: Label with `👉 [USER REVIEW & EDIT TABLE]:`. If technical batch suffixes are detected (e.g. `active_necrotic granuloma_batch5`, `batch6`, `batch9` and `healthy_healthy_batch8`), provide a suggested **Sample Group Renaming & Pooling Map** table proposing clean biological names (e.g. stripping `_batch\d+` to pool into `active necrotic granuloma` and `healthy`), and add `👉 [USER TOGGLE]:` with `- **Reassign Sample Names According to Pooling Map**: TRUE`.
+      3. Section 3.C: Label with `👉 [USER ACTION REQUIRED - DEFINE TARGET CONTRASTS]:` and suggest logical **Target Contrasts** based on the cleaned groups (e.g. `active necrotic granuloma` vs `healthy`).
+      4. Section 3.D: Label with `⚠️ [PRE-FLIGHT GATE DECISION]:`. If disease condition is confounded with batch across cohorts (e.g. healthy only in batch 8, disease in batches 5/6/9), explicitly document the confounding in the template comments and set `- **Proceed With Potential Batch Confounding**: FALSE` as the scaffolded default awaiting researcher review. Setting this default does NOT fail or halt Phase 1 (confounding authorization gating belongs strictly in Phase 4).
+  - If Section 3 already contains user-customized renaming or contrast definitions, preserve them exactly!
+  - **Enforce Clean Boolean Values & Badge Preservation**: Preserve visual badges (`ℹ️ [AUTO-GENERATED REFERENCE]`, `👉 [USER ACTION REQUIRED]`, `⚠️ [PRE-FLIGHT GATE DECISION]`) and keep all boolean configuration toggles (`- **Reassign Sample Names According to Pooling Map**: TRUE` and `- **Proceed With Potential Batch Confounding**: FALSE`) strictly as clean booleans without appending conversational notes or explanations. Any notes must be placed in markdown comments `<!-- ... -->` or recorded in `docs/notes.md`.
 - [ ] **Blackboard Recording**:
-  - **NEVER modify or overwrite `docs/experiment.md`** (it is strictly reserved for user/researcher modification).
-  - Record the experimental alignment verification, confirmed contrast groups, discovered target metadata (or untargeted scope), baseline quality stats, and detected upstream operations (normalization and imputation status) directly into `docs/notes.md`. If pre-existing normalization or imputation is detected, explicitly record the audit findings.
-- [ ] **Checkpoint 1.4 (Design Alignment Gate)**: Do not proceed to Phase 2 until `docs/experiment.md` has been verified, sample alignment is confirmed against `sample_names`, and the verification summary is recorded in `docs/notes.md`.
+  - Record the experimental alignment verification, discovered sample inventory, proposed or confirmed contrast groups, discovered target metadata (or untargeted scope), baseline quality stats, and detected upstream operations (normalization and imputation status) directly into `docs/notes.md`. If pre-existing normalization or imputation is detected, explicitly record the audit findings.
+- [ ] **Checkpoint 1.4 (Design Alignment Gate)**: 
+  - Verify that `sample_names` are confirmed, alignment with `docs/experiment.md` is verified, Section 3 is scaffolded with discovered sample groups, and the summary is recorded in `docs/notes.md`.
+  - Setting `- **Proceed With Potential Batch Confounding**: FALSE` is the scaffolded default awaiting researcher review and does NOT fail or halt Phase 1. Phase 1 must NEVER invoke `fail_phase` for discovered groups, batch suffixes, or confounding.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "01_INSPECT", summary = "Data ingestion complete. Ingested dataset, audited operations history (normalization and imputation status), verified sample groups in sample_names, confirmed alignment with docs/experiment.md, generated count diagnostic plot, and persisted data/tidyproteomics_data.rds.")`
+  - Once `docs/experiment.md` Section 3 is scaffolded, QC plots are generated, and `docs/notes.md` is updated, Phase 1 MUST invoke `complete_phase(phaseName = "01_INSPECT", ...)` to preserve all QC artifacts and allow baseline inspection:
+    `complete_phase(phaseName = "01_INSPECT", summary = "Data ingestion complete. Ingested dataset, audited operations history (normalization and imputation status), verified sample groups in sample_names, scaffolded sample grouping and contrast template in docs/experiment.md Section 3, generated count diagnostic plot, and persisted data/tidyproteomics_data.rds.")`

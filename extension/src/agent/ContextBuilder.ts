@@ -90,8 +90,8 @@ ${notes || "No prior execution notes found. Initialize if this is Phase 0 or Pha
 ### docs/llm.md (ACTIVE MODEL & AGENT SPECIFICATION - READ ONLY):
 ${llm || "No active model summary found."}
 
-### docs/experiment.md (USER EXPERIMENT & DATASET SPECIFICATION - READ ONLY):
-${experiment || "No user experiment design provided. Note: This file is strictly user-maintained; do not create or overwrite it."}
+### docs/experiment.md (USER EXPERIMENT & DATASET SPECIFICATION):
+${experiment || "No user experiment design provided. Note: Sections 1 & 2 are strictly user-maintained. The agent may append or update Section 3 to scaffold sample grouping, renaming, and contrast suggestions for user confirmation."}
 ${this.buildLiteratureSection()}
 `.trim();
 
@@ -124,8 +124,9 @@ ${phaseContent}
   Created: YYYY-MM-DD HH:MM
   Author: PROVIDER | LLM-MODEL
   Agent: TidyProteomicsAgent vX.X.X
+- In docs/experiment.md: Never overwrite or modify Sections 1 & 2 (user hypotheses and dataset parameters). You are authorized and instructed to append or update Section 3 (Sample Grouping, Recoding & Contrast Designations) to scaffold discovered sample groups, renaming/pooling tables, and suggested contrast pairs for user review.
 - Once all checkpoints for this phase are satisfied and verified, invoke complete_phase(phaseName = "${normalizedPhaseName}", summary = "...").
-- If a mandatory pre-flight gate, configuration prerequisite, or checkpoint fails and requires user intervention (such as unconfigured placeholders in docs/experiment.md), immediately invoke fail_phase(phaseName = "${normalizedPhaseName}", reason = "...", actionableInsights = "...") to halt execution and present actionable insights to the user.
+- If a mandatory pre-flight gate, configuration prerequisite, or checkpoint fails and requires user intervention (such as unconfigured placeholders or ambiguous/confounded contrasts in docs/experiment.md), scaffold concrete suggestions directly into Section 3 of docs/experiment.md, then immediately invoke fail_phase(phaseName = "${normalizedPhaseName}", reason = "...", actionableInsights = "...") to halt execution and present actionable insights to the user.
 `.trim();
 
     return {

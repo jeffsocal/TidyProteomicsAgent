@@ -422,9 +422,61 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
                 fs.writeFileSync(targetPath, "", "utf-8");
               }
               const doc = await vscode.workspace.openTextDocument(targetPath);
-              await vscode.window.showTextDocument(doc);
+              let selection: vscode.Range | undefined;
+              if (data.line && data.line > 0) {
+                const lineNum = Math.min(data.line - 1, doc.lineCount - 1);
+                selection = new vscode.Range(lineNum, 0, lineNum, 0);
+              } else if (data.searchText) {
+                const text = doc.getText();
+                const idx = text.indexOf(data.searchText);
+                if (idx !== -1) {
+                  const pos = doc.positionAt(idx);
+                  selection = new vscode.Range(pos, pos);
+                }
+              }
+              const editor = await vscode.window.showTextDocument(doc, selection ? { selection } : undefined);
+              if (selection) {
+                editor.revealRange(selection, vscode.TextEditorRevealType.InCenter);
+              }
             } catch (err: any) {
               vscode.window.showErrorMessage(`TidyProteomicsAgent: Could not open ${targetRelPath}: ${err.message}`);
+            }
+            break;
+          }
+          case "authorizeConfoundingAndRerun": {
+            if (!this.workspaceRoot) return;
+            const expPath = path.join(this.workspaceRoot, "docs", "experiment.md");
+            try {
+              if (fs.existsSync(expPath)) {
+                let content = await fs.promises.readFile(expPath, "utf-8");
+                let updated = false;
+                if (content.includes("Proceed With Potential Batch Confounding**: FALSE")) {
+                  content = content.replace(
+                    "Proceed With Potential Batch Confounding**: FALSE",
+                    "Proceed With Potential Batch Confounding**: TRUE"
+                  );
+                  updated = true;
+                } else if (content.includes("Authorize Unadjusted Exploratory Comparison**: FALSE")) {
+                  content = content.replace(
+                    "Authorize Unadjusted Exploratory Comparison**: FALSE",
+                    "Authorize Unadjusted Exploratory Comparison**: TRUE"
+                  );
+                  updated = true;
+                }
+                if (updated) {
+                  await fs.promises.writeFile(expPath, content, "utf-8");
+                  vscode.window.showInformationMessage("TidyProteomicsAgent: Batch confounding authorized in docs/experiment.md. Rerunning phase...");
+                }
+              }
+              const phaseId = data.phaseId;
+              if (phaseId && this.orchestrator) {
+                await this.syncActiveModelSummary();
+                this.orchestrator.runSinglePhase(phaseId).catch((err) => {
+                  vscode.window.showErrorMessage(`TidyProteomicsAgent: Phase execution error - ${err.message}`);
+                });
+              }
+            } catch (err: any) {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: Could not update docs/experiment.md: ${err.message}`);
             }
             break;
           }
@@ -1623,6 +1675,23 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       border-color: rgba(239, 68, 68, 0.7) !important;
       color: #ffffff !important;
     }
+    .btn-insight-action-primary {
+      background: rgba(34, 197, 94, 0.25) !important;
+      color: #ffffff !important;
+      border: 1px solid rgba(34, 197, 94, 0.55) !important;
+      border-radius: 3px !important;
+      padding: 2px 7px !important;
+      font-size: 9.5px !important;
+      font-weight: 600 !important;
+      cursor: pointer;
+      line-height: 1.3 !important;
+      transition: all 0.15s ease;
+    }
+    .btn-insight-action-primary:hover {
+      background: rgba(34, 197, 94, 0.45) !important;
+      border-color: rgba(34, 197, 94, 0.85) !important;
+      color: #ffffff !important;
+    }
     .task-left {
       display: flex;
       align-items: center;
@@ -2565,7 +2634,11 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
           if (fileName) vscode.postMessage({ type: "openPhase", fileName: fileName });
         } else if (action === "openFile") {
           const relPath = target.getAttribute("data-path");
-          if (relPath) vscode.postMessage({ type: "openFile", relPath: relPath });
+          const searchText = target.getAttribute("data-search");
+          if (relPath) vscode.postMessage({ type: "openFile", relPath: relPath, searchText: searchText || "" });
+        } else if (action === "authorizeConfoundingAndRerun") {
+          const phaseId = target.getAttribute("data-phase-id");
+          if (phaseId) vscode.postMessage({ type: "authorizeConfoundingAndRerun", phaseId: phaseId });
         }
         return;
       }
@@ -3330,10 +3403,15 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
 
                 const hasExpDoc = /experiment\.md/i.test(errorText);
                 const hasNotesDoc = /notes\.md/i.test(errorText);
+                const isConfounding = /confound|Proceed With Potential Batch Confounding|Authorize Unadjusted Exploratory Comparison/i.test(errorText);
 
                 let linksHtml = "";
                 if (hasExpDoc) {
-                  linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/experiment.md">Edit docs/experiment.md ↗</button>';
+                  const searchPrompt = isConfounding ? "Proceed With Potential Batch Confounding" : "REQUIRED";
+                  linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/experiment.md" data-search="' + searchPrompt + '" title="Open docs/experiment.md and jump directly to relevant section">Edit docs/experiment.md ↗</button>';
+                }
+                if (isConfounding) {
+                  linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="authorizeConfoundingAndRerun" data-phase-id="' + escapeHtml(p.id) + '" title="Set Proceed With Potential Batch Confounding to TRUE in docs/experiment.md and automatically rerun this phase">⚡ Authorize &amp; Rerun</button>';
                 }
                 if (hasNotesDoc) {
                   linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/notes.md">View docs/notes.md ↗</button>';

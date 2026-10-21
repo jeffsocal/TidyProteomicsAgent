@@ -97,7 +97,6 @@ class ToolRegistry {
         const resolved = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(root, filePath);
         const normalizedRel = root ? path.relative(path.resolve(root), resolved).replace(/\\/g, "/") : filePath.replace(/\\/g, "/");
         const PROTECTED_FILES = [
-            "docs/experiment.md",
             "docs/llm.md",
             "agent/PROTOCOL.md",
             "agent/SKILL.md",

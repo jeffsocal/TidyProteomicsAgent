@@ -4,41 +4,96 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
 
 ---
 
-#### Phase 4.1: Contrast Formulation & Group Verification
+#### Phase 4.1: Contrast Formulation, Sample Recoding & Group Verification
 - Load the imputed dataset from Phase 3:
   ```r
   imp_data <- readRDS("data/tidyproteomics_data.rds")
+  raw_sample_names <- get_sample_names(imp_data)
+  cat("Raw sample groups in data:\n")
+  print(raw_sample_names)
   ```
-- Inspect available sample groups from `get_sample_names(imp_data)` and confirm alignment with the study design decided in Phase 1 (`docs/experiment.md` and `docs/notes.md`):
+
+- **Parse Sample Group Renaming & Pooling Map (`docs/experiment.md` Section 3)**:
+  If raw sample groups embed technical batch tags (e.g. `_batch5`, `_run1`) or need pooling into clean biological groups:
   ```r
+  # Ingest sample renaming map from docs/experiment.md Section 3 if enabled:
+  exp_file <- "docs/experiment.md"
+  apply_pooling <- TRUE
+  if (file.exists(exp_file)) {
+    pool_lines <- grep("Reassign Sample Names According to (Sample Group Renaming & )?Pooling Map", readLines(exp_file, warn = FALSE), value = TRUE)
+    if (length(pool_lines) > 0 && grepl("FALSE", pool_lines[1], ignore.case = TRUE)) {
+      apply_pooling <- FALSE
+    }
+  }
+
+  if (apply_pooling && file.exists(exp_file)) {
+    exp_lines <- readLines(exp_file, warn = FALSE)
+    table_idx <- grep("^\\|\\s*Raw Sample Group", exp_lines)
+    if (length(table_idx) > 0) {
+      table_lines <- exp_lines[table_idx:length(exp_lines)]
+      blank_idx <- grep("^\\s*$", table_lines)
+      if (length(blank_idx) > 0 && blank_idx[1] > 1) {
+        table_lines <- table_lines[1:(blank_idx[1] - 1)]
+      }
+      if (length(table_lines) >= 3) {
+        recode_df <- tryCatch(
+          read.table(text = table_lines, sep = "|", header = TRUE, strip.white = TRUE, comment.char = "", stringsAsFactors = FALSE),
+          error = function(e) NULL
+        )
+        if (!is.null(recode_df) && ncol(recode_df) >= 3) {
+          raw_vals <- trimws(recode_df[[2]])
+          clean_vals <- trimws(recode_df[[3]])
+          valid <- nzchar(raw_vals) & nzchar(clean_vals) & !grepl("^-+$", raw_vals)
+          for (i in which(valid)) {
+            r_name <- raw_vals[i]
+            c_name <- clean_vals[i]
+            if (r_name != c_name && any(imp_data$experiments$sample == r_name)) {
+              imp_data$experiments$sample[imp_data$experiments$sample == r_name] <- c_name
+            }
+          }
+        }
+      }
+    }
+  }
+
   sample_names <- get_sample_names(imp_data)
-  cat("Available sample groups:\n")
+  cat("Active sample groups for analysis:\n")
   print(sample_names)
   ```
-- Define contrast pairs as a list of two-element vectors representing `c(treatment, control)`:
+
+- **Define Contrast Pairs & Verify Design Identifiability**:
+  Define contrast pairs as a list of two-element vectors representing `c(treatment, control)`:
   ```r
-  # 1. Single comparison:
+  # Single comparison:
   # pairs <- list(c("<treatment_group>", "<control_group>"))
 
-  # 2. Multi-group / multi-arm screen (e.g. comparing multiple perturbations to control or each other):
-  # pairs <- list(
-  #   c("drug_a", "vehicle"),
-  #   c("drug_b", "vehicle"),
-  #   c("drug_a", "drug_b")
-  # )
-
-  # 3. Factorial design (e.g. Genotype x Treatment):
-  # Form composite groups (e.g. WT_vehicle, WT_treated, KO_vehicle, KO_treated) and define pairwise arms:
-  # pairs <- list(
-  #   c("WT_treated", "WT_vehicle"),
-  #   c("KO_treated", "KO_vehicle"),
-  #   c("KO_vehicle", "WT_vehicle")
-  # )
+  # Multi-group / multi-arm screen:
+  # pairs <- list(c("drug_a", "vehicle"), c("drug_b", "vehicle"))
 
   treatment_group <- "<decided_treatment_group>"
   control_group <- "<decided_control_group>"
   pairs <- list(c(treatment_group, control_group))
   ```
+
+- **Pre-flight Gate & Scaffolding Policy**:
+  - If `docs/experiment.md` does not specify target contrasts, or if disease condition is confounded with batch (e.g. all controls in one batch, all disease in different batches) and `Proceed With Potential Batch Confounding: TRUE` (or `Authorize Unadjusted Exploratory Comparison: TRUE`) has NOT been confirmed:
+    1. **Scaffold Section 3 in `docs/experiment.md`**: If not already scaffolded during Phase 1, ensure Section 3 of `docs/experiment.md` is populated using standardized visual badges:
+       - Section 3.A: `ℹ️ [AUTO-GENERATED REFERENCE - READ ONLY]:` with discovered raw sample groups.
+       - Section 3.B: `👉 [USER REVIEW & EDIT TABLE]:` with a suggested **Sample Group Renaming & Pooling Map** table (e.g. pooling `active_necrotic granuloma_batch5`, `batch6`, `batch9` -> `active necrotic granuloma`, and `healthy_healthy_batch8` -> `healthy`), and `👉 [USER TOGGLE]:` with `- **Reassign Sample Names According to Pooling Map**: TRUE`.
+       - Section 3.C: `👉 [USER ACTION REQUIRED - DEFINE TARGET CONTRASTS]:` with suggested **Target Contrasts** (`active necrotic granuloma` vs `healthy`).
+       - Section 3.D: `⚠️ [PRE-FLIGHT GATE DECISION]:` with `- **Proceed With Potential Batch Confounding**: FALSE` (strictly as a clean boolean with no inline notes or explanations).
+    2. **Halt execution cleanly via `fail_phase()`**:
+       ```r
+       fail_phase(
+         phaseName = "04_EXPRESSION", 
+         reason = "Pre-flight Gate: Batch confounding detected between treatment and control cohorts.",
+         actionableInsights = "ACTION REQUIRED:
+  1. Open docs/experiment.md.
+  2. In Section 3.D, change `- **Proceed With Potential Batch Confounding**: FALSE` to `TRUE` (or adjust contrast definitions in Section 3.C).
+  3. Re-run Phase 4."
+       )
+       ```
+    3. Do NOT proceed to calculate linear models until Section 3 has been confirmed by the user.
 
 #### Phase 4.2: Empirical Bayes Differential Expression & Pass-Through Audit
 - Check if differential expression results have already been computed for the designated contrast(s) in upstream operations:

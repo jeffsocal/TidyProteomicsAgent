@@ -138,9 +138,28 @@ Direct slot access (`tp_data$experiments`, `tp_data$quantitative`, etc.) violate
 - **Gate Failure & Halting Protocol (`fail_phase`)**:
   - If a mandatory pre-flight gate, immutable specification prerequisite (e.g. `docs/experiment.md` containing `[REQUIRED:` placeholders), or unrecoverable error requires user intervention:
     1. Do NOT loop, repeat commands, or attempt redundant verifications.
-    2. Record the blocked status and failure reason in `docs/notes.md`.
-    3. Immediately invoke `fail_phase(phaseName = "<PHASE>", reason = "<REASON>", actionableInsights = "<ACTIONABLE_STEPS>")`.
-    4. State clear, concise, and actionable instructions to the researcher explaining how to fix the issue before rerunning the phase.
+    2. If the blocker in Phase 4 concerns sample group ambiguity, compound batch labels, or missing contrast definitions, ensure Section 3 of `docs/experiment.md` has concrete suggestions scaffolded (listing discovered groups, proposing clean group names by stripping batch tags, and framing suggested contrasts).
+    3. Record the blocked status and failure reason in `docs/notes.md`.
+    4. Immediately invoke `fail_phase(phaseName = "<PHASE>", reason = "<REASON>", actionableInsights = "<ACTIONABLE_STEPS>")`.
+    5. State clear, concise instructions to the researcher following the standardized `actionableInsights` 3-step checklist.
+  - **Phase Scaffolding vs. Gating**:
+    - In Phase 1 (`01_INSPECT`), discovering sample groups, batch suffixes, or confounding is normal exploratory discovery. Phase 1 must scaffold Section 3 of `docs/experiment.md`, set `- **Reassign Sample Names According to Pooling Map**: TRUE` and `- **Proceed With Potential Batch Confounding**: FALSE` as the initial defaults, and complete normally via `complete_phase`. Scaffolding in Phase 1 must NEVER trigger `fail_phase`.
+    - The pre-flight confounding authorization gate strictly belongs in Phase 4 (`04_EXPRESSION`) before calculating contrast models.
+  - **Enforce Clean Boolean Values**:
+    - The agent is strictly forbidden from appending conversational notes, caveats, or explanations to boolean configuration lines in `docs/experiment.md`. The value must strictly remain `TRUE` or `FALSE` (e.g., `- **Reassign Sample Names According to Pooling Map**: TRUE` and `- **Proceed With Potential Batch Confounding**: FALSE`). Any notes must be placed in markdown comments `<!-- ... -->` or recorded in `docs/notes.md`.
+  - **Standardize `actionableInsights` Format**:
+    - When `fail_phase` is invoked anywhere in the pipeline, require `actionableInsights` to follow a concise, standardized 3-step checklist:
+      1. Exact relative file path to edit (e.g. `docs/experiment.md`).
+      2. Exact parameter and value to set (e.g. change `- **Proceed With Potential Batch Confounding**: FALSE` to `TRUE`).
+      3. Exact phase to rerun (e.g. `Re-run Phase 4.`).
+- **`docs/experiment.md` Scaffolding & Boundary Policy**:
+  - **Sections 1 & 2** (Dataset Parameters & Hypothesis/Study Design) are strictly user-maintained; the agent must never overwrite, modify, or delete the researcher's hypotheses or input parameters.
+  - **Section 3** (Sample Grouping, Recoding & Contrast Designations) is an agent-researcher interaction area. The agent is explicitly authorized and instructed to populate and update Section 3 with discovered groups, proposed sample pooling tables (e.g. mapping `active_necrotic granuloma_batch5/6/9` -> `active necrotic granuloma`), the sample renaming toggle, suggested contrast pairs, and confounding authorization toggles for user review.
+  - **Standardized Visual Badges**: The agent must strictly preserve and use standardized visual badges in `docs/experiment.md`:
+    - `ℹ️ [AUTO-GENERATED REFERENCE - READ ONLY]` for discovered sample groups in Section 3.A.
+    - `👉 [USER REVIEW & EDIT TABLE]` and `👉 [USER TOGGLE]` for the pooling map in Section 3.B.
+    - `👉 [USER ACTION REQUIRED - DEFINE TARGET CONTRASTS]` for target contrasts in Section 3.C.
+    - `⚠️ [PRE-FLIGHT GATE DECISION]` for batch confounding authorization in Section 3.D.
 
 ---
 
