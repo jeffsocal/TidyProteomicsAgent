@@ -11,42 +11,26 @@ description: Comprehensive expert guide, complete API reference, supported forma
 
 ## 1. Core Architecture & Philosophy
 
-### Strict Data Encapsulation & Opaque Object Model
-A `tidyproteomics` object is an **opaque, encapsulated S3 data structure**. It manages high-dimensional proteomics data, sample metadata, peptide/protein accounting, biological annotations, statistical analyses, and an immutable audit trail.
-
-> [!CAUTION]
-> **NEVER ACCESS INTERNAL S3 SLOTS DIRECTLY**:
-> Direct slot extraction using `$` or `[[]]` (e.g. `data$quantitative`, `data$analysis`, `data$experiments`) is **strictly forbidden**. It bypasses data synchronization, breaks audit logging, and discards normalization/filter states.
->
-> All data queries, extractions, transformations, and visualizations **MUST** be performed using official `tidyproteomics` API methods.
-
-### Anti-Patterns vs. Canonical API Replacements
-
-| Forbidden Anti-Pattern | Required Canonical Replacement | Rationale |
-| :--- | :--- | :--- |
-| `tp_data$quantitative` | `tp_data \|> subset(...) \|> as.data.frame()`<br>or `tp_data \|> export_quant()` | Preserves normalization state, filtering, and annotation joins. |
-| `tp_data$analysis` | `tp_data \|> export_analysis(...)` | Safely extracts formatted differential and enrichment results. |
-| `tp_data$experiments` / `names(...)` | `get_sample_names(tp_data)` | Canonical sample metadata accessor. |
-| `tp_data$annotations` | `get_annotation_terms(tp_data)` | Canonical functional annotation categories accessor. |
-| `tp_data$quantitative_source` | `get_quant_names(tp_data)` | Canonical quantitative normalization accessor. |
-| `tp_data$operations` | `operations(tp_data)` | Canonical audit trail accessor. |
-| `ggplot(df, aes(...)) + geom_*` | `tp_data \|> plot_pca(...)`<br>`tp_data \|> plot_volcano(...)`<br>`tp_data \|> plot_counts(...)` | Standardized proteomic algorithms and aesthetic styling. |
-| `ggsave(...)` on `plot_*()` | `tp_data \|> plot_*(destination = "png")` | Built-in saving handles file writing and returns the pipeline data object. |
+### The `tidyproteomics` S3 Object Structure
+A `tidyproteomics` object is an S3 list containing:
+- `$analyte`: Character string declaring the measurement level: `"proteins"` or `"peptides"`.
+- `$quantitative`: Tibble storing quantitative values per observation across samples and replicates (e.g., `sample`, `replicate`, `identifier`, `abundance_raw`, `abundance_normalized`, etc.).
+- `$annotations`: Tibble mapping identifiers to biological annotations (e.g., `protein`, `gene_name`, `description`, `biological_process`, `cellular_component`, `molecular_function`, `wiki_pathway`, `reactome_pathway`).
+- `$accounting`: Tibble storing peptide/PSM counts, identification confidence, and match-between-runs (MBR) flags.
+- `$experiments`: Tibble detailing sample metadata, condition labels, and raw data file associations.
+- `$operations`: Character list logging every transformation applied to the dataset (audit trail).
+- `$analysis`: List storing completed statistical comparisons, differential expression results, and enrichment computations. Expose and inspect stored analyses using `get_analyses(data)`.
 
 ### Key Principles
-1. **Pipe-First Design**: All primary operations accept the `data` object as their first argument and return an updated `tidyproteomics` object, designed for native `|>` or magrittr `%>%` pipelines.
-2. **Canonical Data Extraction**:
-   - For tabular manipulation or custom exports: `tp_data |> subset(...) |> as.data.frame()` (or `as.data.frame(shape = 'wide')`).
-   - For quantitative matrices: `tp_data |> export_quant(file_name = "abundance.csv")` or `tp_data |> extract()`.
-   - For statistical comparisons: `tp_data |> export_analysis(treatment/control, .analysis = "expression")`.
-3. **Concise Object State via `print(data)`**: Calling `print(data)` (or entering `data` at the console) exposes a concise, structured summary displaying data contents (origin, analyte, file count, memory footprint, dynamic range, % missing values), sample names, number of proteins/peptides, imputed method (e.g., `*imputed via randomforest`), automatic normalization selection (e.g., `*normalized loess`), and biological annotations.
-4. **Data Quality & Normalization Checks via `summary(data)`**: `summary(data)` is the core quality assessment tool. Use `summary(data)` or `summary(data, "sample")` as a data quality check (replicate counts, quantifiable fraction, CV, and PC1 & PC2 separation), `summary(data, contamination = 'CRAP')` as a contaminant quality check, and `summary(data, "normalization")` as a normalization check to compare candidate normalizations on CV reduction and PCA variance.
-5. **Non-Destructive Transformations**: Normalizations and imputations do not overwrite raw values by default; they add new states, tracked and queried via `get_quant_names(data)`.
-6. **Audit Trail**: Every filtering, normalization, imputation, and analysis step is automatically appended to the operation history. Retrieve this history at any time using `operations(data)`.
-7. **Quasiquotation & Tidy Evaluation**: Functions like `subset()`, `expression()`, and `export_analysis()` support unquoted expressions, formulas, and tidyverse syntax.
-8. **Plotting Pipeline & Built-In Saving (`plot_save`)**: All `plot_*()` functions inherit saving arguments directly from `plot_save()` (`destination = c("plot", "save", "png", "svg", "tiff", "jpeg")`, `height`, `width`). When saving (`destination = "save"`, `"png"`, etc.), the plot is saved to disk and the function returns the **`tidyproteomics` data object**, enabling pipeline concatenation of multiple plots at once (`data %>% plot_counts(destination = "png") %>% plot_pca(destination = "png")`). However, if not captured (assigned or wrapped in `invisible()`), the final returned `data` object will trigger `print(data)` at the console. **Never apply `ggsave()` to `plot_*()` outputs**—saving is handled internally, and saving mode returns the `tidyproteomics` data object, not a ggplot object.
-9. **Batch Automation Architecture (`automating.Rmd`)**: Native support for batch differential analysis across arbitrary contrast matrices via `.pairs = list(c('A', 'control'), c('B', 'control'), ...)` and multi-term pathway annotations via `.terms = c('biological_process', 'reactome_pathway', ...)`. End-to-end pipelines seamlessly chain into `analyze_expressions()` and `analyze_enrichments()` to automatically output publication-ready volcano plots, multi-term summary bar charts, and CSV tables for all pairs directly to disk in a single execution.
-10. **Visual-to-Analytical Data Extraction (`extracting.Rmd`)**: Transition from high-level Venn/Euler visualizations (`plot_venn()`, `plot_euler()`) to targeted data extraction of specific overlapping or exclusive segments via `intersection(.include = ..., .exclude = ...)`. Because `intersection()` returns a valid, filtered `tidyproteomics` object (with synchronized quantitative, accounting, and experiment files), you can immediately pipe it into downstream analyses or extract tidy long tibbles via `extract(na.rm = TRUE)`.
+1. **Pipe-First Design**: All primary operations accept the `data` object as their first argument and return an updated `tidyproteomics` object, designed for magrittr `%>%` pipelines.
+2. **Concise Object State via `print(data)`**: Calling `print(data)` (or entering `data` at the console) exposes a concise, structured summary displaying data contents (origin, analyte, file count, memory footprint, dynamic range, % missing values), sample names, number of proteins/peptides, imputed method (e.g., `*imputed via randomforest`), automatic normalization selection (e.g., `*normalized loess`), and biological annotations.
+3. **Data Quality & Normalization Checks via `summary(data)`**: `summary(data)` is the core quality assessment tool. Use `summary(data)` or `summary(data, "sample")` as a data quality check (replicate counts, quantifiable fraction, CV, and PC1 & PC2 separation), `summary(data, contamination = 'CRAP')` as a contaminant quality check, and `summary(data, "normalization")` as a normalization check to compare candidate normalizations on CV reduction and PCA variance.
+4. **Non-Destructive Transformations**: Normalizations and imputations do not overwrite raw values by default; they add new columns or states (e.g., `abundance_normalized`), tracked via `data$quantitative_source`.
+5. **Audit Trail**: Every filtering, normalization, imputation, and analysis step is automatically appended to `$operations`. Retrieve this history at any time using `operations(data)`.
+6. **Quasiquotation & Tidy Evaluation**: Functions like `subset()`, `expression()`, and `export_analysis()` support unquoted expressions, formulas, and tidyverse syntax.
+7. **Plotting Pipeline & Built-In Saving (`plot_save`)**: All `plot_*()` functions inherit saving arguments directly from `plot_save()` (`destination = c("plot", "save", "png", "svg", "tiff", "jpeg")`, `height`, `width`). When saving (`destination = "save"`, `"png"`, etc.), the plot is saved to disk and the function returns the **`tidyproteomics` data object**, enabling pipeline concatenation of multiple plots at once (`data %>% plot_counts(destination = "png") %>% plot_pca(destination = "png")`). However, if not captured (assigned or wrapped in `invisible()`), the final returned `data` object will trigger `print(data)` at the console. **Never apply `ggsave()` to `plot_*()` outputs**—saving is handled internally, and saving mode returns the `tidyproteomics` data object, not a ggplot object.
+8. **Batch Automation Architecture (`automating.Rmd`)**: Native support for batch differential analysis across arbitrary contrast matrices via `.pairs = list(c('A', 'control'), c('B', 'control'), ...)` and multi-term pathway annotations via `.terms = c('biological_process', 'reactome_pathway', ...)`. End-to-end pipelines seamlessly chain into `analyze_expressions()` and `analyze_enrichments()` to automatically output publication-ready volcano plots, multi-term summary bar charts, and CSV tables for all pairs directly to disk in a single execution.
+9. **Visual-to-Analytical Data Extraction (`extracting.Rmd`)**: Transition from high-level Venn/Euler visualizations (`plot_venn()`, `plot_euler()`) to targeted data extraction of specific overlapping or exclusive segments via `intersection(.include = ..., .exclude = ...)`. Because `intersection()` returns a valid, filtered `tidyproteomics` object (with synchronized quantitative, accounting, and experiment files), you can immediately pipe it into downstream analyses or extract tidy long tibbles via `extract(na.rm = TRUE)`.
 
 
 ---
@@ -124,28 +108,13 @@ Exports the primary quantitative abundance matrix as a tibble or table file (`.x
 - **`scaled`**: Scaling method: `'none'`, `'between'`, or `'proportion'`.
 - **Returns**: Tibble (if `file_name` is NULL) or writes file and returns tibble.
 
-#### `export_analysis(data, ..., .analysis, .term = NULL, file_name = NULL)`
+#### `export_analysis(data, ..., .analysis, file_name = NULL)`
 Exports statistical analysis results (differential expression, enrichment).
 - **`data`**: `tidyproteomics` data object.
 - **`...`**: Two-sample comparison expression (e.g., `knockdown/control`).
 - **`.analysis`**: `"expression"` or `"enrichment"`.
-- **`.term`**: Character string specifying the annotation category to export. **Mandatory** when `.analysis = "enrichment"` (e.g., `.term = "biological_process"`).
 - **`file_name`**: Optional destination file name (`.xlsx`, `.csv`, `.tsv`, `.rds`).
 - **Returns**: Tibble of analysis results.
-
-> [!TIP]
-> **Exporting Multi-Category Enrichment**:
-> To export calculated enrichment categories into a single consolidated tibble:
-> ```r
-> terms <- get_annotation_terms(data)
-> enr_tbl <- dplyr::bind_rows(lapply(terms, function(t) {
->   tryCatch(
->     export_analysis(data, knockdown/control, .analysis = "enrichment", .term = t) %>%
->       dplyr::mutate(term = t, .before = 1),
->     error = function(e) NULL
->   )
-> }))
-> ```
 
 #### `export_compexp(data, ..., file_name = NULL)`
 Exports comparative expression data between multiple pairwise comparisons.
@@ -180,9 +149,9 @@ Utility function to export any data frame or tibble to `.csv`, `.tsv`, or `.xlsx
 Returns the absolute path to bundled package example datasets (`"proteins"`, `"peptides"`, `"fasta"`, `"SKILL"`).
 
 #### `extract(data, values = NULL, na.rm = FALSE)`
-Extracts quantitative abundance data into a clean, tidy long-format `tibble`. Designed for direct interoperability with standard `tidyverse` pipelines (`dplyr`, `readr::write_csv`).
+Extracts quantitative abundance data from the internal `$quantitative` store into a clean, tidy long-format `tibble`. Designed for direct interoperability with standard `tidyverse` pipelines (`dplyr`, `ggplot2`, `readr::write_csv`).
 - **`data`**: `tidyproteomics` data object.
-- **`values`**: Character vector of quantitative columns to extract (e.g., `"raw"`, `"median"`, `"linear"`, `"loess"`). If `NULL` (default), extracts the active quantitative normalization.
+- **`values`**: Character vector of quantitative columns to extract (e.g., `"raw"`, `"median"`, `"linear"`, `"loess"`). If `NULL` (default), extracts the active quantitative source (`data$quantitative_source`).
   - *Single method*: Returns columns `sample`, `replicate`, identifier (`protein` or `peptide`), `abundance`, and `origin`.
   - *Multiple methods* (e.g., `values = c("raw", "median", "loess")`): Melts all requested normalizations into a single long tibble with an ordered factor column `origin`, ideal for direct visual comparison of normalization effects.
 - **`na.rm`**: Logical (default `FALSE`). When `TRUE`, removes missing or non-positive abundance values (`!is.na(abundance) & abundance > 0`).
@@ -199,21 +168,15 @@ data %>% extract(na.rm = TRUE) %>% readr::write_csv("tidy_abundance.csv")
 ```
 
 #### `as.data.frame(x, row.names = NULL, optional = FALSE, shape = c('long', 'wide'), values = NULL, drop = NULL, ...)` (S3 method)
-Converts a `tidyproteomics` data object into a standard `data.frame` for seamless integration into custom R workflows or pipeline export.
+Converts a `tidyproteomics` data object into a standard `tibble` / `data.frame` for seamless integration into custom R workflows.
 - **`shape`**: Format of the quantitative matrix:
   - `'long'` (default): One observation per row with sample metadata, accounting, and annotations joined.
   - `'wide'`: One row per protein/peptide with sample quantities spread across columns.
-- **`values`**: Normalization method to include (e.g. `'raw'`, `'median'`, `'loess'`). Defaults to the active quantitative normalization.
+- **`values`**: Normalization method to include (e.g. `'raw'`, `'median'`, `'loess'`). Defaults to the active quantitative source (`data$quantitative_source`).
 - **`drop`**: Character vector of accounting or annotation columns to exclude from the resulting data frame.
 ```r
 # Convert to long tibble
 df_long <- data %>% as.data.frame() %>% tibble::as_tibble()
-
-# Canonical discovery of sample metadata and secondary experimental columns (without violating encapsulation):
-sample_meta <- data %>%
-  as.data.frame(shape = "long") %>%
-  dplyr::select(dplyr::starts_with("sample")) %>%
-  dplyr::distinct()
 
 # Convert to wide table dropping selected annotation columns
 df_wide <- data %>% as.data.frame(shape = "wide", drop = c("description", "biological_process"))
@@ -232,7 +195,7 @@ Exposes a concise, high-level structural summary of the `tidyproteomics` data ob
 - **Imputed Method**: If missing values were imputed, explicitly indicates the method used (e.g., `*imputed via randomforest`, `*imputed via min`).
 - **Automatic Normalization Selection**: Displays the active quantitative source selected automatically by `select_normalization()` or manually set (e.g., `*normalized loess`).
 - **Annotations**: Summary of all biological annotation categories present in the object (e.g., `(4) biological_process cellular_component molecular_function reactome_pathway`).
-- **Analyses**: Any completed differential expression comparisons and pathway enrichments.
+- **Analyses**: Any completed differential expression comparisons and pathway enrichments (retrieve full catalog with `get_analyses(data)`).
 
 #### `summary(object, by = c("global", "sample", "normalization", ...), contamination = NULL, ...)`
 Primary function for comprehensive **data quality checks** and **normalization checks**. Computes summary statistics returned as a tibble (or printed to console) as a passthrough function without mutating the underlying object:
@@ -250,17 +213,86 @@ Primary function for comprehensive **data quality checks** and **normalization c
 #### `operations(data)`
 Prints and returns the full sequential history of operations performed on the dataset.
 
-#### `get_quant_names(data)`
-Returns a vector of available quantitative data columns (e.g., `"raw"`, `"median"`, `"linear"`, `"loess"`).
+#### Data Object Inspection Getters (`get_*()`)
+Exposed inspection helpers to examine variables, levels, metrics, annotations, and completed analyses within a `tidyproteomics` data object. All `get_*()` functions support **`format = c("table", "vector")`**, defaulting to **`"table"`** for rich, human- and LLM-readable summary data, and supporting **`"vector"`** for programmatic comparisons, argument matching, and iteration:
 
-#### `get_sample_names(data)`
-Returns character vector of all unique sample names.
+- **`get_analyses(data, format = c("table", "vector"))`**:
+  Exposes all differential expression and pathway enrichment analyses stored in `data$analysis`.
+  - **`"table"`** (default): Returns a 4-column tibble (`comparison`, `analysis`, `term`, `method`) cataloging each stored analysis unit (e.g. `knockdown/control` with `expression` or `enrichment` by `biological_process`).
+  - **`"vector"`**: Returns a character vector of composite keys formatted as `"comparison:analysis"` or `"comparison:analysis:term"` (e.g., `c("knockdown/control:expression", "knockdown/control:enrichment:biological_process")`).
+  ```r
+  # Inspect all analyses completed on the dataset
+  data %>% get_analyses()
+  # [1] "knockdown/control:expression" "knockdown/control:enrichment:biological_process"
+  data %>% get_analyses(format = "vector")
+  ```
 
-#### `get_annotation_terms(data)`
-Returns a character vector of all biological annotation category names present in the data object (e.g., `"biological_process"`, `"cellular_component"`, `"gene_name"`, `"reactome_pathway"`, `"wiki_pathway"`). Always use this function to inspect or programmatically extract available annotation categories.
+- **`get_sample_names(data, format = c("table", "vector"))`**:
+  Returns the unique experimental sample names present in the dataset.
+  - **`"table"`** (default): Returns a tibble with `sample` and `replicates` counts.
+  - **`"vector"`**: Returns a character vector of unique sample names.
+  ```r
+  data %>% get_sample_names()
+  data %>% get_sample_names(format = "vector")
+  ```
 
-#### `get_annotations(data, term_group)`
-Filters and returns a tibble of identifiers and annotations for a specific category (`term_group`, e.g. `"biological_process"`). Note that `term_group` is required.
+- **`get_quant_names(data, format = c("table", "vector"))`**:
+  Returns all quantitative value sources available in `data$quantitative` (e.g. `"raw"`, `"median"`, `"linear"`, `"loess"`).
+  - **`"table"`** (default): Returns a tibble with `quant_name` and logical `selected` indicating which normalization is currently active.
+  - **`"vector"`**: Returns a character vector of quantitative column suffixes.
+  ```r
+  data %>% get_quant_names()
+  data %>% get_quant_names(format = "vector")
+  ```
+
+- **`get_accountings(data, format = c("table", "vector"))`**:
+  Returns all accounting metric column names present in `data$accounting` (excluding sample and identifier keys).
+  - **`"table"`** (default): Returns a tibble with `accounting` column names and their `data_type` classes.
+  - **`"vector"`**: Returns a character vector of accounting column names.
+  ```r
+  data %>% get_accountings()
+  data %>% get_accountings(format = "vector")
+  ```
+
+- **`get_annotation_terms(data, format = c("table", "vector"))`**:
+  Returns available biological annotation categories present in the object (including the primary identifier).
+  - **`"table"`** (default): Returns a tibble with `term`, `type` (`"identifier"` or `"annotation"`), and `unique_annotations` count per term, ordered by original definition.
+  - **`"vector"`**: Returns a character vector of term names.
+  ```r
+  data %>% get_annotation_terms()
+  data %>% get_annotation_terms(format = "vector")
+  ```
+
+- **`get_annotations(data, term = NULL, format = c("table", "vector"))`**:
+  Extracts all annotations for a specific biological term.
+  - **`"table"`** (default): Returns a 2-column tibble (`identifier`, `annotation`) with semicolon-separated terms expanded into individual rows.
+  - **`"vector"`**: Returns a character vector of unique annotation strings for that term.
+  ```r
+  data %>% get_annotations("biological_process")
+  data %>% get_annotations("biological_process", format = "vector")
+  ```
+
+- **`show_annotations(data)`**:
+  Displays a formatted console summary of available annotation categories.
+
+- **`get_variables(data, segment = c("experiments", "quantitative", "annotations", "accounting"), format = c("table", "vector"))`**:
+  Returns the column/variable names within a specific segment of the `tidyproteomics` data object.
+  - **`"table"`** (default): Returns a tibble with `segment` and `variable`.
+  - **`"vector"`**: Returns a character vector of variable names.
+  ```r
+  data %>% get_variables("experiments")
+  data %>% get_variables("experiments", format = "vector")
+  ```
+
+- **`get_unique_variables(data, variable = NULL, format = c("table", "vector"))`**:
+  Returns all unique values for any specified variable across the object (including expanded annotation terms).
+  - **`"table"`** (default): Returns a tibble with column `value`.
+  - **`"vector"`**: Returns a vector of unique values.
+  ```r
+  data %>% get_unique_variables("sample")
+  data %>% get_unique_variables("sample", format = "vector")
+  ```
+
 
 #### `annotate(data, annotations = NULL, duplicates = c("replace", "merge", "leave"))`
 Attaches or updates biological annotations (e.g., Gene Ontology terms, Reactome pathways, updated gene symbols/descriptions) in a `tidyproteomics` data object.
@@ -272,23 +304,8 @@ Attaches or updates biological annotations (e.g., Gene Ontology terms, Reactome 
   - `"leave"`: Retains multiple rows without merging or discarding.
 - **Returns**: Updated `tidyproteomics` data object.
 ```r
-# 1. Inspect available annotations currently attached to object
-get_annotation_terms(data)
-
-# 2. Prepare custom annotation table (Must contain columns: protein/peptide, term, annotation)
-custom_annotations <- data.frame(
-  protein = c("P55072", "P55072", "P04637"),
-  term = c("biological_process", "pathway", "biological_process"),
-  annotation = c("ERAD pathway", "VCP/p97-mediated degradation", "cellular response to DNA damage"),
-  stringsAsFactors = FALSE
-)
-
-# 3. Bind annotations into tidyproteomics object
-data <- data %>%
-  annotate(custom_annotations, duplicates = "merge")
-
-# 4. Verify that new terms are registered
-get_annotation_terms(data)
+# Add custom GO annotations formatted as identifier, term, and annotation
+data <- data %>% annotate(custom_go_table, duplicates = "merge")
 ```
 
 #### `experimental(data)` / `experimental_groups(data)`
@@ -296,16 +313,9 @@ Inspects or assigns experimental factors and groupings.
 
 #### `reassign(data, ..., .replace = NULL)`
 Modifies sample labels, groupings, or metadata mappings.
-- **Multi-Tissue / Stratified Design Recoding**:
-  If downstream phases strictly require a single persistent `.rds` object while evaluating tissue-specific contrasts, recode the `sample` column to encode tissue and condition together:
-  ```r
-  # Example: "brain_stem_necrotic", "brain_stem_control", etc.
-  data <- data |> reassign(sample = paste(sample_tissue, sample, sep = "_"))
-  ```
-  This keeps all samples in a single `tidyproteomics` object while evaluating tissue-specific contrasts.
 
 #### `origins(data, ..., .replace = NULL)`
-Assigns or modifies biological replicate or subject origin (`sample_origin`) in sample experimental metadata for each input file/run. Used critically by `expression(..., .method = "mixed-effects")` / `expression_me()` to account for repeated measures, multi-region sampling, or subject batches in linear mixed-effects models:
+Assigns or modifies biological replicate or subject origin (`sample_origin`) in `data$experiments` for each input file/run. Used critically by `expression(..., .method = "mixed-effects")` / `expression_me()` to account for repeated measures, multi-region sampling, or subject batches in linear mixed-effects models:
 ```r
 data <- data %>%
   origins(sample_file == "F1", .replace = "donor_1") %>%
@@ -313,8 +323,8 @@ data <- data %>%
   origins(sample_file == "F3", .replace = "donor_2")
 ```
 
-#### `merge(data1, data2, ...)`
-Combines multiple `tidyproteomics` data objects into a single unified object.
+#### `merge(data1, data2, ...)` / `merge_tidyproteomics(data_list, ...)`
+Combines multiple `tidyproteomics` data objects into a single unified object via S3 `merge()` dispatch or `merge_tidyproteomics()`.
 
 #### `rm.mbr(data)`
 Removes quantitative values flagged as Match-Between-Runs (MBR).
@@ -351,7 +361,7 @@ Extracts the underlying data corresponding to specific Venn and Euler diagram se
 - **`.include`**: Character vector of sample groups that *must* contain the protein.
 - **`.exclude`**: Character vector of sample groups that *must not* contain the protein.
 - **Key S3 Object Architecture Feature**:
-  `intersection()` returns a **valid, fully synchronized `tidyproteomics` data object**, not just a vector of IDs. It automatically synchronizes quantitative abundances, accounting metrics, biological annotations, and sample metadata simultaneously, updating the object so that only the samples and raw files associated with the extracted segment remain (e.g., removing unused sample files).
+  `intersection()` returns a **valid, fully synchronized `tidyproteomics` data object**, not just a vector of IDs. It automatically subsets `$quantitative`, `$accounting`, `$annotations`, and `$experiments` simultaneously, updating the object so that only the samples and raw files associated with the extracted segment remain (e.g., removing unused sample files).
 - **Core Use Cases**:
   - *Condition-Exclusive Biomarkers*: Isolate proteins uniquely identified in one group (e.g. induced in treatment or lost upon disease/knockout).
   - *Complex Multi-Group Overlaps*: Extract specific intersections across 3, 4, or more conditions (e.g., proteins present in groups A and B, but absent in C and D).
@@ -395,11 +405,7 @@ Every `plot_*()` function inherits the following parameters from `plot_save()` v
 - **`width`**: Numeric plot width in inches (default `8`, allowed range `1` to `30`).
 - **`...`**: Additional parameters forwarded to `ggplot2::ggsave()` (e.g. `dpi = 300`).
 
-Output filenames are constructed automatically using the pattern: `plot_{file_name}.{destination}`:
-- `plot_counts()` $\rightarrow$ `plot_proteins_counts.png`
-- `plot_variation_cv()` $\rightarrow$ `plot_proteins_normalizated_variation.png`
-- `plot_pca()` $\rightarrow$ `plot_proteins_{normalization}_pca_PC1PC2.png` (e.g. `plot_proteins_loess_pca_PC1PC2.png`)
-- `plot_expression()` $\rightarrow$ `plot_proteins_{normalization}_expression_{contrast}.png`
+Output filenames are constructed automatically using the pattern: `plot_{file_name}.{destination}` (e.g., `plot_proteins_counts.png`, `plot_proteins_pca.png`, `plot_proteins_volcano_knockdown_control.png`).
 
 #### Pipeline Chaining & Console Printing Behavior
 When `destination` is set to save (`"save"`, `"png"`, `"svg"`, `"tiff"`, `"jpeg"`), `plot_*()` writes the graphic to disk and **returns the original `tidyproteomics` data object**.
@@ -436,7 +442,7 @@ data %>%
 #### Available Plotting Functions
 - **`plot_counts(data, show_replicates = TRUE, impute_max = 0.5, palette = 'YlGnBu', ...)`**: Bar chart of observed proteins/peptides per sample and replicate.
 - **`plot_quantrank(data, palette = 'BuGn', ...)`**: Rank-abundance curve showing dynamic range and abundance distribution.
-- **`plot_variation_cv(data, palette = 'YlGnBu', ...)`**: Distribution of Coefficients of Variation (%CV) across replicates and candidate normalizations (generates `plot_proteins_normalizated_variation.png`). Note: Only applicable when benchmarking multiple quantitative methods (`length(get_quant_names(data)) > 1` or when raw abundance and candidate normalizations are present).
+- **`plot_variation_cv(data, palette = 'YlGnBu', ...)`**: Distribution of Coefficients of Variation (%CV) across replicates.
 - **`plot_variation_pca(data, ...)`**: Scree / variance explained plot for Principal Component Analysis.
 - **`plot_pca(data, palette = 'Set1', ...)`**: 2D PCA score plot colored by sample groups with confidence ellipses.
 - **`plot_dynamic_range(data, palette = 'YlGnBu', ...)`**: Boxplot/violin plot of dynamic range across samples.
@@ -471,7 +477,7 @@ Evaluates all computed normalization methods based on three quantitative metrics
 1. Minimizing intra-condition CVs.
 2. Minimizing PC1 variance driven by technical artifacts.
 3. Maximizing preserved dynamic range.
-If `normalization` is specified (e.g., `"median"`), manually sets the active quantitative normalization (queried via `get_quant_names(data)`).
+If `normalization` is specified (e.g., `"median"`), manually sets `data$quantitative_source`.
 
 #### `plot_normalization(data)`
 Generates comparison plots evaluating raw vs. normalized data distributions.
@@ -498,7 +504,7 @@ Computes differential protein/peptide abundance between two experimental groups.
 - **`...`**: Two-sample comparison in ratio syntax: `treatment/control` or `knockdown/wildtype`.
 - **`.method`**: Statistical test:
   - `"limma"`: Empirical Bayes moderation via Limma (recommended for proteomics).
-  - `"mixed-effects"`: Linear mixed-effects model via `MSstats` (`expression_me()`). Uses `sample_origin` defined via `origins()` as the biological subject mapping (`BioReplicate`).
+  - `"mixed-effects"`: Linear mixed-effects model via `MSstats` (`expression_me()`). Uses `sample_origin` from `data$experiments` (set via `origins()`) as the biological subject mapping (`BioReplicate`).
   - `stats::t.test`: Standard Student's or Welch's t-test.
   - `stats::wilcox.test`: Non-parametric Wilcoxon / Mann-Whitney test.
   - Custom functions: Any two-sample function taking `(x, y)` and returning a p-value.
@@ -509,7 +515,7 @@ data %>% expression(.pairs = list(c("knockdown", "control"), c("drug", "control"
 ```
 
 #### `analyze_expressions(data, labels_column = NULL, log2fc_min = 1, significance_max = 0.05, ...)`
-Automates end-to-end report generation for all completed expression analyses (`automating.Rmd`). Iterates through all pairwise comparisons (previously computed via `expression(treatment/control)` or `expression(.pairs = pairs)`), generating publication-ready volcano plots and tabular exports directly to disk.
+Automates end-to-end report generation for all expression analyses stored in `data$analysis` (`automating.Rmd`). Iterates through all pairwise comparisons (previously computed via `expression(treatment/control)` or `expression(.pairs = pairs)`), generating publication-ready volcano plots and tabular exports directly to disk.
 - **`data`**: `tidyproteomics` data object with completed `expression()` computations.
 - **`labels_column`**: Character name of the annotation column used to label top significant hits (e.g., `'gene_name'` or `'protein'`).
 - **`log2fc_min`**: Minimum absolute log2 fold-change threshold for highlighting (default `1`).
@@ -547,24 +553,6 @@ data %>%  plot_expression(knockdown/control,
                   destination = "png")
 ```
 
-> [!IMPORTANT]
-> **Saving Directional (Up vs Down) Expression Plots Without Collision**:
-> When `destination = "png"` (or `"save"`), `plot_expression()` automatically names the saved graphic `plot_proteins_{normalization}_expression_{contrast}.png`. The filename does **not** include the `regulation` argument. If you execute `plot_expression(..., regulation = "up")` followed by `plot_expression(..., regulation = "down")`, the second call will overwrite the first.
-> To retain both files, rename the output immediately after each call:
-> ```r
-> contrast_tag <- "knockdown-control"
->
-> # 1. Save and rename upregulated candidates
-> invisible(data %>% plot_expression(knockdown/control, regulation = "up", destination = "png"))
-> up_file <- list.files(pattern = "^plot_proteins_.*_expression_.*\\.png$")[1]
-> file.rename(up_file, sprintf("plot_expression_up_%s.png", contrast_tag))
->
-> # 2. Save and rename downregulated candidates
-> invisible(data %>% plot_expression(knockdown/control, regulation = "down", destination = "png"))
-> down_file <- list.files(pattern = "^plot_proteins_.*_expression_.*\\.png$")[1]
-> file.rename(down_file, sprintf("plot_expression_down_%s.png", contrast_tag))
-> ```
-
 #### `plot_compexp(data, ...)`
 Comparative scatter plot contrasting fold changes between two distinct comparisons (e.g., Treatment A vs. Treatment B against common Control).
 
@@ -579,36 +567,13 @@ Tests for over-representation or rank enrichment of functional annotation terms.
   - `"wilcoxon"`: Wilcoxon rank-sum test on protein fold changes.
   - `"fishersexact"`: 2x2 contingency table test on significant vs. non-significant proteins.
 - **`.terms`**: Single term or character vector of multiple annotation categories:
-```r
-# Multi-Term Functional Pathway Enrichment Code Pattern
-# Ensure at least 3 distinct annotation categories are selected:
-selected_terms <- c(
-  "biological_process",
-  "cellular_component",
-  "molecular_function",
-  "reactome_pathway",
-  "wiki_pathway"
-)
-
-# Contrast definition:
-pairs <- list(c("knockdown", "control"))
-
-# Compute differential expression followed by multi-category enrichment:
-analyzed_data <- data %>%
-  expression(.pairs = pairs, .method = "limma") %>%
-  enrichment(
-    .pairs = pairs,
-    .terms = selected_terms,
-    .method = "wilcoxon",
-    .cpu_cores = 4
-  )
-
-# Verify operations audit history:
-operations(analyzed_data)
-```
+  ```r
+  .terms = c("biological_process", "cellular_component", "molecular_function", "wiki_pathway", "reactome_pathway")
+  ```
+- **`.pairs`**: List of 2-element character vectors for automated batch testing across multiple comparisons.
 
 #### `analyze_enrichments(data, significance_max = 0.05, top_n = 50, enriched_up_color = 'blue', enriched_down_color = 'red', ...)`
-Automates end-to-end pathway report generation across all pairwise comparisons and annotation terms stored in the data object (`automating.Rmd`). Iterates through all computed enrichments, outputting CSV data tables and a consolidated summary figure.
+Automates end-to-end pathway report generation across all pairwise comparisons and annotation terms stored in `data$analysis` (`automating.Rmd`). Iterates through all computed enrichments, outputting CSV data tables and a consolidated summary figure.
 - **`data`**: `tidyproteomics` data object with completed `enrichment()` calculations.
 - **`significance_max`**: Adjusted p-value cutoff for significance highlighting (default `0.05`).
 - **`top_n`**: Number of top terms to display per contrast in the summary plot (default `50`).
@@ -617,22 +582,6 @@ Automates end-to-end pathway report generation across all pairwise comparisons a
   - `table_proteins_enrichment_<contrast>.csv`: Full enrichment results per contrast and term.
   - `proteins_enrichment_<contrast>.png`: A single composite, multi-term horizontal bar plot summarizing all tested annotation categories side-by-side, color-coded by up/down regulation and significance.
 - **Returns**: Invisibly returns the input `data` object, allowing it to terminate an automated pipeline.
-
-```r
-# Automated Export of Expression and Multi-Term Enrichment Results
-analyzed_data %>%
-  analyze_expressions(
-    labels_column = "gene_name",
-    log2fc_min = 1.0,
-    significance_max = 0.05
-  ) %>%
-  analyze_enrichments(
-    significance_max = 0.05,
-    top_n = 30,
-    enriched_up_color = "blue",
-    enriched_down_color = "red"
-  )
-```
 
 
 #### `plot_enrichment(data, ...)`
@@ -794,7 +743,7 @@ my_data %>%
   plot_venn(destination = "png")
 
 # 2. Extract single-condition exclusive proteins (e.g. Unique to 'control', absent in 'knockdown')
-# intersection() synchronizes all abundances, accounting, annotations, and sample metadata simultaneously
+# intersection() trims $quantitative, $accounting, $annotations, and $experiments simultaneously
 control_exclusive <- my_data %>%
   subset(imputed == 0) %>%
   intersection(.include = c("control"), .exclude = c("knockdown"))
@@ -871,13 +820,10 @@ When using an LLM or AI coding agent (e.g., Antigravity, Claude, ChatGPT, Gemini
    ```r
    tidyproteomics::export_llm_skill()
    ```
-13. **Standard Workspace & Directory Architecture**:
-   When executing multi-phase analysis workflows with automated agents or reproducible pipelines, organize project deliverables into standardized subdirectories:
-   - `code/`: All executable R scripts (`00_install.R`, `01_inspect.R`, `02_normalize.R`, `03_impute.R`, `04_expression.R`, `05_enrichment.R`, `06_observations.R`, etc.).
-   - `logs/`: Persistent execution logs capturing full stdout/stderr from scripts.
-   - `data/`: Single persistent tidyproteomics object (`tidyproteomics_data.rds`), summary tables (`*.csv`), figures (`*.png`).
-   - `docs/`: Analysis notes, active model summary (`llm.md`), experimental hypothesis & dataset parameters (`experiment.md`), primary observations (`observations.md`), internal knowledge (`knowledge.md`), web search corroboration (`websearch.md`), literature database interrogation (`literature.md`), execution benchmarks (`notes.md`), and final scientific manuscripts (`scientific_report.md`).
-   - `agent/`: Complete agent instruction suite (`PROTOCOL.md`, `SKILL.md`, etc.).
+13. **Data Object Inspection Getters (`get_*()`)**:
+   All `get_*()` functions (`get_analyses()`, `get_sample_names()`, `get_quant_names()`, `get_accountings()`, `get_annotation_terms()`, `get_annotations()`, `get_variables()`, `get_unique_variables()`) support `format = c("table", "vector")`, defaulting to `"table"`.
+   - Use the default `"table"` format when inspecting the object interactively or presenting summary tables to users or LLMs (e.g. `get_analyses(data)` to inspect completed pairwise comparisons and terms).
+   - Use `format = "vector"` when passing getter outputs into programmatic checks, vector arguments, or string comparisons (e.g., `check_pairs()`, `rlang::arg_match()`, `%in%`, `setdiff()`).
 
 ---
 
@@ -915,7 +861,7 @@ Please provide a minimal, executable R script that:
 3. Runs `print(data)` to inspect the concise summary of data contents, sample names, number of proteins, imputed method, automatic normalization selection, and annotations.
 4. Runs `summary("sample")` as a data quality check to inspect replicate-level counts, CVs, and PCA separation.
 5. Prints all unique sample names using `get_sample_names()`.
-6. Prints available annotation categories using `get_annotation_terms()`.
+6. Prints available annotation categories using `show_annotations()`.
 7. Checks for potential sample contaminants using `summary(contamination = 'CRAP')`.
 
 I will run this script in R and share the console output with you so we can design the comparative analysis.

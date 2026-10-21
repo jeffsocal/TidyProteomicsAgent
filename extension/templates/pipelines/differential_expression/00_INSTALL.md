@@ -21,8 +21,8 @@ Execute workspace validation, enforce research specification gates, and establis
   - Check that `docs/experiment.md` exists and defines both the dataset parameters and the experimental hypothesis/study design:
     - **Dataset Parameters**:
       - `PATH_TO_DATA_FILE`: Must NOT contain `[REQUIRED:` or placeholder tokens. If local path, confirm the file exists; if URL (HTTP/HTTPS), confirm it is a well-formed URL.
-      - `PLATFORM`: Must NOT contain `[REQUIRED:`. Must specify the mass spectrometry search platform (e.g. `ProteomeDiscoverer`, `MaxQuant`, `DIA-NN`, `Spectronaut`, `FragPipe`).
-      - `ANALYTE`: Must NOT contain `[REQUIRED:`. Must specify either `proteins` or `peptides`.
+      - `PLATFORM`: Must NOT contain `[REQUIRED:`. Must specify the mass spectrometry search platform (e.g. `ProteomeDiscoverer`, `MaxQuant`, `DIA-NN`, `Spectronaut`, `FragPipe`, or `tidyproteomics` / `rds` for pre-processed R data objects).
+      - `ANALYTE`: Must NOT contain `[REQUIRED:`. Must specify either `proteins` or `peptides` (or state analyte inherited from pre-processed RDS object).
     - **Hypothesis & Study Design**:
       - Must contain the researcher's experimental hypothesis, biological model, and study design.
       - **Gate Check**: Verify that `docs/experiment.md` does **NOT** contain unedited `[REQUIRED:` placeholder tokens anywhere in the file and is not blank or whitespace-only.

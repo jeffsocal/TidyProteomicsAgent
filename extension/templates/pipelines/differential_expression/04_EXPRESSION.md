@@ -40,14 +40,36 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
   pairs <- list(c(treatment_group, control_group))
   ```
 
-#### Phase 4.2: Empirical Bayes Differential Expression
-- Compute differential expression via linear models with empirical Bayes moderation:
+#### Phase 4.2: Empirical Bayes Differential Expression & Pass-Through Audit
+- Check if differential expression results have already been computed for the designated contrast(s) in upstream operations:
   ```r
-  stat_data <- imp_data %>%
-    expression(.pairs = pairs, .method = "limma")
+  ops <- operations(imp_data)
+
+  # Audit whether differential expression is pre-existing for each target pair:
+  all_pairs_computed <- TRUE
+  for (pair in pairs) {
+    contrast_str <- paste0(pair[1], "/", pair[2])
+    has_pair <- tryCatch({
+      tbl <- export_analysis(imp_data, contrast_str, .analysis = "expression")
+      !is.null(tbl) && nrow(tbl) > 0
+    }, error = function(e) FALSE)
+    if (!has_pair) {
+      all_pairs_computed <- FALSE
+      break
+    }
+  }
+
+  if (all_pairs_computed && any(grepl("expression", ops))) {
+    cat("Pre-existing differential expression results detected in tidyproteomics object history. Preserving upstream statistical calculations.\n")
+    stat_data <- imp_data
+  } else {
+    cat("Computing empirical Bayes moderated t-statistics via limma...\n")
+    stat_data <- imp_data %>%
+      expression(.pairs = pairs, .method = "limma")
+  }
   ```
   *(Note for repeated measures / paired-sample cohorts: specify subject origin in metadata and consider `expression(..., .method = "mixed-effects")`).*
-- **Checkpoint 4.2**: Verify that differential expression contrasts are successfully computed and recorded in `operations(stat_data)`.
+- **Checkpoint 4.2**: Verify that differential expression contrasts are confirmed and recorded in `operations(stat_data)`.
 
 #### Phase 4.3: Automated Export, Volcano Plots & Candidate Expression Profiles
 - **Dynamic Label Selection**:
@@ -120,4 +142,4 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
   4. Volcano and candidate expression plots (`data/*_volcano_*.png`, `data/plot_expression_up_*.png`, and `data/plot_expression_down_*.png`) exist on disk with non-zero file sizes.
   5. `docs/notes.md` contains the differential expression summary.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "04_EXPRESSION", summary = "Differential expression analysis completed. Computed moderated t-statistics, generated volcano and directional candidate expression plots, exported expression tables, and persisted data/tidyproteomics_data.rds.")`
+  - Invoke `complete_phase(phaseName = "04_EXPRESSION", summary = "Differential expression analysis/verification completed. Confirmed statistical calculations, generated volcano and directional candidate expression plots, exported expression tables, and persisted data/tidyproteomics_data.rds.")`

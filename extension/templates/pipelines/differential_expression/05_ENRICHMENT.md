@@ -61,15 +61,23 @@ Construct and execute `code/05_enrichment.R`, capturing full execution output to
   cat(sprintf("Available contrasts for pathway enrichment: %s\n", paste(available_contrasts, collapse = ", ")))
   pairs <- lapply(strsplit(available_contrasts, "/"), function(x) c(x[1], x[2]))
   ```
-- Execute non-parametric two-tailed Wilcoxon rank-sum enrichment across all targeted terms:
+- Check if pathway enrichment has already been computed in upstream operations:
   ```r
-  cores <- max(1, min(4, parallel::detectCores() - 1))
-  cat(sprintf("Executing multi-category enrichment across %d contrast(s) using %d CPU core(s)...\n", length(pairs), cores))
+  ops <- operations(stat_data)
+  already_enriched <- any(grepl("enrichment", ops))
 
-  enriched_data <- stat_data %>%
-    enrichment(.pairs = pairs, .terms = selected_terms, .method = "wilcoxon", .cpu_cores = cores)
+  if (already_enriched) {
+    cat("Pre-existing pathway enrichment results detected in tidyproteomics object history. Preserving upstream enrichment calculations.\n")
+    enriched_data <- stat_data
+  } else {
+    cores <- max(1, min(4, parallel::detectCores() - 1))
+    cat(sprintf("Executing multi-category enrichment across %d contrast(s) using %d CPU core(s)...\n", length(pairs), cores))
+
+    enriched_data <- stat_data %>%
+      enrichment(.pairs = pairs, .terms = selected_terms, .method = "wilcoxon", .cpu_cores = cores)
+  }
   ```
-- **Checkpoint 5.2**: Confirm that enrichment operations completed without errors and are recorded in `operations(enriched_data)`.
+- **Checkpoint 5.2**: Confirm that enrichment operations are confirmed and recorded in `operations(enriched_data)`.
 
 #### Phase 5.3: Automated Pathway Visualization & Exports
 - Export composite enrichment plots and tables:
@@ -104,4 +112,4 @@ Construct and execute `code/05_enrichment.R`, capturing full execution output to
   3. If functional terms were analyzed: enrichment tables (`data/table_*_enrichment_*.csv`) and enrichment plots (`data/*_enrichment_*.png`) exist in `data/` with non-zero file sizes.
   4. `docs/notes.md` contains the functional enrichment audit and summary.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "05_ENRICHMENT", summary = "Functional annotation assessment and pathway enrichment completed. Tested targeted categories, exported enrichment tables and plots, and persisted data/tidyproteomics_data.rds.")`
+  - Invoke `complete_phase(phaseName = "05_ENRICHMENT", summary = "Functional annotation assessment and pathway enrichment verification completed. Tested/confirmed targeted categories, exported enrichment tables and plots, and persisted data/tidyproteomics_data.rds.")`

@@ -25,18 +25,27 @@ Construct and execute `code/02_normalize.R`, capturing full execution output to 
   ```
 - **Checkpoint 2.1**: Print `print(data_filtered)` to confirm removed contaminant count and remaining high-confidence IDs in stdout and log.
 
-#### Phase 2.2: Multi-Method Normalization Benchmarking
-- Compute candidate normalizations:
+#### Phase 2.2: Multi-Method Normalization Benchmarking & Pass-Through Audit
+- Check if normalization has already been applied in upstream operations:
   ```r
-  norm_candidates <- data_filtered %>%
-    normalize(.method = c("median", "linear", "loess", "limma"))
+  ops <- operations(data_filtered)
+  quants <- get_quant_names(data_filtered)
+  already_normalized <- length(quants) > 1 || any(grepl("normalize", ops))
+
+  if (already_normalized) {
+    cat("Pre-existing normalization detected in tidyproteomics object history. Preserving upstream normalization to prevent double-scaling and variance distortion.\n")
+    norm_data <- data_filtered
+    print(norm_data)
+    tryCatch(summary(norm_data, "normalization"), error = function(e) summary(norm_data))
+  } else {
+    cat("Benchmarking multi-method normalization models (median, linear, loess, limma)...\n")
+    norm_candidates <- data_filtered %>%
+      normalize(.method = c("median", "linear", "loess", "limma"))
+    norm_data <- norm_candidates %>% select_normalization()
+    summary(norm_data, "normalization")
+  }
   ```
-- Select optimal normalization model based on variance minimization and replicate concordance:
-  ```r
-  norm_data <- norm_candidates %>% select_normalization()
-  summary(norm_data, "normalization")
-  ```
-- **Checkpoint 2.2**: Verify that `summary(norm_data, "normalization")` displays CV and PC1 metrics for each candidate method and identifies the selected optimal model.
+- **Checkpoint 2.2**: Verify that normalized abundances are confirmed in stdout and log (displaying CV and PC1 metrics for benchmarked candidates or confirming pre-existing normalized state).
 
 #### Phase 2.3: Quantitative Variation Benchmarking & CV Reduction Verification
 - Benchmark quantitative variation across normalization candidates:
@@ -54,7 +63,7 @@ Construct and execute `code/02_normalize.R`, capturing full execution output to 
   }
   ```
 - **Variation Audit Check**:
-  - Inspect `summary(norm_data, "normalization")` output to confirm that the selected normalization method successfully reduced quantitative CV across replicates relative to raw/unnormalized abundance.
+  - Inspect summary output to confirm that the normalization method successfully minimized quantitative CV across replicates relative to raw abundance (or verified replicate stability for pre-normalized data).
   - Confirm replicate clustering and condition separation in PCA scores.
 
 #### Phase 2.4: Object Persistence & Blackboard Recording
@@ -63,8 +72,8 @@ Construct and execute `code/02_normalize.R`, capturing full execution output to 
   saveRDS(norm_data, file = "data/tidyproteomics_data.rds")
   ```
 - Record the following directly into `docs/notes.md`:
-  - Selected normalization method (e.g., `loess`, `limma`, `median`).
-  - Pre- and post-normalization replicate CV statistics demonstrating improvement.
+  - Normalization method (e.g., `loess`, `limma`, `median`, or verified pre-existing model).
+  - Replicate CV statistics demonstrating variance minimization or replicate concordance.
   - PCA clustering observations (e.g. replicate tightness, PC1/PC2 variance explained).
 
 #### Phase 2.5: Checkpoint Verification & State Recording
@@ -73,6 +82,6 @@ Construct and execute `code/02_normalize.R`, capturing full execution output to 
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size and contains normalized abundance layers.
   3. PCA score plot (`data/plot_*_pca_PC1PC2.png`) exists on disk with non-zero file size.
   4. If multiple quantitative layers exist, variation plot (`data/plot_*_normalizated_variation.png`) exists on disk.
-  5. `docs/notes.md` contains the normalization benchmark summary.
+  5. `docs/notes.md` contains the normalization benchmark or verification summary.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "02_NORMALIZE", summary = "Normalization benchmarking completed. Selected optimal normalization method, verified CV reduction across replicates, generated PCA and variation plots, and persisted data/tidyproteomics_data.rds.")`
+  - Invoke `complete_phase(phaseName = "02_NORMALIZE", summary = "Normalization benchmarking/verification completed. Confirmed normalized abundance state, verified replicate clustering on PCA, generated diagnostic plots, and persisted data/tidyproteomics_data.rds.")`

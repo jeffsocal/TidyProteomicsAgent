@@ -525,6 +525,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
           case "literatureSelect":
           case "corpusSelect": {
             try {
+              this.syncLiteratureWorkspace();
               this.literatureService.setActiveLiterature(data.fileName);
               this.sendLiteratureState();
               await this.refreshState();
@@ -536,6 +537,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
           case "literatureCreate":
           case "corpusCreate": {
             try {
+              this.syncLiteratureWorkspace();
               const created = await this.literatureService.createDatabase(data.name);
               vscode.window.showInformationMessage(`TidyProteomicsAgent: Created literature database '${created.fileName}'`);
               this.sendLiteratureState();
@@ -547,6 +549,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
           }
           case "literatureToggleSynthesis":
           case "corpusToggleSynthesis": {
+            this.syncLiteratureWorkspace();
             this.literatureService.setUseInSynthesis(!!data.enabled);
             this.sendLiteratureState();
             await this.refreshState();
@@ -554,6 +557,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
           }
           case "literatureStats":
           case "corpusStats": {
+            this.syncLiteratureWorkspace();
             const statsRes = await this.literatureService.getStats(data.fileName);
             if (this._view && this._view.webview) {
               const stats = (statsRes as any).stats || (statsRes as any).data?.stats || (statsRes as any).data?.totals;
@@ -938,14 +942,22 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private syncLiteratureWorkspace(): string {
+    const root = this.getActiveWorkspaceRoot();
+    if (root && root !== this.workspaceRoot) {
+      this.workspaceRoot = root;
+      this.tools.setWorkspaceRoot(root);
+      this.literatureService.setWorkspaceRoot(root);
+    } else if (root) {
+      this.literatureService.setWorkspaceRoot(root);
+    }
+    return this.workspaceRoot;
+  }
+
   private sendLiteratureState() {
     if (this._view && this._view.webview) {
       try {
-        const root = this.getActiveWorkspaceRoot();
-        if (root && root !== this.workspaceRoot) {
-          this.workspaceRoot = root;
-          this.literatureService.setWorkspaceRoot(root);
-        }
+        this.syncLiteratureWorkspace();
         const state = this.literatureService.getViewState(this.ingestionRunner.getIsRunning() ? "ingesting" : undefined);
         const p1 = this._view.webview.postMessage({ type: "literatureState", state });
         if (p1 && typeof p1.then === "function") {
@@ -1271,10 +1283,24 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       margin-top: 2px;
       line-height: 1.3;
     }
-    #corpusSynthesisToggle:checked + #corpusSynthesisSlider {
+    #corpusSynthesisToggle:checked + #corpusSynthesisSlider,
+    #literatureSynthesisToggle:checked + #literatureSynthesisSlider {
       background: var(--primary) !important;
     }
-    #corpusSynthesisSlider:before {
+    #corpusSynthesisSlider,
+    #literatureSynthesisSlider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: var(--vscode-input-border, #444);
+      border-radius: 18px;
+      transition: .2s;
+    }
+    #corpusSynthesisSlider:before,
+    #literatureSynthesisSlider:before {
       position: absolute;
       content: "";
       height: 12px;
@@ -1285,7 +1311,8 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       border-radius: 50%;
       transition: .2s;
     }
-    #corpusSynthesisToggle:checked + #corpusSynthesisSlider:before {
+    #corpusSynthesisToggle:checked + #corpusSynthesisSlider:before,
+    #literatureSynthesisToggle:checked + #literatureSynthesisSlider:before {
       transform: translateX(16px);
     }
     .tab-bar button.tab-btn {
@@ -2264,14 +2291,14 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       </div>
 
       <!-- Toggle: Use in Synthesis Pipeline -->
-      <div class="toggle-row">
-        <div>
-          <div class="toggle-label">Use Active Database in Synthesis</div>
-          <div class="toggle-desc">Orchestrates two-way R interrogation in Phase 06/07</div>
+      <div class="toggle-row" id="literatureSynthesisToggleRow" style="cursor:pointer;">
+        <div style="flex:1;">
+          <label for="literatureSynthesisToggle" class="toggle-label" style="cursor:pointer;">Use Active Database in Synthesis</label>
+          <div class="toggle-desc">Orchestrates two-way R interrogation in Phase 09</div>
         </div>
-        <label style="position:relative; display:inline-block; width:34px; height:18px; margin:0; flex-shrink:0;">
-          <input type="checkbox" id="literatureSynthesisToggle" style="opacity:0; width:0; height:0;" />
-          <span style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:var(--vscode-input-border, #444); border-radius:18px; transition:0.2s;" id="literatureSynthesisSlider"></span>
+        <label for="literatureSynthesisToggle" style="position:relative; display:inline-block; width:34px; height:18px; margin:0; flex-shrink:0; cursor:pointer;">
+          <input type="checkbox" id="literatureSynthesisToggle" style="position:absolute; opacity:0; width:100%; height:100%; top:0; left:0; z-index:2; cursor:pointer; margin:0;" />
+          <span id="literatureSynthesisSlider"></span>
         </label>
       </div>
     </div>
@@ -2821,6 +2848,16 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
     if (literatureSynthesisToggle) {
       literatureSynthesisToggle.addEventListener("change", function () {
         vscode.postMessage({ type: "literatureToggleSynthesis", enabled: !!literatureSynthesisToggle.checked });
+      });
+    }
+
+    const literatureSynthesisToggleRow = document.getElementById("literatureSynthesisToggleRow");
+    if (literatureSynthesisToggleRow && literatureSynthesisToggle) {
+      literatureSynthesisToggleRow.addEventListener("click", function (e) {
+        if (e.target !== literatureSynthesisToggle && e.target.tagName !== "LABEL") {
+          literatureSynthesisToggle.checked = !literatureSynthesisToggle.checked;
+          literatureSynthesisToggle.dispatchEvent(new Event("change"));
+        }
       });
     }
 

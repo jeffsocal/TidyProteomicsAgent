@@ -34,14 +34,20 @@ Construct and execute `code/03_impute.R`, capturing full execution output to `lo
      - *Pros*: Preserves empirical ground truth without synthetic data injection; `limma` natively handles missing values in linear modeling.
      - *Cons*: Cannot compute finite fold changes or $p$-values for features completely absent in one condition (they drop out of volcano plots).
 
-#### Phase 3.2: Imputation Execution & Complete-Case Safeguard
-- Check for missingness and apply the appropriate imputation method based on experimental design (e.g. perturbation, drug treatment, or clinical screen):
+#### Phase 3.2: Imputation Execution & Complete-Case / Pre-Imputed Safeguard
+- Check for missingness and operations history, applying the appropriate imputation method based on experimental design:
   ```r
-  # Check if missing values exist in the quantitative matrix:
+  # Check if missing values exist in the quantitative matrix or if imputation was pre-applied:
+  ops <- operations(norm_data)
+  already_imputed <- any(grepl("impute", ops))
   total_missing <- sum(is.na(as.data.frame(norm_data)$abundance_normalized %||% as.data.frame(norm_data)$abundance_raw))
   cat(sprintf("Total missing quantitative values: %d\n", total_missing))
+  cat(sprintf("Pre-existing imputation in operations history: %s\n", already_imputed))
 
-  if (total_missing == 0) {
+  if (already_imputed) {
+    cat("Pre-existing imputation detected in tidyproteomics object history. Preserving upstream imputed values to prevent variance distortion.\n")
+    imp_data <- norm_data
+  } else if (total_missing == 0) {
     cat("Zero missing values detected (complete-case dataset / single TMT plex). Bypassing imputation to preserve empirical ground truth.\n")
     imp_data <- norm_data
   } else {
@@ -51,7 +57,7 @@ Construct and execute `code/03_impute.R`, capturing full execution output to `lo
       impute(.function = base::min, method = "column", group_by_sample = TRUE)
   }
   ```
-- **Checkpoint 3.2**: Print `print(imp_data)` and inspect operations history via `operations(imp_data)` to confirm imputation status (or verified complete-case bypass) and confirm that residual missingness has been resolved.
+- **Checkpoint 3.2**: Print `print(imp_data)` and inspect operations history via `operations(imp_data)` to confirm imputation status (or verified complete-case / pre-imputed pass-through) and confirm that residual missingness has been resolved.
 
 #### Phase 3.3: Post-Imputation Distribution Verification
 - Verify that the imputed dataset maintains valid dynamic range and variance structure across conditions.
@@ -65,13 +71,13 @@ Construct and execute `code/03_impute.R`, capturing full execution output to `lo
 - Record the following directly into `docs/notes.md`:
   - Overall missingness percentage prior to imputation.
   - Condition-specific dropout patterns (e.g., features uniquely absent in one condition vs. another) or complete-case verification.
-  - Chosen imputation method and scientific rationale (MAR vs. MNAR vs. complete-case bypass).
+  - Chosen imputation method and scientific rationale (MAR vs. MNAR vs. complete-case bypass vs. verified pre-existing imputation).
   - Post-imputation data completeness confirmation.
 
 #### Phase 3.5: Checkpoint Verification & State Recording
 - [ ] **Checkpoint 3.5**:
   1. `logs/03_impute.log` exists on disk with non-zero file size.
-  2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size, and either operations log contains `impute` or complete-case bypass is verified.
+  2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size, and either operations log contains `impute`, zero missingness complete-case bypass is verified, or pre-imputed pass-through is confirmed.
   3. `docs/notes.md` contains the missingness audit and imputation strategy rationale.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "03_IMPUTE", summary = "Missingness audit and imputation completed. Applied selected imputation model, confirmed matrix completeness, and persisted data/tidyproteomics_data.rds.")`
+  - Invoke `complete_phase(phaseName = "03_IMPUTE", summary = "Missingness audit and imputation verification completed. Confirmed matrix completeness and dynamic range, and persisted data/tidyproteomics_data.rds.")`
