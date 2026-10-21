@@ -286,6 +286,215 @@ cmd_search <- function(db_path, query, limit = 50L) {
   emit(list(ok = TRUE, action = "search", query = query, count = nrow(rows), limit = limit, rows = rows, results = rows))
 }
 
+cmd_report <- function(db_path, out_file = "docs/literature_database.md") {
+  if (!file.exists(db_path)) fail(sprintf("Literature database not found: %s", db_path))
+  con <- open_db(db_path, read_only = TRUE)
+  on.exit(close_db(con), add = TRUE)
+
+  meta <- tryCatch(
+    DBI::dbGetQuery(con, "SELECT key, value FROM literature_meta"),
+    error = function(e) data.frame(key = character(), value = character())
+  )
+  meta_map <- stats::setNames(as.list(meta$value), meta$key)
+  db_label <- meta_map$label %||% tools::file_path_sans_ext(basename(db_path))
+  created_at <- meta_map$created_at %||% format(file.info(db_path)$ctime, "%Y-%m-%d %H:%M:%S")
+
+  studies <- DBI::dbGetQuery(con, "SELECT * FROM studies ORDER BY year ASC, study_id ASC")
+  contexts <- DBI::dbGetQuery(con, "SELECT * FROM experimental_contexts")
+  assertions <- DBI::dbGetQuery(con, "SELECT * FROM molecular_assertions")
+
+  last_updated <- if (nrow(studies) > 0 && "ingested_at" %in% names(studies)) {
+    as.character(max(studies$ingested_at, na.rm = TRUE))
+  } else {
+    format(file.info(db_path)$mtime, "%Y-%m-%d %H:%M:%S")
+  }
+
+  total_studies <- nrow(studies)
+  total_contexts <- nrow(contexts)
+  total_assertions <- nrow(assertions)
+
+  scalar <- function(sql) DBI::dbGetQuery(con, sql)[[1]][1]
+  unique_human_symbols <- as.integer(scalar("SELECT COUNT(DISTINCT canonical_human_symbol) FROM molecular_assertions WHERE canonical_human_symbol IS NOT NULL AND TRIM(canonical_human_symbol) != ''"))
+  unmapped_entities <- as.integer(scalar("SELECT COUNT(*) FROM molecular_assertions WHERE canonical_human_symbol IS NULL OR TRIM(canonical_human_symbol) = ''"))
+  unique_organisms <- as.integer(scalar("SELECT COUNT(DISTINCT organism) FROM experimental_contexts"))
+  unique_models <- as.integer(scalar("SELECT COUNT(DISTINCT model_name) FROM experimental_contexts"))
+  unique_perturbations <- as.integer(scalar("SELECT COUNT(DISTINCT perturbation_target) FROM experimental_contexts"))
+
+  top_n <- function(col, tbl, n = 8) {
+    DBI::dbGetQuery(con, sprintf(
+      "SELECT COALESCE(NULLIF(TRIM(%1$s), ''), '(unspecified)') AS label, COUNT(*)::INTEGER AS n
+         FROM %2$s GROUP BY 1 ORDER BY n DESC, label LIMIT %3$d", col, tbl, n
+    ))
+  }
+
+  rel_counts <- top_n("relationship_type", "molecular_assertions", 10)
+  mod_counts <- top_n("functional_module", "molecular_assertions", 10)
+  org_counts <- top_n("organism", "experimental_contexts", 10)
+  modality_counts <- top_n("assay_modality", "experimental_contexts", 10)
+
+  lines <- c()
+  add <- function(...) lines <<- c(lines, paste0(...))
+
+  title_display <- sprintf("%s Knowledge Database", gsub("_", " ", tools::toTitleCase(db_label)))
+  add("# ", title_display)
+  add("")
+  add("> **Accounting & Provenance Report**: Comprehensive structured index of molecular assertions, experimental contexts, and biomedical sources ingested into the active literature knowledge database.")
+  add("")
+  add("---")
+  add("")
+  add("## 1. Database Title & Metadata")
+  add("")
+  add("- **Database Title**: ", title_display)
+  add("- **Database Label**: `", db_label, "`")
+  add("- **Storage Engine**: DuckDB (Columnar Analytical Database Engine)")
+  add("- **Schema Version**: `v2` (Generic Perturbation-Centric Knowledge Graph: `studies` -> `experimental_contexts` -> `molecular_assertions`)")
+  add("- **Active File Path**: `", basename(db_path), "` (", format(file.info(db_path)$size, big.mark = ","), " bytes)")
+  add("- **Date Created**: `", created_at, "`")
+  add("- **Last Date Updated**: `", last_updated, "`")
+  add("- **Accounting Verified**: `", format(Sys.time(), "%Y-%m-%d %H:%M %z"), "`")
+  add("")
+  add("---")
+  add("")
+  add("## 2. Executive Summary")
+  add("")
+  add(sprintf("The **%s** is a curated, perturbation-centric molecular knowledge graph constructed to contextualize high-resolution mass spectrometry and whole-cell proteomics workflows. The database captures the multidimensional molecular dynamics across %d peer-reviewed publications and data sources spanning %d to %d.",
+              title_display, total_studies, if (total_studies > 0) min(studies$year, na.rm = TRUE) else 0, if (total_studies > 0) max(studies$year, na.rm = TRUE) else 0))
+  add("")
+  add("Within the **TidyProteomicsAgent** pipeline architecture, this database serves as the automated reasoning foundation for **Phase 09 (Literature Knowledge Database Interrogation)** and **Phase 10 (Scientific Manuscript Synthesis)**. It enables two-way programmatic graph-hops via `tools/literature/query_literature.R` to retrieve literature-asserted co-factors, physical interactors, and downstream targets, which are subsequently reverse-interrogated against unthresholded experimental proteomics datasets (`data/tidyproteomics_data.rds` via `tools/literature/interrogate_unthresholded_proteomics.R`). This empowers the agent to identify coordinated sub-threshold shifts and resolve biological mechanisms that fall below strict single-protein statistical cutoffs.")
+  add("")
+  add("---")
+  add("")
+  add("## 3. Database Content & Statistical Accounting")
+  add("")
+  add("### 3.1 Primary Corpus Totals")
+  add("")
+  add("| Metric | Count | Description |")
+  add("|:---|:---:|:---|")
+  add(sprintf("| **Indexed Sources / Files** | **%d** | Full-text peer-reviewed papers and supplementary datasets parsed and indexed |", total_studies))
+  add(sprintf("| **Experimental Contexts** | **%d** | Distinct biological conditions, host models, tissue types, and perturbation regimens |", total_contexts))
+  add(sprintf("| **Molecular Assertions** | **%d** | Discrete subject-predicate-object knowledge edges extracted with verbatim evidence |", total_assertions))
+  add(sprintf("| **Canonical Human Symbols** | **%d** | Unique normalized HGNC / Ensembl human gene and protein identifiers |", unique_human_symbols))
+  add(sprintf("| **Pathogen / Unmapped Entities** | **%d** | Unique organism-specific locus tags, antigens, and unmapped entities |", unmapped_entities))
+  add(sprintf("| **Represented Organisms** | **%d** | Distinct species across experimental contexts |", unique_organisms))
+  add(sprintf("| **Biological Model Systems** | **%d** | Cell lines, primary tissues, biofluids, and in vivo models |", unique_models))
+  add(sprintf("| **Perturbation Regimens** | **%d** | Unique perturbation targets, infections, treatments, and cohorts |", unique_perturbations))
+  add("")
+  add("### 3.2 Breakdown by Knowledge Relationship Type")
+  add("")
+  add("| Relationship Type | Assertions | % of Total |")
+  add("|:---|:---:|:---:|")
+  for (r in seq_len(nrow(rel_counts))) {
+    pct <- round(100 * rel_counts$n[r] / max(1, total_assertions), 1)
+    add(sprintf("| `%s` | %d | %.1f%% |", rel_counts$label[r], rel_counts$n[r], pct))
+  }
+  add("")
+  add("### 3.3 Breakdown by Assay Modality")
+  add("")
+  add("| Assay Modality | Contexts |")
+  add("|:---|:---:|")
+  for (m in seq_len(nrow(modality_counts))) {
+    add(sprintf("| %s | %d |", modality_counts$label[m], modality_counts$n[m]))
+  }
+  add("")
+  add("### 3.4 Top Functional Modules Represented")
+  add("")
+  add("| Functional Module | Assertions |")
+  add("|:---|:---:|")
+  for (fm in seq_len(nrow(mod_counts))) {
+    add(sprintf("| %s | %d |", mod_counts$label[fm], mod_counts$n[fm]))
+  }
+  add("")
+  add("---")
+  add("")
+  add("## 4. Ingested Sources Index")
+  add("")
+  add("The table below lists all peer-reviewed studies and data sources currently indexed in the active knowledge database, sorted chronologically:")
+  add("")
+  add("| # | Year | Study / Publication | Organism & Model | Modality | Assertions | Key Asserted Genes & Modules |")
+  add("|:---:|:---:|:---|:---|:---|:---:|:---|")
+
+  for (i in seq_len(total_studies)) {
+    sid <- studies$study_id[i]
+    st_ctx <- contexts[contexts$study_id == sid, ]
+    cids <- st_ctx$context_id
+    st_ass <- assertions[assertions$context_id %in% cids, ]
+
+    syms <- unique(na.omit(st_ass$canonical_human_symbol))
+    syms <- syms[nzchar(trimws(syms))]
+
+    raws <- unique(na.omit(st_ass$raw_entity_name))
+    raws <- raws[nzchar(trimws(raws))]
+
+    doi_url <- if (grepl("^10\\.", sid)) sprintf("https://doi.org/%s", sid) else ""
+    title_text <- studies$title[i]
+    title_clean <- gsub("\\|", "-", title_text)
+    
+    study_link <- if (nzchar(doi_url)) {
+      sprintf("[%s](%s)", title_clean, doi_url)
+    } else {
+      title_clean
+    }
+
+    org_str <- paste(unique(na.omit(st_ctx$organism)), collapse = ", ")
+    mod_str <- paste(unique(na.omit(st_ctx$model_name)), collapse = ", ")
+    sys_str <- if (nzchar(org_str) && nzchar(mod_str)) sprintf("%s (%s)", org_str, mod_str) else paste0(org_str, mod_str)
+    sys_str <- gsub("\\|", "-", sys_str)
+
+    assay_str <- gsub("\\|", "-", paste(unique(na.omit(st_ctx$assay_modality)), collapse = ", "))
+
+    top_syms <- if (length(syms) > 0) head(syms, 6) else head(raws, 6)
+    genes_summary <- paste(top_syms, collapse = ", ")
+    if (length(syms) > 6) {
+      genes_summary <- sprintf("%s *(+%d more)*", genes_summary, length(syms) - 6)
+    }
+
+    mods <- na.omit(st_ass$functional_module)
+    mods <- mods[nzchar(trimws(mods))]
+    if (length(mods) > 0) {
+      top_mod <- names(sort(table(mods), decreasing = TRUE))[1]
+      genes_summary <- sprintf("%s `[%s]`", genes_summary, top_mod)
+    }
+
+    add(sprintf("| %d | %d | %s | %s | %s | %d | %s |",
+                i,
+                studies$year[i] %||% 0,
+                study_link,
+                if (nzchar(sys_str)) sys_str else "-",
+                if (nzchar(assay_str)) assay_str else "-",
+                nrow(st_ass),
+                if (nzchar(genes_summary)) genes_summary else "-"))
+  }
+
+  add("")
+  add("---")
+  add("")
+  add("## 5. Programmatic & Dynamic Interrogation")
+  add("")
+  add("To explore specific assertions, physical interactors, or evidence quotes for any gene or module, use the dedicated query interfaces:")
+  add("")
+  add("```bash")
+  add(sprintf("# Search assertions by gene symbol, alias, or module:\nRscript tools/literature/literature_cli.R search %s \"<symbol>\"", basename(db_path)))
+  add("")
+  add(sprintf("# Two-way graph-hop interrogation for pipeline synthesis:\nRscript tools/literature/query_literature.R %s \"<seed_genes>\" \"<pathway_terms>\" 20", basename(db_path)))
+  add("```")
+  add("")
+  add("> **Tip**: Granular assertion details, experimental condition parameters, and verbatim evidence quotes remain indexed in DuckDB for zero-token-overhead programmatic analysis.")
+  add("")
+
+  dir.create(dirname(out_file), recursive = TRUE, showWarnings = FALSE)
+  writeLines(lines, out_file)
+
+  emit(list(
+    ok = TRUE,
+    action = "report",
+    db_path = normalizePath(db_path, mustWork = FALSE),
+    output_path = normalizePath(out_file, mustWork = FALSE),
+    total_studies = total_studies,
+    total_contexts = total_contexts,
+    total_assertions = total_assertions
+  ))
+}
+
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0 || is.na(a[1])) b else a
 
 # ------------------------------------------------------------------------------
@@ -294,7 +503,7 @@ cmd_search <- function(db_path, query, limit = 50L) {
 main <- function() {
   args <- commandArgs(trailingOnly = TRUE)
   if (length(args) < 2) {
-    fail("Usage: literature_cli.R <init|stats|search> <db_path> [args...]")
+    fail("Usage: literature_cli.R <init|stats|search|report> <db_path> [args...]")
   }
   cmd <- tolower(args[1])
   db_path <- args[2]
@@ -303,7 +512,8 @@ main <- function() {
     init   = cmd_init(db_path, if (length(args) >= 3) args[3] else NULL),
     stats  = cmd_stats(db_path),
     search = cmd_search(db_path, if (length(args) >= 3) args[3] else "", if (length(args) >= 4) args[4] else 50L),
-    fail(sprintf("Unknown subcommand '%s'. Expected one of: init, stats, search.", cmd))
+    report = cmd_report(db_path, if (length(args) >= 3) args[3] else "docs/literature_database.md"),
+    fail(sprintf("Unknown subcommand '%s'. Expected one of: init, stats, search, report.", cmd))
   )
 }
 

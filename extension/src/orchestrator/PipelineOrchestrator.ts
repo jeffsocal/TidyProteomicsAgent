@@ -21,7 +21,7 @@ export class PipelineOrchestrator {
     private client: ProviderClient,
     private tools: ToolRegistry,
     private onStateChange: (state: PipelineState) => void,
-    private onLog: (text: string) => void,
+    private onLog: (text: string, updateLast?: boolean) => void,
     private extensionVersion: string = "0.1.0"
   ) {
     this.workspaceRoot = workspaceRoot || "";
@@ -47,30 +47,60 @@ export class PipelineOrchestrator {
     return d.toTimeString().split(" ")[0];
   }
 
+  private logPhase(tag: string, message: string, updateLast = false) {
+    const line = `[${this.ts()}] ${tag}: ${message}`;
+    this.onLog(this.truncateTo(line, 120), updateLast);
+  }
+
+  private logPipeline(message: string, updateLast = false) {
+    this.logPhase("Pipeline", message, updateLast);
+  }
+
+  private truncateTo(line: string, maxLen = 120): string {
+    if (line.length <= maxLen) return line;
+    return line.slice(0, maxLen - 3) + "...";
+  }
+
   private formatToolHeader(name: string, args: Record<string, any>): string {
     switch (name) {
-      case "execute_command":
-        return `[Command] ${args?.command || ""}`;
+      case "execute_command": {
+        const cmd = String(args?.command || "").trim().replace(/\s+/g, " ");
+        return `[Command] ${cmd}`;
+      }
       case "read_file": {
-        const range = args?.startLine ? ` (lines ${args.startLine}-${args.startLine + (args.maxLines || 0) - 1})` : "";
-        return `[Read] ${args?.filePath || ""}${range}`;
+        const filePath = String(args?.filePath || "").trim();
+        const range = args?.startLine
+          ? ` (lines ${args.startLine}-${Number(args.startLine) + Number(args.maxLines || 0) - 1})`
+          : "";
+        return `[Read] ${filePath}${range}`;
       }
       case "write_file": {
+        const filePath = String(args?.filePath || "").trim();
         const len = typeof args?.content === "string" ? ` (${args.content.length} chars)` : "";
-        return `[Write] ${args?.filePath || ""}${len}`;
+        return `[Write] ${filePath}${len}`;
       }
-      case "replace_file_content":
-        return `[Edit] ${args?.filePath || ""}`;
-      case "list_directory":
-        return `[List] ${args?.dirPath || "."}`;
+      case "replace_file_content": {
+        const filePath = String(args?.filePath || "").trim();
+        return `[Edit] ${filePath}`;
+      }
+      case "list_directory": {
+        const dp = String(args?.dirPath || ".").trim();
+        const display = (!dp || dp === "." || dp === "./") ? "directory contents" : dp;
+        return `[List] ${display}`;
+      }
       case "check_checkpoint_gate": {
         const files = Array.isArray(args?.requiredFiles) ? args.requiredFiles.join(", ") : "";
         return `[Check Gate] ${files}`;
       }
-      case "complete_phase":
-        return `[Complete Phase] ${args?.phaseName || ""}`;
-      case "fail_phase":
-        return `[Halt / Fail Phase] ${args?.phaseName || ""}: ${args?.reason || ""}`;
+      case "complete_phase": {
+        const pName = String(args?.phaseName || "").trim();
+        return `[Complete Phase] ${pName}`;
+      }
+      case "fail_phase": {
+        const pName = String(args?.phaseName || "").trim();
+        const reason = String(args?.reason || "").trim();
+        return `[Halt Phase] ${pName}${reason ? ": " + reason : ""}`;
+      }
       default: {
         const keys = Object.keys(args || {});
         const summary = keys.length > 0 ? ` (${keys.join(", ")})` : "";
@@ -89,7 +119,7 @@ export class PipelineOrchestrator {
 
   public async setWorkingDirectory(newRoot: string): Promise<void> {
     if (this.isRunning) {
-      this.onLog(`[${this.ts()}] ⚠️ [Pipeline] Cannot change working directory while a pipeline or phase is actively running.`);
+      this.logPipeline("Cannot change working directory while a pipeline or phase is actively running.");
       return;
     }
     this.workspaceRoot = newRoot || "";
@@ -178,16 +208,16 @@ export class PipelineOrchestrator {
 
   public async forceReloadFromDisk(): Promise<void> {
     if (this.isRunning) {
-      this.onLog(`[${this.ts()}] ⚠️ [Pipeline] Cannot force reload while an active pipeline run is in flight.`);
+      this.logPipeline("Cannot force reload while an active pipeline run is in flight.");
       return;
     }
     await this.rescanPhases(true);
-    this.onLog(`[${this.ts()}] ↻ [Pipeline] Reloaded all tasks and progress from disk.`);
+    this.logPipeline("Reloaded all tasks and progress from disk.");
   }
 
   public async resetAllState(): Promise<void> {
     if (this.isRunning) {
-      this.onLog(`[${this.ts()}] ⚠️ [Pipeline] Cannot reset state while an active run is in flight.`);
+      this.logPipeline("Cannot reset state while an active run is in flight.");
       return;
     }
     const notesPath = path.join(this.workspaceRoot, "docs", "notes.md");
@@ -207,7 +237,7 @@ export class PipelineOrchestrator {
       p.error = undefined;
     }
     await this.rescanPhases(true);
-    this.onLog(`[${this.ts()}] 🧹 [Pipeline] State and runtime blackboard reset to initial state.`);
+    this.logPipeline("State and runtime blackboard reset to initial state.");
   }
 
   public async rescanPhases(forceReload = false): Promise<void> {
@@ -289,7 +319,7 @@ export class PipelineOrchestrator {
         });
       }
     } catch (e) {
-      this.onLog(`[${this.ts()}] ℹ️ [Pipeline] Note: 'analysis' directory not found in ${this.workspaceRoot}`);
+      this.logPipeline(`Note: 'analysis' directory not found in ${this.workspaceRoot}`);
     }
 
     // Legacy fallback: if no 00_ in analysis/, check agent/INSTRUCT.md (or prompts/INSTRUCT.md)
@@ -543,7 +573,7 @@ Construct and execute code for this phase, capturing output to logs.
       }
     }
     this.isRunning = false;
-    this.onLog(`[${this.ts()}] ⏹ [Pipeline] Execution stopped by user.`);
+    this.logPipeline("Execution stopped by user.");
     this.notifyState();
   }
 
@@ -597,12 +627,12 @@ Construct and execute code for this phase, capturing output to logs.
    */
   public async runSinglePhase(phaseId: string) {
     if (this.isRunning) {
-      this.onLog(`[${this.ts()}] ⚠️ [Pipeline] Execution busy: A pipeline or phase is already running. Please wait or stop it first.`);
+      this.logPipeline("Execution busy: A pipeline or phase is already running. Please wait or stop it first.");
       return;
     }
     const phaseIndex = this.phases.findIndex((p) => p.id === phaseId);
     if (phaseIndex === -1) {
-      this.onLog(`[${this.ts()}] ❌ [Pipeline] Phase ID '${phaseId}' not found.`);
+      this.logPipeline(`Phase ID '${phaseId}' not found.`);
       return;
     }
 
@@ -640,7 +670,7 @@ Construct and execute code for this phase, capturing output to logs.
     try {
       await this.executePhase(phaseIndex);
     } catch (err: any) {
-      this.onLog(`[${this.ts()}] ❌ [Pipeline] Error running phase ${phaseId}: ${err.message}`);
+      this.logPipeline(`Error running phase ${phaseId}: ${err.message}`);
     } finally {
       this.isRunning = false;
       this.isFullPipelineRunning = false;
@@ -653,30 +683,30 @@ Construct and execute code for this phase, capturing output to logs.
    */
   public async runFullPipeline() {
     if (this.isRunning) {
-      this.onLog(`[${this.ts()}] ⚠️ [Pipeline] Execution busy: A pipeline is already running.`);
+      this.logPipeline("Execution busy: A pipeline is already running.");
       return;
     }
     if (!this.workspaceRoot || this.phases.length === 0) {
-      this.onLog(`[${this.ts()}] ⚠️ [Pipeline] No analysis tasks found to execute. Please initialize an analysis pipeline first.`);
+      this.logPipeline("No analysis tasks found to execute. Please initialize an analysis pipeline first.");
       return;
     }
     this.isRunning = true;
     this.isFullPipelineRunning = true;
     this.shouldStop = false;
 
-    this.onLog(`[${this.ts()}] 🚀 [Pipeline] Starting autonomous run at ${new Date().toLocaleTimeString()}`);
-    this.onLog(`[${this.ts()}] 📁 [Pipeline] Working Directory: ${this.workspaceRoot}`);
+    this.logPipeline(`Starting autonomous run at ${new Date().toLocaleTimeString()}`);
+    this.logPipeline(`Working Directory: ${this.workspaceRoot}`);
 
     try {
       for (let i = 0; i < this.phases.length; i++) {
         if (this.shouldStop) {
-          this.onLog(`[${this.ts()}] ⏹ [Pipeline] Execution stopped by user.`);
+          this.logPipeline("Execution stopped by user.");
           break;
         }
 
         const phase = this.phases[i];
         if (!phase.enabled) {
-          this.onLog(`[${this.ts()}] ⏭️ [Pipeline] Skipping disabled phase: ${phase.title}`);
+          this.logPipeline(`Skipping disabled phase: ${phase.title}`);
           continue;
         }
 
@@ -685,12 +715,12 @@ Construct and execute code for this phase, capturing output to logs.
 
         const success = await this.executePhase(i);
         if (!success) {
-          this.onLog(`[${this.ts()}] ⚠️ [Pipeline] Pipeline paused due to checkpoint failure in ${phase.title}`);
+          this.logPipeline(`Pipeline paused due to checkpoint failure in ${phase.title}`);
           break;
         }
       }
     } catch (err: any) {
-      this.onLog(`[${this.ts()}] ❌ [Pipeline] Full pipeline error: ${err.message}`);
+      this.logPipeline(`Full pipeline error: ${err.message}`);
     } finally {
       this.isRunning = false;
       this.isFullPipelineRunning = false;
@@ -712,6 +742,9 @@ Construct and execute code for this phase, capturing output to logs.
     const phase = getActivePhase();
     if (!phase) return false;
 
+    const phaseTag = path.basename(phase.fileName).replace(/\.md$/i, "");
+    const cleanTitle = (phase.title || "").replace(/^Phase\s+\d+:\s*/i, "").trim();
+
     phase.status = "running";
     phase.startTime = new Date().toISOString();
     phase.endTime = undefined;
@@ -722,7 +755,7 @@ Construct and execute code for this phase, capturing output to logs.
     const startTimeMs = Date.now();
     await this.notifyState();
 
-    this.onLog(`[${this.ts()}] 🚀 Starting ${phase.title} (${phase.fileName})`);
+    this.logPhase(phaseTag, `[Starting] ${cleanTitle} (${phase.fileName})`);
 
     let loop: AgentLoop | undefined;
     try {
@@ -735,6 +768,8 @@ Construct and execute code for this phase, capturing output to logs.
       const contextBuilder = new ContextBuilder(this.workspaceRoot);
       const context = await contextBuilder.buildPhaseContext(phase.fileName);
 
+      let lastToolPendingText = "";
+
       loop = new AgentLoop(
         phase.fileName,
         phase.title,
@@ -743,13 +778,49 @@ Construct and execute code for this phase, capturing output to logs.
         context,
         async (event) => {
           if (event.type === "thought") {
-            this.onLog(`[${this.ts()}] 🔄 ${event.data}`);
+            const raw = String(event.data || "").trim();
+            const turnMatch = raw.match(/Starting Turn\s+(\d+\/\d+)\.{0,3}/i);
+            if (turnMatch) {
+              this.logPhase(phaseTag, `Turn ${turnMatch[1]} ...`);
+            } else {
+              const cleanData = raw.replace(/^[⚠️🔄❌✓💡]\s*/g, "").trim();
+              this.logPhase(phaseTag, cleanData);
+            }
           } else if (event.type === "text") {
             // Raw context stream is logged to logs/llm_chat.md by chatLogger; live terminal feed displays timestamped headers only
           } else if (event.type === "tool_start") {
-            this.onLog(`[${this.ts()}] 🛠️ ${this.formatToolHeader(event.data.name, event.data.args)}`);
+            const rawHeader = this.formatToolHeader(event.data.name, event.data.args);
+            const prefix = `[${this.ts()}] ${phaseTag}: `;
+            // Keep total line including completion suffix (" ...  ✓ [completed]" ~ 18 chars) under 100 chars
+            const maxBodyLen = Math.max(25, 100 - prefix.length - 18);
+            let body = rawHeader;
+            if (body.length > maxBodyLen) {
+              body = body.slice(0, maxBodyLen - 3).trim();
+            }
+            if (body.endsWith("...")) {
+              body = body.slice(0, -3).trim();
+            }
+            lastToolPendingText = `${prefix}${body} ...`;
+            this.onLog(lastToolPendingText, false);
           } else if (event.type === "tool_end") {
-            this.onLog(`[${this.ts()}] ${event.data.isError ? "❌" : "✓"} [Result] ${event.data.name} ${event.data.isError ? "failed" : "completed"}`);
+            const base = lastToolPendingText
+              ? lastToolPendingText.replace(/\s*\.{3}$/, "")
+              : `[${this.ts()}] ${phaseTag}: [${event.data.name}]`;
+
+            if (event.data.isError) {
+              this.onLog(`${base} ... ❌  [failed]`, true);
+              let failSnippet = "failed";
+              if (event.data.result) {
+                const firstLine = String(event.data.result).trim().split("\n")[0].trim();
+                if (firstLine && !firstLine.startsWith("{") && firstLine.length < 50) {
+                  failSnippet = `failed: ${firstLine.replace(/^Error:\s*/i, "")}`;
+                }
+              }
+              this.logPhase(phaseTag, `❌  ${failSnippet}`, false);
+            } else {
+              this.onLog(`${base} ...  ✓ [completed]`, true);
+            }
+            lastToolPendingText = "";
           } else if (event.type === "tokens") {
             const currentPhase = getActivePhase();
             currentPhase.tokenUsage = { ...event.data.totalUsage };
@@ -771,8 +842,9 @@ Construct and execute code for this phase, capturing output to logs.
 
       if (result.success) {
         currentPhase.status = "completed";
-        this.onLog(
-          `[${this.ts()}] ✅ ${currentPhase.title} completed in ${durationSeconds}s (${result.tokensUsed.totalTokens.toLocaleString()} tokens)`
+        this.logPhase(
+          phaseTag,
+          `[Completed] ${cleanTitle} in ${durationSeconds}s (${result.tokensUsed.totalTokens.toLocaleString()} tokens)`
         );
 
         // Update docs/notes.md with phase record
@@ -785,11 +857,11 @@ Construct and execute code for this phase, capturing output to logs.
         const summaryText = String(result.summary || "Phase failed").trim();
         const lines = summaryText.split("\n");
         const firstLine = lines[0];
-        this.onLog(`[${this.ts()}] ❌ ${currentPhase.title} halted / failed: ${firstLine}`);
+        this.logPhase(phaseTag, `❌ [Failed] ${cleanTitle}: ${firstLine}`);
         for (let i = 1; i < lines.length; i++) {
           const line = lines[i].trim();
           if (line) {
-            this.onLog(`[${this.ts()}] 💡 ${line}`);
+            this.logPhase(phaseTag, `  ${line}`);
           }
         }
         await this.appendPhaseRecordToNotes(currentPhase);
@@ -803,7 +875,7 @@ Construct and execute code for this phase, capturing output to logs.
       if (loop && (!currentPhase.tokenUsage || currentPhase.tokenUsage.totalTokens === 0)) {
         currentPhase.tokenUsage = loop.getTotalUsage();
       }
-      this.onLog(`[${this.ts()}] ❌ Error in ${currentPhase.title}: ${err.message}`);
+      this.logPhase(phaseTag, `❌ Error in ${cleanTitle}: ${err.message}`);
       await this.notifyState();
       return false;
     }
@@ -835,7 +907,7 @@ ${summaryContent}
       }
       await fs.writeFile(notesPath, current + entry, "utf-8");
     } catch (e) {
-      this.onLog(`[${this.ts()}] ⚠️ Warning: Failed to update docs/notes.md: ${e}`);
+      this.logPipeline(`Warning: Failed to update docs/notes.md: ${e}`);
     }
   }
 }

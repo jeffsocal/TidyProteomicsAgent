@@ -16,23 +16,21 @@ Crucially, the manuscript must feature an **in-depth, rigorous, and biologically
 
 #### Pre-Flight Quality Gate (Mandatory)
 Before writing `docs/scientific_report.md`, verify that:
-1. All prerequisite documents in `docs/` exist and are non-empty:
-   - `docs/observations.md`
-   - `docs/knowledge.md`
-   - `docs/websearch.md`
-   - `docs/literature.md`
-   - `data/tidyproteomics_data.rds`
-2. Execution logs exist in `logs/` and verify clean runs across prior phases:
-   - `logs/00_install.log` (or `logs/00_setup.log`)
-   - `logs/01_inspect.log`
-   - `logs/02_normalize.log`
-   - `logs/03_impute.log`
-   - `logs/04_expression.log`
-   - `logs/05_enrichment.log`
-   - `logs/06_observations.log`
-   - Execution logs for follow-up inquiries (`logs/07_knowledge.log`, `logs/08_websearch.log`, `logs/09_literature.log` if generated).
-3. All referenced quantitative tables (`data/table_*_*.csv`) and plots (`data/*.png`) exist on disk with non-zero file sizes.
-*If any requirement is missing, return to the relevant preceding phase to regenerate artifacts before compiling this report.*
+1. Core prerequisite documents in `docs/` exist and are non-empty:
+   - `docs/observations.md` (contains extracted primary data-derived observations)
+   - `docs/knowledge.md` (contains first-layer internal knowledge conclusions)
+   - `docs/websearch.md` (contains second-layer web search corroborations)
+   - `docs/literature.md` (contains third-layer literature database interrogation)
+   - `data/tidyproteomics_data.rds` (persisted tidyproteomics dataset object)
+2. Execution logs exist in `logs/` for all phases executed in the active pipeline:
+   - Inspect `logs/` or `docs/notes.md` to confirm clean runs for whichever pipeline phases were executed (e.g. `logs/00_install.log` or `logs/00_setup.log`, `logs/01_inspect.log`, `logs/06_observations.log`, and any follow-up inquiry logs `logs/07_*.log`, `logs/08_*.log`, `logs/09_*.log`).
+   - **Pre-Processed / Custom Pipeline Flexibility**: If the dataset was pre-normalized, imputed, or had differential expression and enrichment executed prior to ingestion (or if upstream phases such as `02_NORMALIZE` through `05_ENRICHMENT` were omitted or deleted), upstream logs (`logs/02_*` to `logs/05_*`) are **NOT required**. Confirm that quantitative data and statistical results are present in `data/tidyproteomics_data.rds` and documented in `docs/observations.md`.
+3. Quantitative tables and figure validation:
+   - Verify that any quantitative tables (`data/table_*_*.csv`) and plots (`data/*.png`) that you reference or embed in the manuscript exist on disk with non-zero file sizes.
+   - **Handling Visuals & Missing Plots**: Only embed images (`![...](../data/<filename>.png)`) and link tables that confirmedly exist on disk in `data/`. If specific diagnostic or summary plots (e.g., volcano plot, PCA score plot, expression profiles, pathway enrichment) were not generated in earlier phases:
+     - *Option A (Render Missing Plots)*: If desired, execute a brief R script (e.g., `code/10_plots.R`) using `tidyproteomics` on `data/tidyproteomics_data.rds` to render and save missing plots into `data/`.
+     - *Option B (Table & Narrative Presentation)*: Present the quantitative findings using structured Markdown tables and narrative descriptions based on `docs/observations.md`, omitting markdown image tags for missing files to avoid broken image links.
+*Do NOT fail this phase simply because upstream processing phases (such as normalization or imputation benchmarking) were omitted or performed externally, provided that `docs/observations.md`, downstream layer documents, and `data/tidyproteomics_data.rds` are available.*
 
 ---
 
@@ -65,29 +63,30 @@ Compose `docs/scientific_report.md` formatted in GitHub-flavored markdown adheri
    - **Study Rationale & Hypothesis**: Explicit articulation of the study objective and the working hypothesis directly derived from `docs/experiment.md`.
 
 4. **Materials and Methods**:
-   - **Data Provenance & Experimental Design**: Raw data origin, sample groups (treatment vs. control), replication scheme, and mass spectrometry platform.
+   - **Data Provenance & Experimental Design**: Raw data origin OR pre-processed `tidyproteomics` dataset origin, sample groups (treatment vs. control), replication scheme, and mass spectrometry platform as documented in `docs/experiment.md` and object metadata.
    - **Quality Filtering**: Removal of common contaminants (cRAP, Trypsin) and peptide confidence thresholds if applicable (`num_unique_peptides >= 2`).
-   - **Normalization Benchmarking**: Evaluation of normalization algorithms (`median`, `linear`, `loess`, `limma`), selection criteria via CV/PC1 metrics, and demonstration of replicate CV reduction.
-   - **Missingness Handling & Imputation Strategy**: Scientific rationale for the chosen imputation method (e.g., left-censored minimum for biological limit-of-detection/knockout dropouts vs. neighbor/correlation methods for stochastic missing at random).
-   - **Differential Expression Analysis**: Linear modeling with empirical Bayes moderation (`limma` framework), cutoffs for biological significance ($|\log_2\text{FC}| \ge 1.0$, adjusted $p \le 0.05$).
-   - **Multi-Category Functional Enrichment**: Non-parametric two-tailed Wilcoxon rank-sum testing across biological annotation domains (e.g., GO Biological Process, Cellular Component, Molecular Function, Reactome pathways).
+   - **Normalization & Missingness Handling**:
+     - *If benchmarked in-pipeline*: Evaluation of candidate algorithms (`median`, `linear`, `loess`, `limma`), selection criteria via CV/PC1 metrics, demonstration of replicate CV reduction, and missingness imputation rationale.
+     - *If pre-processed externally*: Document the normalization and imputation provenance as stated in `docs/experiment.md` or data object attributes (e.g., "The dataset was expertly normalized and imputed prior to analytical ingestion into TidyProteomicsAgent...").
+   - **Differential Expression Analysis**: Linear modeling with empirical Bayes moderation (`limma` framework), statistical significance thresholds ($|\log_2\text{FC}| \ge 1.0$, adjusted $p \le 0.05$). Note whether executed in-pipeline or extracted from the pre-computed analysis slot of the `tidyproteomics` object.
+   - **Multi-Category Functional Enrichment**: Non-parametric two-tailed Wilcoxon rank-sum testing across biological annotation domains (e.g., GO Biological Process, Cellular Component, Molecular Function, Reactome pathways), noting whether computed in-pipeline or extracted from the pre-computed dataset object.
    - **Literature Database Interrogation & Sub-Threshold Modeling**: Graph-hop assertion query methodology and unthresholded reverse-interrogation statistical parameters.
 
 5. **Results** (Clear narrative with embedded figures, statistics, and markdown tables):
    - **Data Quality & Cohort Diagnostics**:
-     - Evaluation of identification counts across replicates (`![Identification Counts](../data/plot_<analyte>_counts.png)`).
-     - Benchmarking of quantitative reproducibility across normalization candidates (`![Variation CV](../data/plot_<analyte>_normalizated_variation.png)`).
-     - Unsupervised multivariate clustering demonstrating replicate reproducibility and group separation (`![PCA Score Plot](../data/plot_<analyte>_<norm>_pca_PC1PC2.png)`).
+     - Evaluation of identification counts across replicates (`![Identification Counts](../data/plot_<analyte>_counts.png)` if available).
+     - Benchmarking of quantitative reproducibility across normalization candidates (`![Variation CV](../data/plot_<analyte>_normalizated_variation.png)` if pipeline-benchmarked).
+     - Unsupervised multivariate clustering demonstrating replicate reproducibility and group separation (`![PCA Score Plot](../data/plot_<analyte>_<norm>_pca_PC1PC2.png)` if available).
    - **Target Verification / Primary Biomarker Metrics**:
      - Rigorous confirmation of target perturbation efficiency (if targeted) or leading master regulator / biomarker hub statistics from `docs/observations.md` (Gene name / Accession, $\log_2\text{FC}$, $p$-value, $q$-value, % change).
    - **Global Proteome Remodeling & Differential Expression**:
      - Global shift metrics: total quantified features, significantly upregulated, and significantly downregulated features per contrast.
-     - Global landscape visualization: `![Volcano Plot](../data/<analyte>_volcano_<contrast>.png)`
+     - Global landscape visualization: `![Volcano Plot](../data/<analyte>_volcano_<contrast>.png)` (if available on disk; otherwise summarize via table).
      - Formatted markdown tables of Top 10 Upregulated and Top 10 Downregulated Biomarkers (Rank, Identifier / Gene Symbol, Description, $\log_2\text{FC}$, $q$-value, Primary Biological Function).
-     - Visual expression profiles of leading candidates: `![Top Upregulated](../data/plot_expression_up_<contrast>.png)` and `![Top Downregulated](../data/plot_expression_down_<contrast>.png)`.
+     - Visual expression profiles of leading candidates: `![Top Upregulated](../data/plot_expression_up_<contrast>.png)` and `![Top Downregulated](../data/plot_expression_down_<contrast>.png)` (if available).
    - **Functional & Pathway Enrichment Landscape**:
      - Summary of enriched biological processes, cellular compartments, and molecular pathways.
-     - Visual representation: `![Pathway Enrichment](../data/<analyte>_enrichment_<contrast>.png)`
+     - Visual representation: `![Pathway Enrichment](../data/<analyte>_enrichment_<contrast>.png)` (if available on disk).
      - Structured markdown table summarizing significant enriched pathways across annotation categories (Domain, Term Name, Direction, Rank Statistic / Score, $q$-value).
    - **Targeted Hypothesis Inquiries & Sub-Threshold Complex Shifts**:
      - Results of follow-up inquiries conducted across Phases 7, 8, and 9 (from `docs/knowledge.md`, `docs/websearch.md`, and `docs/literature.md`), including coordinate shifts in unthresholded complex members.
@@ -117,7 +116,8 @@ Compose `docs/scientific_report.md` formatted in GitHub-flavored markdown adheri
    - Comprehensive bibliography compiling all literature citations, study IDs, web sources, and publications referenced across `docs/*` (`docs/observations.md`, `docs/knowledge.md`, `docs/websearch.md`, `docs/literature.md`).
 
 9. **Data & Artifact Availability**:
-   - Explicit relative markdown links to all executable R scripts (`[00_install.R](../code/00_install.R)`, `[01_inspect.R](../code/01_inspect.R)`, `[02_normalize.R](../code/02_normalize.R)`, `[03_impute.R](../code/03_impute.R)`, `[04_expression.R](../code/04_expression.R)`, `[05_enrichment.R](../code/05_enrichment.R)`, `[06_observations.R](../code/06_observations.R)`), logs (`../logs/*.log`), documentation files (`[observations.md](./observations.md)`, `[knowledge.md](./knowledge.md)`, `[websearch.md](./websearch.md)`, `[literature.md](./literature.md)`, `[experiment.md](./experiment.md)`, `[notes.md](./notes.md)`), tables (`../data/table_*_*.csv`), and figures (`../data/*.png`).
+   - Explicit relative markdown links to all executable R scripts actually present in `code/` (e.g. `[00_install.R](../code/00_install.R)`, `[01_inspect.R](../code/01_inspect.R)`, `[06_observations.R](../code/06_observations.R)`), all available logs in `logs/` (`../logs/*.log`), documentation files (`[observations.md](./observations.md)`, `[knowledge.md](./knowledge.md)`, `[websearch.md](./websearch.md)`, `[literature.md](./literature.md)`, `[experiment.md](./experiment.md)`, `[notes.md](./notes.md)`), tables (`../data/table_*_*.csv`), and figures (`../data/*.png`).
+   - *Note*: Dynamically inspect `code/` and `logs/` to link existing files; do not include dead links to omitted or deleted phases.
 
 ---
 

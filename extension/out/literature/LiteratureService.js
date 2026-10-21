@@ -426,6 +426,17 @@ class LiteratureService {
         }
         return res;
     }
+    async generateReport(fileName, outputRelativePath = "docs/literature_database.md") {
+        const cfg = this.getConfig();
+        const target = fileName || cfg.activeLiterature || cfg.activeCorpus;
+        if (!target)
+            return { ok: false, error: "No active literature database selected." };
+        const dbPath = this.resolveLiteraturePath(target);
+        const outPath = path.isAbsolute(outputRelativePath)
+            ? outputRelativePath
+            : path.join(this.requireRoot(), outputRelativePath);
+        return await this.runCli("report", [dbPath, outPath], true);
+    }
     resolveLiteraturePath(fileName) {
         const base = path.basename(fileName);
         const withExt = base.toLowerCase().endsWith(exports.LITERATURE_EXT) ? base : `${base}${exports.LITERATURE_EXT}`;

@@ -76,7 +76,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       this.client,
       this.tools,
       (state) => this.sendStateUpdate(state),
-      (log) => this.sendLog(log),
+      (log, updateLast) => this.sendLog(log, updateLast),
       this.getExtensionVersion()
     );
 
@@ -88,7 +88,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
         this.sendLiteratureProgress(ev);
         this.sendLiteratureState();
       },
-      (log) => this.sendLog(log)
+      (log, updateLast) => this.sendLog(log, updateLast)
     );
 
     this.syncActiveModelSummary().catch(() => { });
@@ -636,6 +636,49 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
             vscode.window.showInformationMessage("TidyProteomicsAgent: Aborting ingestion...");
             break;
           }
+          case "literatureGenerateReport": {
+            const activeDb = data.fileName || this.literatureService.getConfig().activeLiterature || this.literatureService.getConfig().activeCorpus;
+            if (!activeDb) {
+              vscode.window.showErrorMessage("TidyProteomicsAgent: Please select or create an active literature database first.");
+              return;
+            }
+            try {
+              vscode.window.showInformationMessage(`TidyProteomicsAgent: Generating accounting report for ${activeDb}...`);
+              const res = await this.literatureService.generateReport(activeDb);
+              if (res.ok) {
+                vscode.window.showInformationMessage("TidyProteomicsAgent: Generated docs/literature_database.md");
+                const docPath = path.join(this.workspaceRoot || "", "docs", "literature_database.md");
+                if (fs.existsSync(docPath)) {
+                  const doc = await vscode.workspace.openTextDocument(docPath);
+                  await vscode.window.showTextDocument(doc, { preview: false });
+                }
+              } else {
+                vscode.window.showErrorMessage(`TidyProteomicsAgent: Failed to generate report: ${res.error}`);
+              }
+            } catch (err: any) {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: Report generation error - ${err.message}`);
+            }
+            break;
+          }
+          case "literatureOpenReport": {
+            const docPath = path.join(this.workspaceRoot || "", "docs", "literature_database.md");
+            if (fs.existsSync(docPath)) {
+              const doc = await vscode.workspace.openTextDocument(docPath);
+              await vscode.window.showTextDocument(doc, { preview: false });
+            } else {
+              const activeDb = this.literatureService.getConfig().activeLiterature || this.literatureService.getConfig().activeCorpus;
+              if (activeDb) {
+                const res = await this.literatureService.generateReport(activeDb);
+                if (res.ok && fs.existsSync(docPath)) {
+                  const doc = await vscode.workspace.openTextDocument(docPath);
+                  await vscode.window.showTextDocument(doc, { preview: false });
+                  return;
+                }
+              }
+              vscode.window.showWarningMessage("TidyProteomicsAgent: docs/literature_database.md does not exist yet. Click 'Regenerate' first.");
+            }
+            break;
+          }
         }
       } catch (e: any) {
         vscode.window.showErrorMessage(`TidyProteomicsAgent Error: ${e.message}`);
@@ -941,10 +984,10 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
     this.sendLiteratureProgress(event);
   }
 
-  private sendLog(text: string) {
+  private sendLog(text: string, updateLast = false) {
     if (this._view && this._view.webview) {
       try {
-        const p = this._view.webview.postMessage({ type: "log", text });
+        const p = this._view.webview.postMessage({ type: "log", text, updateLast });
         if (p && typeof p.then === "function") {
           p.then(undefined, (err) => {
             console.warn("[SidebarViewProvider] Failed to post log:", err);
@@ -2270,6 +2313,15 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
           <div class="metric-label">Perturbations</div>
         </div>
       </div>
+
+      <div style="display:flex; gap:6px; margin-top:8px;">
+        <button type="button" class="btn-sm btn-secondary" id="openLiteratureReportBtn" style="flex:1; display:flex; align-items:center; justify-content:center; gap:5px;" title="Open docs/literature_database.md in VS Code">
+          ${icons["summary"] || ""} Open Report
+        </button>
+        <button type="button" class="btn-sm btn-secondary" id="regenerateLiteratureReportBtn" style="flex:1; display:flex; align-items:center; justify-content:center; gap:5px;" title="Regenerate docs/literature_database.md from active DuckDB">
+          ${icons["refresh"] || "↻"} Regenerate
+        </button>
+      </div>
     </div>
 
     <!-- Preview Search Section -->
@@ -2786,6 +2838,20 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
         } else {
           renderLiteratureStats({ study_count: 0, context_count: 0, assertion_count: 0, unique_symbols: 0, organism_count: 0, perturbation_count: 0 });
         }
+      });
+    }
+
+    const openLiteratureReportBtn = document.getElementById("openLiteratureReportBtn");
+    const regenerateLiteratureReportBtn = document.getElementById("regenerateLiteratureReportBtn");
+    if (openLiteratureReportBtn) {
+      openLiteratureReportBtn.addEventListener("click", function () {
+        vscode.postMessage({ type: "literatureOpenReport" });
+      });
+    }
+    if (regenerateLiteratureReportBtn) {
+      regenerateLiteratureReportBtn.addEventListener("click", function () {
+        const val = (literatureSelect && literatureSelect.value) || currentActiveLiterature || "";
+        vscode.postMessage({ type: "literatureGenerateReport", fileName: val });
       });
     }
 
@@ -3323,9 +3389,23 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    function appendLog(text) {
+    function appendLog(text, updateLast) {
       if (terminalLog && text) {
-        terminalLog.textContent += "\\n" + String(text);
+        if (updateLast) {
+          const lines = terminalLog.textContent.split("\\n");
+          let targetIndex = lines.length - 1;
+          while (targetIndex > 0 && lines[targetIndex].trim() === "") {
+            targetIndex--;
+          }
+          if (targetIndex >= 0) {
+            lines[targetIndex] = String(text);
+            terminalLog.textContent = lines.join("\\n");
+          } else {
+            terminalLog.textContent = String(text);
+          }
+        } else {
+          terminalLog.textContent += "\\n" + String(text);
+        }
         terminalLog.scrollTop = terminalLog.scrollHeight;
       }
     }
@@ -3338,7 +3418,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
         if (message.type === "stateUpdate") {
           renderState(message.state);
         } else if (message.type === "log") {
-          appendLog(message.text);
+          appendLog(message.text, message.updateLast);
         } else if (message.type === "literatureState" || message.type === "corpusState") {
           renderLiteratureState(message.state);
         } else if (message.type === "literatureStats" || message.type === "corpusStats") {

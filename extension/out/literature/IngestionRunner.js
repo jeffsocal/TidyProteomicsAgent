@@ -84,11 +84,11 @@ class IngestionRunner {
         this.shouldAbort = false;
         let processed = 0;
         let errors = 0;
-        this.onLog(`[${this.ts()}] 📚 [Literature] Starting batch ingestion of ${queue.length} files into ${path.basename(dbFileName)}`);
+        this.onLog(`[${this.ts()}] Literature: Starting batch ingestion of ${queue.length} files into ${path.basename(dbFileName)}`);
         try {
             for (let i = 0; i < queue.length; i++) {
                 if (this.shouldAbort) {
-                    this.onLog(`[${this.ts()}] ⏹ [Literature] Ingestion aborted by user.`);
+                    this.onLog(`[${this.ts()}] Literature: Ingestion aborted by user.`);
                     break;
                 }
                 const item = queue[i];
@@ -111,7 +111,7 @@ class IngestionRunner {
                         processedCount: i + 1,
                         totalCount: queue.length,
                     });
-                    this.onLog(`[${this.ts()}] ❌ [Literature] Failed to ingest ${item.fileName}: ${item.message}`);
+                    this.onLog(`[${this.ts()}] Literature: ❌ Failed to ingest ${item.fileName}: ${item.message}`);
                 }
             }
         }
@@ -120,7 +120,17 @@ class IngestionRunner {
             this.shouldAbort = false;
             this.literatureService.syncWorkspaceScripts();
         }
-        this.onLog(`[${this.ts()}] 🏁 [Literature] Ingestion batch complete: ${processed} indexed, ${errors} failed.`);
+        this.onLog(`[${this.ts()}] Literature: Ingestion batch complete: ${processed} indexed, ${errors} failed.`);
+        if (processed > 0) {
+            try {
+                this.onLog(`[${this.ts()}] Literature: Updating database accounting report (docs/literature_database.md)...`);
+                await this.literatureService.generateReport(path.basename(dbFileName));
+                this.onLog(`[${this.ts()}] Literature: ✓ Updated docs/literature_database.md`);
+            }
+            catch (repErr) {
+                this.onLog(`[${this.ts()}] Literature: Notice: could not auto-update report: ${repErr.message}`);
+            }
+        }
         return { success: errors === 0, processed, errors };
     }
     async processItem(item, dbPath, currentIndex, totalCount) {
@@ -138,7 +148,7 @@ class IngestionRunner {
         };
         // Stage 1: Parsing PDF or Table
         notify("parsing_pdf", "Extracting text and tables...");
-        this.onLog(`[${this.ts()}] 📄 [${currentIndex}/${totalCount}] Parsing ${item.fileName}...`);
+        this.onLog(`[${this.ts()}] Literature: [${currentIndex}/${totalCount}] Parsing ${item.fileName}...`);
         const extractScript = this.findScript("extract_text_or_table.R");
         const rscript = this.literatureService.resolveRscript();
         const extractPayload = await this.execRJson(rscript, extractScript, [item.absPath, "25"]);
@@ -147,7 +157,7 @@ class IngestionRunner {
         }
         // Stage 2: LLM Structured Extraction
         notify("llm_extraction", "LLM structured extraction...");
-        this.onLog(`[${this.ts()}] 🤖 [${currentIndex}/${totalCount}] LLM extracting assertions from ${item.fileName}...`);
+        this.onLog(`[${this.ts()}] Literature: [${currentIndex}/${totalCount}] Extracting assertions from ${item.fileName}...`);
         let studyId = `doi_${path.basename(item.fileName, path.extname(item.fileName))}`;
         let extractedPayload = null;
         if (extractPayload.kind === "pdf") {
@@ -169,7 +179,7 @@ class IngestionRunner {
         extractedPayload.study.filename = item.fileName;
         // Stage 3: R Symbol & Ortholog Normalization
         notify("normalization", "Normalizing symbols and orthologs...");
-        this.onLog(`[${this.ts()}] 🧬 [${currentIndex}/${totalCount}] Normalizing symbols via R (limma/babelgene)...`);
+        this.onLog(`[${this.ts()}] Literature: [${currentIndex}/${totalCount}] Normalizing symbols via R (limma/babelgene)...`);
         let normScript;
         try {
             normScript = this.findScript("normalize_and_insert_literature.R");
@@ -190,11 +200,11 @@ class IngestionRunner {
             // Stage 4: Indexed in DuckDB
             if ((normRes.assertions_inserted || 0) === 0) {
                 notify("indexed", "Indexed 0 assertions (no explicit protein relationships found)");
-                this.onLog(`[${this.ts()}] ⚠️ [Literature] Warning: 0 assertions extracted from ${item.fileName}. Check if document contains explicit protein interactions or is a conceptual overview.`);
+                this.onLog(`[${this.ts()}] Literature: Warning: 0 assertions extracted from ${item.fileName}. Check if document contains explicit protein interactions or is a conceptual overview.`);
             }
             else {
                 notify("indexed", `Indexed ${normRes.assertions_inserted} assertions (${normRes.symbols_normalized || 0} normalized)`);
-                this.onLog(`[${this.ts()}] ✅ [${currentIndex}/${totalCount}] Indexed ${item.fileName}: ${normRes.assertions_inserted} assertions into DuckDB.`);
+                this.onLog(`[${this.ts()}] Literature: ✓ [${currentIndex}/${totalCount}] Indexed ${item.fileName}: ${normRes.assertions_inserted} assertions into DuckDB.`);
             }
         }
         finally {

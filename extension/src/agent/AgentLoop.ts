@@ -130,7 +130,7 @@ export class AgentLoop {
             const backoffMs = attempt * 3000;
             this.onProgress({
               type: "thought",
-              data: `⚠️ Turn ${turn} timed out on attempt ${attempt}/${maxRetries + 1} (${err.message}). Retrying in ${backoffMs / 1000}s...`,
+              data: `Turn ${turn} timed out on attempt ${attempt}/${maxRetries + 1} (${err.message}). Retrying in ${backoffMs / 1000}s...`,
             });
             await new Promise((r) => setTimeout(r, backoffMs));
             continue;
@@ -201,7 +201,7 @@ export class AgentLoop {
 
       // Check for output limit truncation
       if (response.truncationDetected) {
-        const warnMsg = `⚠️ Output limit reached (finish_reason: "${response.finishReason || "length"}", tokens: ${response.usage.completionTokens}). Generation was truncated.`;
+        const warnMsg = `Output limit reached (finish_reason: "${response.finishReason || "length"}", tokens: ${response.usage.completionTokens}). Generation was truncated.`;
         this.onProgress({
           type: "thought",
           data: warnMsg,
@@ -239,7 +239,7 @@ export class AgentLoop {
             const head = toolMessageContent.slice(0, 12000);
             const tail = toolMessageContent.slice(-10000);
             const omitted = toolMessageContent.length - 22000;
-            toolMessageContent = `${head}\n\n... [⚠️ Output truncated: ${omitted.toLocaleString()} characters omitted to preserve context economy. See complete output in workspace/logs/ or inspect with 'read_file'] ...\n\n${tail}`;
+            toolMessageContent = `${head}\n\n... [Output truncated: ${omitted.toLocaleString()} characters omitted to preserve context economy. See complete output in workspace/logs/ or inspect with 'read_file'] ...\n\n${tail}`;
           }
 
           // Append tool result to messages
@@ -259,8 +259,8 @@ export class AgentLoop {
             const failReason = tc.args.reason || "Phase gate or checkpoint failed";
             const actionable = tc.args.actionableInsights || "";
             const summary = actionable
-              ? `❌ Pre-flight Gate / Checkpoint Failed: ${failReason}\n\nActionable Insights:\n${actionable}`
-              : `❌ Pre-flight Gate / Checkpoint Failed: ${failReason}`;
+              ? `[Failed] Pre-flight Gate / Checkpoint: ${failReason}\n\nActionable Insights:\n${actionable}`
+              : `[Failed] Pre-flight Gate / Checkpoint: ${failReason}`;
             const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
 
             if (this.chatLogger) {

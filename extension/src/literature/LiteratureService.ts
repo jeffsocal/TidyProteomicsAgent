@@ -406,6 +406,17 @@ export class LiteratureService {
     return res;
   }
 
+  public async generateReport(fileName?: string, outputRelativePath = "docs/literature_database.md"): Promise<RResult> {
+    const cfg = this.getConfig();
+    const target = fileName || cfg.activeLiterature || cfg.activeCorpus;
+    if (!target) return { ok: false, error: "No active literature database selected." };
+    const dbPath = this.resolveLiteraturePath(target);
+    const outPath = path.isAbsolute(outputRelativePath)
+      ? outputRelativePath
+      : path.join(this.requireRoot(), outputRelativePath);
+    return await this.runCli("report", [dbPath, outPath], true);
+  }
+
   private resolveLiteraturePath(fileName: string): string {
     const base = path.basename(fileName);
     const withExt = base.toLowerCase().endsWith(LITERATURE_EXT) ? base : `${base}${LITERATURE_EXT}`;

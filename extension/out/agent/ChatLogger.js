@@ -96,14 +96,14 @@ class ChatLogger {
             "",
             "---",
             "",
-            `# [${timestamp}] 🚀 Phase Start: ${params.phaseTitle}`,
+            `# [${timestamp}] Phase Start: ${params.phaseTitle}`,
             `- **Phase File**: \`${params.phaseFileName}\``,
             `- **Model**: \`${params.model}\` | **Provider**: \`${params.provider}\``,
             "",
-            "### ⚙️ Persistent System Frame (Sent & Cached Prefix)",
+            "### Persistent System Frame (Sent & Cached Prefix)",
             ...systemFiles.map((f) => `- \`${f}\``),
             "",
-            "### 📥 Input Prompts & Blackboard Directives (Turn 1)",
+            "### Input Prompts & Blackboard Directives (Turn 1)",
             ...inputFiles.map((f) => `- \`${f}\``),
             "",
         ];
@@ -112,7 +112,7 @@ class ChatLogger {
     async logAssistantResponse(turn, content, toolCalls, usage) {
         const timestamp = new Date().toISOString();
         const lines = [
-            `### [${timestamp}] 🤖 Assistant (Turn ${turn})`,
+            `### [${timestamp}] Assistant (Turn ${turn})`,
         ];
         if (content && content.trim().length > 0) {
             lines.push("");
@@ -142,17 +142,17 @@ class ChatLogger {
     async logTruncationWarning(turn, finishReason, completionTokens) {
         const timestamp = new Date().toISOString();
         const lines = [
-            `> ⚠️ **WARNING (Turn ${turn})**: Generation hit output token limit (\`finish_reason: "${finishReason}"\`, completion tokens: **${completionTokens.toLocaleString()}**). Response or pending tool calls were truncated mid-stream!`,
+            `> **WARNING (Turn ${turn})**: Generation hit output token limit (\`finish_reason: "${finishReason}"\`, completion tokens: **${completionTokens.toLocaleString()}**). Response or pending tool calls were truncated mid-stream!`,
             "",
         ];
         await this.append(lines.join("\n"));
     }
     async logToolResult(toolName, callId, result, isError) {
         const timestamp = new Date().toISOString();
-        const status = isError ? "❌ ERROR" : "✅ SUCCESS";
+        const status = isError ? "FAILED" : "SUCCESS";
         const cleanResult = result ? result.trim() : "(No output)";
         const lines = [
-            `#### [${timestamp}] 🔧 Tool Result: \`${toolName}\` [${status}] (id: \`${callId}\`)`,
+            `#### [${timestamp}] Tool Result: \`${toolName}\` [${status}] (id: \`${callId}\`)`,
             "```",
             cleanResult,
             "```",
@@ -162,7 +162,7 @@ class ChatLogger {
     }
     async logPhaseEnd(params) {
         const timestamp = new Date().toISOString();
-        const statusIcon = params.success ? "✅" : "❌";
+        const statusIcon = params.success ? "✓" : "❌";
         const statusText = params.success ? "COMPLETED" : "FAILED";
         const cached = params.tokensUsed.cachedPromptTokens || 0;
         const banner = [
