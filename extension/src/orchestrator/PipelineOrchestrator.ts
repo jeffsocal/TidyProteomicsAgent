@@ -385,8 +385,29 @@ export class PipelineOrchestrator {
       { name: "Experiment & Dataset Spec", relPath: "docs/experiment.md" },
       { name: "Shared Memory", relPath: "docs/notes.md" },
       { name: "Active Model Summary", relPath: "docs/llm.md" },
-      { name: "LLM Chat Log", relPath: "logs/llm_chat.md" },
+      { name: "Pipeline Summary", relPath: "logs/pipeline.md" },
     ];
+
+    // Discover per-phase chat.md and console.log files
+    try {
+      const logsDir = path.join(this.workspaceRoot, "logs");
+      const entries = await fs.readdir(logsDir, { withFileTypes: true });
+      for (const ent of entries) {
+        if (ent.isDirectory()) {
+          const phaseDir = ent.name;
+          const chatRel = `logs/${phaseDir}/chat.md`;
+          const consoleRel = `logs/${phaseDir}/console.log`;
+          list.push({ name: `${phaseDir} Chat Trace`, relPath: chatRel });
+          list.push({ name: `${phaseDir} Console Log`, relPath: consoleRel });
+        }
+      }
+    } catch {}
+
+    // Backward-compatibility: if legacy logs/llm_chat.md exists
+    try {
+      await fs.stat(path.join(this.workspaceRoot, "logs/llm_chat.md"));
+      list.push({ name: "Legacy LLM Chat Log", relPath: "logs/llm_chat.md" });
+    } catch {}
 
     // If optional BIOLOGY.md exists, include it
     try {
@@ -477,7 +498,7 @@ Construct and execute code for this phase, capturing output to logs.
       { name: "code", relPath: "code", description: "Generated Analysis Scripts" },
       { name: "tools", relPath: "tools", description: "Linter & Execution Helper Utilities" },
       { name: "docs", relPath: "docs", description: "Shared Memory (notes.md, llm.md) & Experiment Design" },
-      { name: "logs", relPath: "logs", description: "Execution Chat Trace (llm_chat.md)" },
+      { name: "logs", relPath: "logs", description: "Phase Chat Traces & Console Logs (logs/<phase>/)" },
       { name: "data", relPath: "data", description: "Raw Input Proteomics Data" },
     ];
 
@@ -744,6 +765,7 @@ Construct and execute code for this phase, capturing output to logs.
 
     const phaseTag = path.basename(phase.fileName).replace(/\.md$/i, "");
     const cleanTitle = (phase.title || "").replace(/^Phase\s+\d+:\s*/i, "").trim();
+    this.chatLogger.setPhase(phase.fileName);
 
     phase.status = "running";
     phase.startTime = new Date().toISOString();
@@ -787,7 +809,7 @@ Construct and execute code for this phase, capturing output to logs.
               this.logPhase(phaseTag, cleanData);
             }
           } else if (event.type === "text") {
-            // Raw context stream is logged to logs/llm_chat.md by chatLogger; live terminal feed displays timestamped headers only
+            // Raw context stream is logged to logs/<phase>/chat.md by chatLogger; live terminal feed displays timestamped headers only
           } else if (event.type === "tool_start") {
             const rawHeader = this.formatToolHeader(event.data.name, event.data.args);
             const prefix = `[${this.ts()}] ${phaseTag}: `;

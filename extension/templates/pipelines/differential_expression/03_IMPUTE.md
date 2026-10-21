@@ -1,6 +1,6 @@
 ### Phase 3: Missingness Assessment & Quantitative Imputation
 
-Construct and execute `code/03_impute.R`, capturing full execution output to `logs/03_impute.log` (e.g. `Rscript code/03_impute.R 2>&1 | tee logs/03_impute.log`). You must strictly enforce all checkpoints below.
+Construct and execute `code/03_impute.R`, capturing full execution output to `logs/03_impute/console.log` (e.g. `mkdir -p logs/03_impute && Rscript code/03_impute.R 2>&1 | tee logs/03_impute/console.log`). You must strictly enforce all checkpoints below.
 
 ---
 
@@ -76,7 +76,7 @@ Construct and execute `code/03_impute.R`, capturing full execution output to `lo
 
 #### Phase 3.5: Checkpoint Verification & State Recording
 - [ ] **Checkpoint 3.5**:
-  1. `logs/03_impute.log` exists on disk with non-zero file size.
+  1. `logs/03_impute/console.log` (or `logs/03_impute.log`) exists on disk with non-zero file size.
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size, and either operations log contains `impute`, zero missingness complete-case bypass is verified, or pre-imputed pass-through is confirmed.
   3. `docs/notes.md` contains the missingness audit and imputation strategy rationale.
 - [ ] **Complete Phase**:

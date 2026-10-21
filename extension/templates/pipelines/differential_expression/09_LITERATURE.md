@@ -11,7 +11,7 @@ You will synthesize evidence across:
 to further contextualize the observations and develop the **third layer of conclusions**.
 
 If new hypotheses or candidate networks emerge from the literature assertions:
-- Use `agent/SKILL.md` to query the saved dataset (`data/tidyproteomics_data.rds`) directly (e.g. running `tools/literature/interrogate_unthresholded_proteomics.R` or custom scripts in `code/09_literature.R` logged to `logs/09_literature.log`).
+- Use `agent/SKILL.md` to query the saved dataset (`data/tidyproteomics_data.rds`) directly (e.g. running `tools/literature/interrogate_unthresholded_proteomics.R` or custom scripts in `code/09_literature.R` logged to `logs/09_literature/console.log`).
 - Document any **new** data-derived observations in `docs/literature.md`.
 
 Finally, you will construct `docs/literature.md` documenting both the **new** observations and **new** third-layer conclusions, with all references documented.
@@ -48,7 +48,7 @@ Execute the iterative graph interrogation loop:
 3. **Step 2C: Reverse-Interrogate Unthresholded Proteomics Data**:
    - Execute the reverse-interrogation skill against `data/tidyproteomics_data.rds`:
      ```bash
-     Rscript tools/literature/interrogate_unthresholded_proteomics.R "<candidate_symbols>" "<module_name>" data/tidyproteomics_data.rds 2>&1 | tee logs/09_literature.log
+     mkdir -p logs/09_literature && Rscript tools/literature/interrogate_unthresholded_proteomics.R "<candidate_symbols>" "<module_name>" data/tidyproteomics_data.rds 2>&1 | tee logs/09_literature/console.log
      ```
    - Review the output table and custom `fgsea` enrichment metrics (`NES`, `pval`, `leadingEdge`) to verify if the candidate cluster displays coordinate nominal shifts ($p < 0.05$) or concordant directional drift.
    - Any identified sub-threshold shifts must be recorded as **new observations** in `docs/literature.md`.
@@ -63,9 +63,9 @@ If no active DuckDB literature database is configured:
 
 #### 3. Interactive Data Queries via `agent/SKILL.md` (Pursuing Literature Hypotheses)
 If the literature database assertions point to additional protein families, isoform differences, or pathway branches:
-- Write and execute `code/09_literature.R` (capturing output to `logs/09_literature.log`):
+- Write and execute `code/09_literature.R` (capturing output to `logs/09_literature/console.log`):
   ```bash
-  Rscript code/09_literature.R 2>&1 | tee logs/09_literature.log
+  mkdir -p logs/09_literature && Rscript code/09_literature.R 2>&1 | tee logs/09_literature/console.log
   ```
 - Use canonical `tidyproteomics` methods per `agent/SKILL.md` to extract unthresholded metrics or verify target-interactor relationships.
 - Document any **new** data-derived findings in `docs/literature.md`.
@@ -121,7 +121,7 @@ Organize the document strictly into the following structured sections:
 #### 6. Phase Completion Gate
 - [ ] **Checkpoint Gate**:
   1. `docs/websearch.md`, `docs/knowledge.md`, and `docs/observations.md` successfully ingested.
-  2. Literature query scripts (`query_literature.R`, `interrogate_unthresholded_proteomics.R`, or `code/09_literature.R`) executed cleanly with output logged to `logs/09_literature.log`.
+  2. Literature query scripts (`query_literature.R`, `interrogate_unthresholded_proteomics.R`, or `code/09_literature.R`) executed cleanly with output logged to `logs/09_literature/console.log` (or `logs/09_literature.log`).
   3. `docs/literature.md` exists on disk with non-zero size, containing third-layer conclusions, new observations, sub-threshold dynamics, and documented references.
 - [ ] **Complete Phase**:
   - Invoke `complete_phase(phaseName = "09_LITERATURE", summary = "Literature database interrogation complete in docs/literature.md with third-layer conclusions, sub-threshold dynamics, and grounded citations.")`

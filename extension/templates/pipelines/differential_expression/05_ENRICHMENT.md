@@ -1,6 +1,6 @@
 ### Phase 5: Functional Annotation Assessment & Pathway Enrichment
 
-Construct and execute `code/05_enrichment.R`, capturing full execution output to `logs/05_enrichment.log` (e.g. `Rscript code/05_enrichment.R 2>&1 | tee logs/05_enrichment.log`). You must strictly enforce all checkpoints below.
+Construct and execute `code/05_enrichment.R`, capturing full execution output to `logs/05_enrichment/console.log` (e.g. `mkdir -p logs/05_enrichment && Rscript code/05_enrichment.R 2>&1 | tee logs/05_enrichment/console.log`). You must strictly enforce all checkpoints below.
 
 ---
 
@@ -107,7 +107,7 @@ Construct and execute `code/05_enrichment.R`, capturing full execution output to
 
 #### Phase 5.5: Checkpoint Verification & State Recording
 - [ ] **Checkpoint 5.5**:
-  1. `logs/05_enrichment.log` exists on disk with non-zero file size.
+  1. `logs/05_enrichment/console.log` (or `logs/05_enrichment.log`) exists on disk with non-zero file size.
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size.
   3. If functional terms were analyzed: enrichment tables (`data/table_*_enrichment_*.csv`) and enrichment plots (`data/*_enrichment_*.png`) exist in `data/` with non-zero file sizes.
   4. `docs/notes.md` contains the functional enrichment audit and summary.

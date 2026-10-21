@@ -1,9 +1,9 @@
 ### Phase 7: Internal Knowledge Contextualization & First-Layer Conclusions
 
-In this phase, you (the LLM) will ingest the primary data-derived observations from `06_OBSERVATIONS` (`docs/observations.md`, `logs/06_observations.log`, and experimental design in `docs/experiment.md`). You will apply your internal domain knowledge (molecular biology, biochemistry, cellular physiology, protein complexes, and signaling cascades) to contextualize the observations and develop the **first layer of conclusions** (strictly do not hallucinate facts, citations, or unsupported claims).
+In this phase, you (the LLM) will ingest the primary data-derived observations from `06_OBSERVATIONS` (`docs/observations.md`, `logs/06_observations/console.log`, and experimental design in `docs/experiment.md`). You will apply your internal domain knowledge (molecular biology, biochemistry, cellular physiology, protein complexes, and signaling cascades) to contextualize the observations and develop the **first layer of conclusions** (strictly do not hallucinate facts, citations, or unsupported claims).
 
 If you need to query the data to test new hypotheses or check related protein family members, complex subunits, or candidate interactors:
-- Use `agent/SKILL.md` API conventions to write and execute targeted R queries against `data/tidyproteomics_data.rds` (e.g. `code/07_knowledge.R` logged to `logs/07_knowledge.log`).
+- Use `agent/SKILL.md` API conventions to write and execute targeted R queries against `data/tidyproteomics_data.rds` (e.g. `code/07_knowledge.R` logged to `logs/07_knowledge/console.log`).
 - Document any **new** data-derived observations in `docs/knowledge.md`.
 
 You will also develop a curated list of high-yield keyphrases for downstream web search in Phase 08.
@@ -21,9 +21,9 @@ Before proceeding, verify that:
 
 #### 2. Interactive Data Queries via `agent/SKILL.md` (Optional Follow-Up Hypotheses)
 If the observed changes in `docs/observations.md` suggest follow-up questions about specific protein complexes, unthresholded co-factors, or pathway partners:
-- Write and execute a targeted R script `code/07_knowledge.R` (capturing output to `logs/07_knowledge.log`):
+- Write and execute a targeted R script `code/07_knowledge.R` (capturing output to `logs/07_knowledge/console.log`):
   ```bash
-  Rscript code/07_knowledge.R 2>&1 | tee logs/07_knowledge.log
+  mkdir -p logs/07_knowledge && Rscript code/07_knowledge.R 2>&1 | tee logs/07_knowledge/console.log
   ```
 - Use canonical `tidyproteomics` functions per `agent/SKILL.md` (e.g., `export_analysis(tp_data, "<contrast>", .analysis = "expression")`, filtering candidate gene symbols or UniProt IDs, checking nominal $p$-values and effect sizes without imposing strict FDR cutoffs):
   ```r
@@ -38,7 +38,7 @@ If the observed changes in `docs/observations.md` suggest follow-up questions ab
   hits <- exp_tbl %>% filter(if_any(any_of(c("gene_name", "gene_symbol", "symbol", "protein")), ~ .x %in% candidate_genes))
   print(hits %>% select(any_of(c("gene_name", "protein", "log2_foldchange", "p_value", "adj_p_value", "description"))))
   ```
-- Inspect the log using CLI tools (`head -n 30 logs/07_knowledge.log`).
+- Inspect the log using CLI tools (`head -n 30 logs/07_knowledge/console.log`).
 - Any newly discovered findings (e.g., coordinate trends among unthresholded complex subunits) must be documented as **new observations** in `docs/knowledge.md`.
 
 ---
@@ -99,7 +99,7 @@ Organize the document strictly into the following structured sections:
 #### 6. Phase Completion Gate
 - [ ] **Checkpoint Gate**:
   1. `docs/observations.md` successfully ingested.
-  2. If follow-up data queries were executed, `code/07_knowledge.R` exited with code 0 and output was logged to `logs/07_knowledge.log`.
+  2. If follow-up data queries were executed, `code/07_knowledge.R` exited with code 0 and output was logged to `logs/07_knowledge/console.log` (or `logs/07_knowledge.log`).
   3. `docs/knowledge.md` exists on disk with non-zero size, containing first-layer conclusions, new observations, and curated web search keyphrases.
 - [ ] **Complete Phase**:
   - Invoke `complete_phase(phaseName = "07_KNOWLEDGE", summary = "Internal knowledge contextualization complete in docs/knowledge.md with first-layer conclusions, follow-up data queries, and curated web search keyphrases.")`

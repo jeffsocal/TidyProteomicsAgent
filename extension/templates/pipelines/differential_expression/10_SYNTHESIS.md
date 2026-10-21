@@ -23,7 +23,7 @@ Before writing `docs/scientific_report.md`, verify that:
    - `docs/literature.md` (contains third-layer literature database interrogation)
    - `data/tidyproteomics_data.rds` (persisted tidyproteomics dataset object)
 2. Execution logs exist in `logs/` for all phases executed in the active pipeline:
-   - Inspect `logs/` or `docs/notes.md` to confirm clean runs for whichever pipeline phases were executed (e.g. `logs/00_install.log` or `logs/00_setup.log`, `logs/01_inspect.log`, `logs/06_observations.log`, and any follow-up inquiry logs `logs/07_*.log`, `logs/08_*.log`, `logs/09_*.log`).
+   - Inspect `logs/` or `docs/notes.md` to confirm clean runs for whichever pipeline phases were executed (e.g. `logs/<phase>/console.log` or `logs/<phase>.log`, such as `logs/00_install/console.log`, `logs/01_inspect/console.log`, `logs/06_observations/console.log`, and any follow-up inquiry logs in `logs/07_*`, `logs/08_*`, `logs/09_*`).
    - **Pre-Processed / Custom Pipeline Flexibility**: If the dataset was pre-normalized, imputed, or had differential expression and enrichment executed prior to ingestion (or if upstream phases such as `02_NORMALIZE` through `05_ENRICHMENT` were omitted or deleted), upstream logs (`logs/02_*` to `logs/05_*`) are **NOT required**. Confirm that quantitative data and statistical results are present in `data/tidyproteomics_data.rds` and documented in `docs/observations.md`.
 3. Quantitative tables and figure validation:
    - Verify that any quantitative tables (`data/table_*_*.csv`) and plots (`data/*.png`) that you reference or embed in the manuscript exist on disk with non-zero file sizes.
@@ -116,7 +116,7 @@ Compose `docs/scientific_report.md` formatted in GitHub-flavored markdown adheri
    - Comprehensive bibliography compiling all literature citations, study IDs, web sources, and publications referenced across `docs/*` (`docs/observations.md`, `docs/knowledge.md`, `docs/websearch.md`, `docs/literature.md`).
 
 9. **Data & Artifact Availability**:
-   - Explicit relative markdown links to all executable R scripts actually present in `code/` (e.g. `[00_install.R](../code/00_install.R)`, `[01_inspect.R](../code/01_inspect.R)`, `[06_observations.R](../code/06_observations.R)`), all available logs in `logs/` (`../logs/*.log`), documentation files (`[observations.md](./observations.md)`, `[knowledge.md](./knowledge.md)`, `[websearch.md](./websearch.md)`, `[literature.md](./literature.md)`, `[experiment.md](./experiment.md)`, `[notes.md](./notes.md)`), tables (`../data/table_*_*.csv`), and figures (`../data/*.png`).
+   - Explicit relative markdown links to all executable R scripts actually present in `code/` (e.g. `[00_install.R](../code/00_install.R)`, `[01_inspect.R](../code/01_inspect.R)`, `[06_observations.R](../code/06_observations.R)`), all available phase logs in `logs/` (e.g. `[01_inspect/console.log](../logs/01_inspect/console.log)` and `[pipeline.md](../logs/pipeline.md)`), documentation files (`[observations.md](./observations.md)`, `[knowledge.md](./knowledge.md)`, `[websearch.md](./websearch.md)`, `[literature.md](./literature.md)`, `[experiment.md](./experiment.md)`, `[notes.md](./notes.md)`), tables (`../data/table_*_*.csv`), and figures (`../data/*.png`).
    - *Note*: Dynamically inspect `code/` and `logs/` to link existing files; do not include dead links to omitted or deleted phases.
 
 ---

@@ -3,21 +3,61 @@ import * as path from "path";
 import { TokenUsage, ToolCall } from "../types";
 
 export class ChatLogger {
-  private logPath: string;
+  private currentPhaseTag = "";
+  private logPath = "";
+  private consoleLogPath = "";
+  private pipelineLogPath = "";
   private writeQueue: Promise<void> = Promise.resolve();
 
-  constructor(private workspaceRoot: string, logFileName = "logs/llm_chat.md") {
+  constructor(private workspaceRoot: string, initialPhase = "") {
     this.workspaceRoot = workspaceRoot || "";
-    this.logPath = this.resolveLogPath(logFileName);
+    if (initialPhase) {
+      this.setPhase(initialPhase);
+    } else {
+      this.pipelineLogPath = this.resolveLogPath("logs/pipeline.md");
+    }
   }
 
   public setWorkspaceRoot(newRoot: string) {
     this.workspaceRoot = newRoot || "";
-    this.logPath = this.resolveLogPath("logs/llm_chat.md");
+    if (this.currentPhaseTag) {
+      this.setPhase(this.currentPhaseTag);
+    } else {
+      this.pipelineLogPath = this.resolveLogPath("logs/pipeline.md");
+    }
+  }
+
+  /**
+   * Switches the active logging context to a specific phase directory:
+   *   logs/<phaseTag>/chat.md      -> Phase chat & LLM reasoning trace
+   *   logs/<phaseTag>/console.log  -> Raw R / command stdout and stderr
+   */
+  public setPhase(phaseFileNameOrTag: string): void {
+    if (!phaseFileNameOrTag) return;
+    let tag = path.basename(phaseFileNameOrTag).replace(/\.md$/i, "").toLowerCase();
+    if (tag.startsWith("instruct")) {
+      tag = "00_install";
+    }
+    this.currentPhaseTag = tag;
+    this.logPath = this.resolveLogPath(`logs/${tag}/chat.md`);
+    this.consoleLogPath = this.resolveLogPath(`logs/${tag}/console.log`);
+    this.pipelineLogPath = this.resolveLogPath("logs/pipeline.md");
+  }
+
+  public getPhaseTag(): string {
+    return this.currentPhaseTag;
   }
 
   public getLogPath(): string {
-    return this.logPath;
+    return this.logPath || this.pipelineLogPath;
+  }
+
+  public getConsoleLogPath(): string {
+    return this.consoleLogPath;
+  }
+
+  public getPipelineLogPath(): string {
+    return this.pipelineLogPath;
   }
 
   private resolveLogPath(fileName: string): string {
@@ -28,18 +68,43 @@ export class ChatLogger {
     return path.join(this.workspaceRoot, fileName);
   }
 
-  private async append(text: string): Promise<void> {
-    if (!this.workspaceRoot || !this.logPath) return;
+  private async appendToFile(targetPath: string, text: string): Promise<void> {
+    if (!this.workspaceRoot || !targetPath) return;
     this.writeQueue = this.writeQueue.then(async () => {
       try {
-        const dir = path.dirname(this.logPath);
+        const dir = path.dirname(targetPath);
         await fs.mkdir(dir, { recursive: true });
-        await fs.appendFile(this.logPath, text + "\n", "utf-8");
+        await fs.appendFile(targetPath, text + "\n", "utf-8");
       } catch (err) {
-        console.error(`[ChatLogger] Failed to write to ${this.logPath}:`, err);
+        console.error(`[ChatLogger] Failed to write to ${targetPath}:`, err);
       }
     });
     return this.writeQueue;
+  }
+
+  private async append(text: string): Promise<void> {
+    const target = this.logPath || this.pipelineLogPath;
+    return this.appendToFile(target, text);
+  }
+
+  /**
+   * Initializes or updates the master logs/pipeline.md summary table.
+   */
+  private async ensurePipelineSummaryHeader(): Promise<void> {
+    if (!this.workspaceRoot || !this.pipelineLogPath) return;
+    try {
+      await fs.stat(this.pipelineLogPath);
+    } catch {
+      const header = [
+        "# TidyProteomics Pipeline Execution Summary",
+        "",
+        "> Master index of autonomous reasoning traces and raw execution logs per phase.",
+        "",
+        "| Phase | Title | Status | Duration | Total Tokens | Logs |",
+        "| :--- | :--- | :--- | :--- | :--- | :--- |",
+      ].join("\n");
+      await this.appendToFile(this.pipelineLogPath, header);
+    }
   }
 
   /**
@@ -54,6 +119,23 @@ export class ChatLogger {
     systemPromptFiles?: string[];
     inputPromptFiles?: string[];
   }): Promise<void> {
+    this.setPhase(params.phaseFileName);
+    await this.ensurePipelineSummaryHeader();
+
+    // Touch console.log so it exists immediately on disk
+    if (this.consoleLogPath) {
+      await this.writeQueue.then(async () => {
+        try {
+          await fs.mkdir(path.dirname(this.consoleLogPath), { recursive: true });
+          await fs.appendFile(
+            this.consoleLogPath,
+            `=== Phase Started: ${params.phaseTitle} [${new Date().toISOString()}] ===\n`,
+            "utf-8"
+          );
+        } catch {}
+      });
+    }
+
     const timestamp = new Date().toISOString();
     const systemFiles = params.systemPromptFiles || [
       "agent/PROTOCOL.md",
@@ -72,8 +154,9 @@ export class ChatLogger {
       "---",
       "",
       `# [${timestamp}] Phase Start: ${params.phaseTitle}`,
-      `- **Phase File**: \`${params.phaseFileName}\``,
+      `- **Phase Directive**: \`${params.phaseFileName}\``,
       `- **Model**: \`${params.model}\` | **Provider**: \`${params.provider}\``,
+      `- **Console Output**: [\`logs/${this.currentPhaseTag}/console.log\`](./console.log)`,
       "",
       "### Persistent System Frame (Sent & Cached Prefix)",
       ...systemFiles.map((f) => `- \`${f}\``),
@@ -143,16 +226,119 @@ export class ChatLogger {
     await this.append(lines.join("\n"));
   }
 
+  /**
+   * Logs tool results. For `execute_command` (especially R scripts), writes the complete, unvarnished
+   * stdout and stderr to `logs/<phaseTag>/console.log` while inserting a lean "Execution Card" into `chat.md`.
+   */
   public async logToolResult(
     toolName: string,
     callId: string,
     result: string,
-    isError?: boolean
+    isError?: boolean,
+    toolArgs?: Record<string, any>
   ): Promise<void> {
     const timestamp = new Date().toISOString();
     const status = isError ? "FAILED" : "SUCCESS";
     const cleanResult = result ? result.trim() : "(No output)";
 
+    // 1. Special Handling for execute_command: Keeps R console noise OUT of chat.md
+    if (toolName === "execute_command") {
+      const command = toolArgs?.command || "(command string unavailable)";
+
+      // Persist full unvarnished terminal output to logs/<phaseTag>/console.log
+      if (this.consoleLogPath) {
+        const consoleEntry = [
+          "================================================================================",
+          `[${timestamp}] Command: ${command}`,
+          `Status: ${status} (id: ${callId})`,
+          "================================================================================",
+          cleanResult,
+          "",
+        ].join("\n");
+        await this.appendToFile(this.consoleLogPath, consoleEntry);
+      }
+
+      // Author lean Execution Card in chat.md
+      const relConsole = `./console.log`;
+      const lines = [
+        `#### [${timestamp}] Tool Result: \`${toolName}\` [${status}] (id: \`${callId}\`)`,
+        `- **Command**: \`${command}\``,
+        `- **Status**: ${isError ? "❌ Command failed" : "✓ Command executed successfully"}`,
+        `- **Console Output**: Logged to [\`logs/${this.currentPhaseTag}/console.log\`](${relConsole})`,
+      ];
+
+      if (isError) {
+        // Extract up to 10 lines of salient error / traceback so LLM reasoning remains clear
+        const rawLines = cleanResult.split("\n");
+        const errorLines = rawLines.filter((l) =>
+          /error|failed|exception|cannot|fatal/i.test(l)
+        );
+        const snippetLines = errorLines.length > 0 ? errorLines.slice(-10) : rawLines.slice(-10);
+        lines.push("- **Error Excerpt**:");
+        lines.push("  ```text");
+        for (const el of snippetLines) {
+          lines.push(`  ${el.trim()}`);
+        }
+        lines.push("  ```");
+      } else {
+        // Highlight any checkpoint pass lines if found
+        const passLines = cleanResult
+          .split("\n")
+          .filter((l) => /CHECKPOINT.*PASS|ALL_CHECKPOINTS_PASSED|PHASE_.*_PASS/i.test(l))
+          .slice(0, 3);
+        if (passLines.length > 0) {
+          for (const pl of passLines) {
+            lines.push(`- **Checkpoint Highlight**: \`${pl.trim()}\``);
+          }
+        } else {
+          const lineCount = cleanResult.split("\n").length;
+          lines.push(`- **Console Volume**: ${lineCount.toLocaleString()} lines captured in console.log`);
+        }
+      }
+
+      lines.push("");
+      await this.append(lines.join("\n"));
+      return;
+    }
+
+    // 2. Special Handling for write_file: Keep lean confirmation without echoing file body
+    if (toolName === "write_file") {
+      const filePath = toolArgs?.filePath || "";
+      const lines = [
+        `#### [${timestamp}] Tool Result: \`${toolName}\` [${status}] (id: \`${callId}\`)`,
+        `- **Target File**: \`${filePath}\``,
+        `- **Result**: ${cleanResult}`,
+        "",
+      ];
+      await this.append(lines.join("\n"));
+      return;
+    }
+
+    // 3. Special Handling for read_file: If large, keep a truncated preview
+    if (toolName === "read_file") {
+      const filePath = toolArgs?.filePath || "";
+      const rawLines = cleanResult.split("\n");
+      const lines = [
+        `#### [${timestamp}] Tool Result: \`${toolName}\` [${status}] (id: \`${callId}\`)`,
+        `- **Inspected File**: \`${filePath}\``,
+      ];
+      if (rawLines.length > 25) {
+        const preview = rawLines.slice(0, 15).join("\n");
+        lines.push("```");
+        lines.push(preview);
+        lines.push(`\n... [${(rawLines.length - 15).toLocaleString()} lines omitted in chat log for economy] ...`);
+        lines.push("```");
+      } else {
+        lines.push("```");
+        lines.push(cleanResult);
+        lines.push("```");
+      }
+      lines.push("");
+      await this.append(lines.join("\n"));
+      return;
+    }
+
+    // 4. Default for other tools
     const lines = [
       `#### [${timestamp}] Tool Result: \`${toolName}\` [${status}] (id: \`${callId}\`)`,
       "```",
@@ -182,6 +368,7 @@ export class ChatLogger {
       `### [${timestamp}] ${statusIcon} Phase ${statusText}: ${params.phaseTitle}`,
       `- **Duration**: ${params.durationSeconds}s | **Total Turns**: ${params.turnCount}`,
       `- **Cumulative Tokens**: Total: **${params.tokensUsed.totalTokens.toLocaleString()}** | Prompt: ${params.tokensUsed.promptTokens.toLocaleString()} | Completion: ${params.tokensUsed.completionTokens.toLocaleString()} | Cached: ${cached.toLocaleString()}`,
+      `- **Logs**: [\`chat.md\`](./chat.md) | [\`console.log\`](./console.log)`,
       "",
       `**Summary**:`,
       params.summary,
@@ -191,5 +378,11 @@ export class ChatLogger {
     ].join("\n");
 
     await this.append(banner);
+
+    // Update master pipeline.md index table
+    if (this.pipelineLogPath) {
+      const summaryRow = `| ${statusIcon} **${this.currentPhaseTag}** | ${params.phaseTitle} | ${statusText} | ${params.durationSeconds}s | ${params.tokensUsed.totalTokens.toLocaleString()} | [Chat](./${this.currentPhaseTag}/chat.md) \\| [Console](./${this.currentPhaseTag}/console.log) |`;
+      await this.appendToFile(this.pipelineLogPath, summaryRow);
+    }
   }
 }

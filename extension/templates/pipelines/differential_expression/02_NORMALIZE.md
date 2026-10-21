@@ -1,6 +1,6 @@
 ### Phase 2: Contaminant Filtering & Multi-Method Normalization Benchmarking
 
-Construct and execute `code/02_normalize.R`, capturing full execution output to `logs/02_normalize.log` (e.g. `Rscript code/02_normalize.R 2>&1 | tee logs/02_normalize.log`). You must strictly enforce all checkpoints below.
+Construct and execute `code/02_normalize.R`, capturing full execution output to `logs/02_normalize/console.log` (e.g. `mkdir -p logs/02_normalize && Rscript code/02_normalize.R 2>&1 | tee logs/02_normalize/console.log`). You must strictly enforce all checkpoints below.
 
 ---
 
@@ -78,7 +78,7 @@ Construct and execute `code/02_normalize.R`, capturing full execution output to 
 
 #### Phase 2.5: Checkpoint Verification & State Recording
 - [ ] **Checkpoint 2.5**:
-  1. `logs/02_normalize.log` exists on disk with non-zero file size.
+  1. `logs/02_normalize/console.log` (or `logs/02_normalize.log`) exists on disk with non-zero file size.
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size and contains normalized abundance layers.
   3. PCA score plot (`data/plot_*_pca_PC1PC2.png`) exists on disk with non-zero file size.
   4. If multiple quantitative layers exist, variation plot (`data/plot_*_normalizated_variation.png`) exists on disk.

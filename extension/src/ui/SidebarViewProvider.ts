@@ -2119,7 +2119,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
         <div class="section-header">
           <h3>${icons["terminal"] || ""} Sub-Loop Live Feed</h3>
           <div style="display:flex; gap:4px;">
-            <button class="btn-sm" id="viewChatLogBtn" title="Open logs/llm_chat.md in VS Code">${icons["list"] || ""} Chat Log</button>
+            <button class="btn-sm" id="viewChatLogBtn" title="Open master logs/pipeline.md in VS Code">${icons["list"] || ""} Pipeline Log</button>
             <button class="btn-sm" id="clearLogBtn">Clear</button>
           </div>
         </div>
@@ -2848,7 +2848,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       });
     }
     if (clearLogBtn) clearLogBtn.addEventListener("click", () => { if (terminalLog) terminalLog.textContent = ""; });
-    if (viewChatLogBtn) viewChatLogBtn.addEventListener("click", () => vscode.postMessage({ type: "openFile", relPath: "logs/llm_chat.md" }));
+    if (viewChatLogBtn) viewChatLogBtn.addEventListener("click", () => vscode.postMessage({ type: "openFile", relPath: "logs/pipeline.md" }));
 
     if (copyPathBtn) copyPathBtn.addEventListener("click", () => vscode.postMessage({ type: "copyPath" }));
     if (revealOSBtn) revealOSBtn.addEventListener("click", () => vscode.postMessage({ type: "revealInOS" }));
@@ -3427,6 +3427,16 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
                 '</div>';
               }
 
+              let logLinksHtml = "";
+              if (rawStatus === "completed" || rawStatus === "failed" || rawStatus === "running") {
+                const phaseDir = safeTaskName.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+                logLinksHtml = '<div class="task-log-links" style="display:flex; gap:8px; margin-top:3px; padding-left:22px; font-size:10px;">' +
+                  '<span data-action="openFile" data-path="logs/' + phaseDir + '/chat.md" class="log-link" title="Open phase chat trace in VS Code" style="cursor:pointer; color:var(--vscode-textLink-foreground, #3794ff);">💬 Chat</span>' +
+                  '<span style="color:var(--muted); opacity:0.6;">•</span>' +
+                  '<span data-action="openFile" data-path="logs/' + phaseDir + '/console.log" class="log-link" title="Open raw console output in VS Code" style="cursor:pointer; color:var(--muted);">📜 Console</span>' +
+                '</div>';
+              }
+
               phaseHtml += '<div class="' + cardClass + '"' + startTimeAttr + '>' +
                 '<div class="task-main-row">' +
                   '<div class="task-left">' +
@@ -3440,6 +3450,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
                   '</div>' +
                 '</div>' +
                 failInsightHtml +
+                logLinksHtml +
               '</div>';
             }
             phaseContainer.innerHTML = phaseHtml;

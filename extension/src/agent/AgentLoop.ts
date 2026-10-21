@@ -49,6 +49,7 @@ export class AgentLoop {
     });
 
     if (this.chatLogger) {
+      this.chatLogger.setPhase(this.phaseName);
       const cfg = this.client.getConfig();
       await this.chatLogger.logPhaseStart({
         phaseTitle: this.phaseTitle || this.phaseName,
@@ -250,9 +251,9 @@ export class AgentLoop {
             content: toolMessageContent,
           });
 
-          // Log tool result to llm_chat.log
+          // Log tool result to phase chat log
           if (this.chatLogger) {
-            await this.chatLogger.logToolResult(tc.name, tc.id, result.content, result.isError);
+            await this.chatLogger.logToolResult(tc.name, tc.id, result.content, result.isError, tc.args);
           }
 
           if (tc.name === "fail_phase") {

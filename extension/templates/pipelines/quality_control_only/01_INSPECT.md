@@ -1,11 +1,11 @@
 ### Phase 1: Data Ingestion & Exploratory Quality Inspection
 
-Construct and execute `code/01_inspect.R`, capturing full execution output to `logs/01_inspect.log` (e.g. `Rscript code/01_inspect.R 2>&1 | tee logs/01_inspect.log`). You must strictly enforce all checkpoints below.
+Construct and execute `code/01_inspect.R`, capturing full execution output to `logs/01_inspect/console.log` (e.g. `mkdir -p logs/01_inspect && Rscript code/01_inspect.R 2>&1 | tee logs/01_inspect/console.log`). You must strictly enforce all checkpoints below.
 
 ---
 
 #### Phase 1.1: Data Ingestion
-- [ ] Construct and execute `code/01_inspect.R`, piping stdout and stderr to generate `logs/01_inspect.log` (e.g. `Rscript code/01_inspect.R 2>&1 | tee logs/01_inspect.log`).
+- [ ] Construct and execute `code/01_inspect.R`, piping stdout and stderr to generate `logs/01_inspect/console.log` (e.g. `mkdir -p logs/01_inspect && Rscript code/01_inspect.R 2>&1 | tee logs/01_inspect/console.log`).
 - [ ] Load required libraries: `tidyproteomics` and `dplyr`.
 - [ ] Ingest the quantitative dataset (substituting `{{PATH_TO_DATA_FILE}}`, `{{PLATFORM}}`, and `{{ANALYTE}}` with actual values from `docs/experiment.md`). If `{{PATH_TO_DATA_FILE}}` is a remote URL (starts with `http://` or `https://`), stage it locally into `data/raw/` first:
   ```r
@@ -64,7 +64,7 @@ Construct and execute `code/01_inspect.R`, capturing full execution output to `l
     file.rename(count_plot, file.path("data", count_plot))
   }
   ```
-- [ ] **Checkpoint 1.2**: Verify that replicate counts, quantifiable fractions, replicate CV distributions, and missingness metrics are printed to stdout and recorded in `logs/01_inspect.log`.
+- [ ] **Checkpoint 1.2**: Verify that replicate counts, quantifiable fractions, replicate CV distributions, and missingness metrics are printed to stdout and recorded in `logs/01_inspect/console.log`.
 
 #### Phase 1.3: Annotation & Sample Inventory Enforcement
 - [ ] Extract and inspect sample group designations:
@@ -83,7 +83,7 @@ Construct and execute `code/01_inspect.R`, capturing full execution output to `l
   saveRDS(data, file = "data/tidyproteomics_data.rds")
   ```
 - [ ] **Checkpoint 1.3 (Phase Gate & Log Verification)**:
-  1. `logs/01_inspect.log` exists on disk with non-zero file size.
+  1. `logs/01_inspect/console.log` (or `logs/01_inspect.log`) exists on disk with non-zero file size.
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size.
   3. `sample_names` confirms the exact naming of control and treatment/perturbation conditions.
   4. `annot_terms` outputs all functional category names available in the dataset (e.g., Gene Ontology, Reactome, UniProt keywords).

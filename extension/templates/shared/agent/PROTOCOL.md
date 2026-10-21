@@ -15,7 +15,7 @@ All generated project assets must strictly adhere to the following organized str
 | Directory | Purpose | Conventions & Examples |
 | :--- | :--- | :--- |
 | `code/` | Executable analysis scripts | `code/<NN>_<task_name>.[R|py|sh]` (self-contained, non-interactive, reproducible) |
-| `logs/` | Persistent execution logs | `logs/<NN>_<task_name>.log` (captures combined stdout and stderr for audit & triage) |
+| `logs/` | Persistent execution logs | `logs/<NN>_<task_name>/console.log` (raw stdout/stderr) & `logs/<NN>_<task_name>/chat.md` (agent trace) |
 | `data/` | Data artifacts, tables & figures | Single persistent tidyproteomics object (`tidyproteomics_data.rds`), summary tables (`*.csv`), figures (`*.png`) |
 | `docs/` | Blackboard & structured reports | Runtime blackboard (`notes.md`), active model summary (`llm.md` - Read-Only, maintained by extension), user experiment & dataset design (`experiment.md` - Read-Only), primary observations (`observations.md`), internal knowledge (`knowledge.md`), web search corroboration (`websearch.md`), literature database interrogation (`literature.md`), synthesis (`scientific_report.md`) |
 | `agent/` | Global agent context suite | Static configuration files (`PROTOCOL.md`, `SKILL.md`) compiled into the system prompt prefix |
@@ -119,14 +119,14 @@ Direct slot access (`tp_data$experiments`, `tp_data$quantitative`, etc.) violate
   ```
 - **Experimental Groups**: Inspect factor mappings with `experimental(tp_data)` or `experimental_groups(tp_data)`.
 
-- **Mandatory Script Linting & Logging**: Every executed script MUST pipe stdout/stderr directly to `logs/`, running pre-flight linting if the linter tool is present:
-  - R (with linter): `if [ -f tools/lint_tidyproteomics.R ]; then Rscript tools/lint_tidyproteomics.R code/<NN>_<task>.R && Rscript code/<NN>_<task>.R 2>&1 | tee logs/<NN>_<task>.log; else Rscript code/<NN>_<task>.R 2>&1 | tee logs/<NN>_<task>.log; fi`
-  - Python: `python code/<NN>_<task>.py 2>&1 | tee logs/<NN>_<task>.log`
-  - Shell: `bash code/<NN>_<task>.sh 2>&1 | tee logs/<NN>_<task>.log`
+- **Mandatory Script Linting & Logging**: Every executed script MUST pipe stdout/stderr directly to its phase folder in `logs/` (e.g. `logs/<NN>_<task>/console.log`), running pre-flight linting if the linter tool is present:
+  - R (with linter): `mkdir -p logs/<NN>_<task> && if [ -f tools/lint_tidyproteomics.R ]; then Rscript tools/lint_tidyproteomics.R code/<NN>_<task>.R && Rscript code/<NN>_<task>.R 2>&1 | tee logs/<NN>_<task>/console.log; else Rscript code/<NN>_<task>.R 2>&1 | tee logs/<NN>_<task>/console.log; fi`
+  - Python: `mkdir -p logs/<NN>_<task> && python code/<NN>_<task>.py 2>&1 | tee logs/<NN>_<task>/console.log`
+  - Shell: `mkdir -p logs/<NN>_<task> && bash code/<NN>_<task>.sh 2>&1 | tee logs/<NN>_<task>/console.log`
 - **Pre-Flight Gate Verification**: Before marking any phase complete (or invoking `complete_phase`), the agent must independently verify:
   1. If `tools/lint_tidyproteomics.R` is present, the R script strictly passed with zero encapsulation or raw ggplot violations. If absent, the script must strictly adhere to encapsulation rules manually.
   2. The execution script exited cleanly with status code `0`.
-  3. The corresponding log file in `logs/` exists and has non-zero size.
+  3. The corresponding console log in `logs/<NN>_<task>/console.log` exists and has non-zero size.
   4. All expected data objects, summary tables, and figure files are confirmed present on disk.
   5. Required documentation updates (in `docs/notes.md`, `docs/observations.md`, `docs/knowledge.md`, `docs/websearch.md`, or `docs/literature.md`) are written to disk.
 - **Self-Correction Loop**: If a script fails (lint error, non-zero exit code, or error output in log):

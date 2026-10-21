@@ -1,6 +1,6 @@
 ### Phase 4: Differential Expression Analysis & Candidate Profiling
 
-Construct and execute `code/04_expression.R`, capturing full execution output to `logs/04_expression.log` (e.g. `Rscript code/04_expression.R 2>&1 | tee logs/04_expression.log`). You must strictly enforce all checkpoints below.
+Construct and execute `code/04_expression.R`, capturing full execution output to `logs/04_expression/console.log` (e.g. `mkdir -p logs/04_expression && Rscript code/04_expression.R 2>&1 | tee logs/04_expression/console.log`). You must strictly enforce all checkpoints below.
 
 ---
 
@@ -191,7 +191,7 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
 
 #### Phase 4.5: Checkpoint Verification & State Recording
 - [ ] **Checkpoint 4.5**:
-  1. `logs/04_expression.log` exists on disk with non-zero file size and no errors.
+  1. `logs/04_expression/console.log` (or `logs/04_expression.log`) exists on disk with non-zero file size and no errors.
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size and contains expression results.
   3. Expression tables (`data/table_*_expression_*.csv`) exist on disk with non-zero file size.
   4. Volcano and candidate expression plots (`data/*_volcano_*.png`, `data/plot_expression_up_*.png`, and `data/plot_expression_down_*.png`) exist on disk with non-zero file sizes.

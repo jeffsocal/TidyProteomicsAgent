@@ -8,7 +8,7 @@ In this phase, you (the LLM) will use the keyphrases curated in `07_KNOWLEDGE` (
 to further contextualize the observations and develop the **second layer of conclusions**.
 
 If web search findings reveal new candidate interactors, orthologs, pathway regulators, or disease biomarkers that suggest follow-up questions:
-- Use `agent/SKILL.md` to query the saved dataset (`data/tidyproteomics_data.rds`) directly (e.g. writing `code/08_websearch.R` logged to `logs/08_websearch.log`).
+- Use `agent/SKILL.md` to query the saved dataset (`data/tidyproteomics_data.rds`) directly (e.g. writing `code/08_websearch.R` logged to `logs/08_websearch/console.log`).
 - Document any **new** data-derived observations in `docs/websearch.md`.
 
 You will also develop a targeted **Literature Search Strategy** (defining candidate seed gene symbols, functional modules, and context filters) to prepare for the DuckDB Literature Knowledge Database interrogation in Phase 09.
@@ -39,9 +39,9 @@ Extract the prioritized keyphrases from `docs/knowledge.md` and execute targeted
 
 #### 3. Interactive Data Queries via `agent/SKILL.md` (Testing New Web-Derived Hypotheses)
 If external web findings suggest candidate interactors, co-complex members, or downstream pathway markers that were not initially examined in Phase 6:
-- Write and execute `code/08_websearch.R` (capturing output to `logs/08_websearch.log`):
+- Write and execute `code/08_websearch.R` (capturing output to `logs/08_websearch/console.log`):
   ```bash
-  Rscript code/08_websearch.R 2>&1 | tee logs/08_websearch.log
+  mkdir -p logs/08_websearch && Rscript code/08_websearch.R 2>&1 | tee logs/08_websearch/console.log
   ```
 - Use canonical `tidyproteomics` functions per `agent/SKILL.md`:
   ```r
@@ -56,7 +56,7 @@ If external web findings suggest candidate interactors, co-complex members, or d
   matches <- exp_tbl %>% filter(if_any(any_of(c("gene_name", "gene_symbol", "symbol", "protein")), ~ .x %in% web_candidates))
   print(matches %>% select(any_of(c("gene_name", "protein", "log2_foldchange", "p_value", "adj_p_value", "description"))))
   ```
-- Inspect output via CLI (`head -n 30 logs/08_websearch.log`).
+- Inspect output via CLI (`head -n 30 logs/08_websearch/console.log`).
 - Any newly tested targets and their quantitative metrics must be documented as **new observations** in `docs/websearch.md`.
 
 ---
@@ -114,7 +114,7 @@ Organize the document strictly into the following structured sections:
 #### 7. Phase Completion Gate
 - [ ] **Checkpoint Gate**:
   1. `docs/knowledge.md` and `docs/observations.md` successfully ingested.
-  2. If follow-up data queries were executed, `code/08_websearch.R` exited with code 0 and output was logged to `logs/08_websearch.log`.
+  2. If follow-up data queries were executed, `code/08_websearch.R` exited with code 0 and output was logged to `logs/08_websearch/console.log` (or `logs/08_websearch.log`).
   3. `docs/websearch.md` exists on disk with non-zero size, containing second-layer conclusions, new observations, a literature search strategy for Phase 09, and documented references.
 - [ ] **Complete Phase**:
   - Invoke `complete_phase(phaseName = "08_WEBSEARCH", summary = "Web search corroboration complete in docs/websearch.md with second-layer conclusions, hypothesis data queries, literature search strategy, and documented references.")`

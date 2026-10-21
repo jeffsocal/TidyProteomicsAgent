@@ -1,6 +1,6 @@
 ### Phase 6: Primary Data-Derived Observations & Extraction
 
-In this phase, you (the LLM) will construct and execute an extraction script `code/06_observations.R` using the saved `data/tidyproteomics_data.rds` object. This extracts targeted summaries from `tidyproteomics` directly to the terminal and log (`logs/06_observations.log`), avoiding token overflows from large CSV files. 
+In this phase, you (the LLM) will construct and execute an extraction script `code/06_observations.R` using the saved `data/tidyproteomics_data.rds` object. This extracts targeted summaries from `tidyproteomics` directly to the terminal and log (`logs/06_observations/console.log`), avoiding token overflows from large CSV files. 
 
 You will summarize the primary quantitative data derived so far across all evaluated contrasts:
 - Overall dataset dimensions, quantified identifiers, and quality checkpoint status.
@@ -14,7 +14,7 @@ You will then author `docs/observations.md` strictly documenting these primary d
 ---
 
 #### 1. Deterministic Data Extraction via `code/06_observations.R`
-Rather than reading massive CSV files into context, write and execute `code/06_observations.R` (capturing output to `logs/06_observations.log`: `Rscript code/06_observations.R 2>&1 | tee logs/06_observations.log`). 
+Rather than reading massive CSV files into context, write and execute `code/06_observations.R` (capturing output to `logs/06_observations/console.log`: `mkdir -p logs/06_observations && Rscript code/06_observations.R 2>&1 | tee logs/06_observations/console.log`). 
 
 Use `tidyproteomics`, `dplyr`, and `knitr` to extract exact numbers, target verification (or untargeted scope), top biomarkers, and pathway summaries across all evaluated contrasts:
 ```r
@@ -137,7 +137,7 @@ stopifnot("Expression data extraction failed" = length(expr_tables) > 0)
 cat("PHASE_6_EXTRACTION_CHECKPOINT_PASS\n")
 ```
 
-- **CLI Verification**: For log inspection, use native command-line utilities (e.g. `head -n 30 logs/06_observations.log`, `grep -i "pass" ...`) instead of dumping full raw files into the prompt context. Note: Markdown tables in the log can be directly transferred into `docs/observations.md`.
+- **CLI Verification**: For log inspection, use native command-line utilities (e.g. `head -n 30 logs/06_observations/console.log`, `grep -i "pass" ...`) instead of dumping full raw files into the prompt context. Note: Markdown tables in the log can be directly transferred into `docs/observations.md`.
 
 ---
 
@@ -161,9 +161,9 @@ Organize the document strictly into the following structured sections:
    - Quantitative breakdown of the primary target (if targeted) or leading master regulator / key functional hub (if untargeted screening): Gene Symbol / Accession, $\log_2\text{FC}$, fold change, $p$-value, $q$-value, and percent change.
    - Comparison with experimental expectations stated in `docs/experiment.md`.
 3. **Top Significantly Upregulated Proteins**:
-   - Structured markdown table: Rank, Identifier (Gene Symbol / Accession), Description, $\log_2\text{FC}$, $q$-value. (Directly copy pre-formatted markdown table from `logs/06_observations.log`).
+   - Structured markdown table: Rank, Identifier (Gene Symbol / Accession), Description, $\log_2\text{FC}$, $q$-value. (Directly copy pre-formatted markdown table from `logs/06_observations/console.log`).
 4. **Top Significantly Downregulated Proteins**:
-   - Structured markdown table: Rank, Identifier (Gene Symbol / Accession), Description, $\log_2\text{FC}$, $q$-value. (Directly copy pre-formatted markdown table from `logs/06_observations.log`).
+   - Structured markdown table: Rank, Identifier (Gene Symbol / Accession), Description, $\log_2\text{FC}$, $q$-value. (Directly copy pre-formatted markdown table from `logs/06_observations/console.log`).
 5. **Top Significant Pathway Enrichments**:
    - Summary table of significant terms across analyzed annotation categories (Category/Term, Annotation Name, Direction / Enrichment Score, $q$-value).
    - Primary biological themes identified across contrasts based directly on statistical enrichment.
@@ -174,15 +174,15 @@ Organize the document strictly into the following structured sections:
 ---
 
 #### 3. Critical Constraints
-- **Absolute Data Grounding**: Every numerical value ($\log_2\text{FC}$, $p$-value, $q$-value, feature count, pathway score) MUST strictly match `logs/06_observations.log` and the exported CSV tables. Never fabricate or extrapolate numbers.
+- **Absolute Data Grounding**: Every numerical value ($\log_2\text{FC}$, $p$-value, $q$-value, feature count, pathway score) MUST strictly match `logs/06_observations/console.log` and the exported CSV tables. Never fabricate or extrapolate numbers.
 - **Pure Empirical Scope**: Do not synthesize external literature in this phase. Document what the mass spectrometry data directly demonstrates.
 
 ---
 
 #### 4. Phase Completion Gate
 - [ ] **Checkpoint Gate**:
-  1. `code/06_observations.R` executed with status code 0 and output logged to `logs/06_observations.log`.
-  2. `logs/06_observations.log` ends with `PHASE_6_EXTRACTION_CHECKPOINT_PASS`.
+  1. `code/06_observations.R` executed with status code 0 and output logged to `logs/06_observations/console.log` (or `logs/06_observations.log`).
+  2. `logs/06_observations/console.log` (or `logs/06_observations.log`) ends with `PHASE_6_EXTRACTION_CHECKPOINT_PASS`.
   3. `docs/observations.md` exists on disk with non-zero size and conforms to the structure above.
 - [ ] **Complete Phase**:
   - Invoke `complete_phase(phaseName = "06_OBSERVATIONS", summary = "Primary data-derived observations extracted and compiled in docs/observations.md with verified biomarker metrics, markdown tables, and pathway enrichment summaries.")`
