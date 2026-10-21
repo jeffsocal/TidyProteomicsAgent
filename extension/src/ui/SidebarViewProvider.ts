@@ -1717,10 +1717,54 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       cursor: pointer;
       color: var(--fg);
       letter-spacing: 0.2px;
+      min-width: 0;
+      flex: 0 1 auto;
     }
     .task-name:hover {
       color: var(--primary);
       text-decoration: underline;
+    }
+    .task-action-icons {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      flex-shrink: 0;
+      margin-left: 2px;
+    }
+    button.task-action-icon-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--muted);
+      border-radius: 3px;
+      padding: 0;
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s ease;
+      line-height: 1;
+      opacity: 0.65;
+      flex-shrink: 0;
+      box-sizing: border-box;
+    }
+    button.task-action-icon-btn.has-run {
+      opacity: 0.95;
+      color: var(--vscode-foreground, #d4d4d4);
+    }
+    button.task-action-icon-btn:hover {
+      background: rgba(59, 130, 246, 0.15);
+      border-color: rgba(59, 130, 246, 0.35);
+      color: var(--vscode-foreground, var(--fg));
+      opacity: 1;
+    }
+    button.task-action-icon-btn .svg-icon {
+      width: 11px;
+      height: 11px;
+      vertical-align: middle;
+      margin: 0;
+      pointer-events: none;
     }
     .task-right {
       display: flex;
@@ -3427,21 +3471,19 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
                 '</div>';
               }
 
-              let logLinksHtml = "";
-              if (rawStatus === "completed" || rawStatus === "failed" || rawStatus === "running") {
-                const phaseDir = safeTaskName.toLowerCase().replace(/[^a-z0-9_]/g, "_");
-                logLinksHtml = '<div class="task-log-links" style="display:flex; gap:8px; margin-top:3px; padding-left:22px; font-size:10px;">' +
-                  '<span data-action="openFile" data-path="logs/' + phaseDir + '/chat.md" class="log-link" title="Open phase chat trace in VS Code" style="cursor:pointer; color:var(--vscode-textLink-foreground, #3794ff);">💬 Chat</span>' +
-                  '<span style="color:var(--muted); opacity:0.6;">•</span>' +
-                  '<span data-action="openFile" data-path="logs/' + phaseDir + '/console.log" class="log-link" title="Open raw console output in VS Code" style="cursor:pointer; color:var(--muted);">📜 Console</span>' +
-                '</div>';
-              }
+              const phaseDir = safeTaskName.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+              const hasRun = rawStatus === "completed" || rawStatus === "failed" || rawStatus === "running";
+              const logBtnClass = hasRun ? "task-action-icon-btn has-run" : "task-action-icon-btn";
+              const chatIconHtml = '<button type="button" class="' + logBtnClass + '" data-action="openFile" data-path="logs/' + phaseDir + '/chat.md" title="Open chat trace (logs/' + phaseDir + '/chat.md)">' + (ICONS["chat"] || ICONS["chate"] || "") + '</button>';
+              const termIconHtml = '<button type="button" class="' + logBtnClass + '" data-action="openFile" data-path="logs/' + phaseDir + '/console.log" title="Open console output (logs/' + phaseDir + '/console.log)">' + (ICONS["terminal"] || "") + '</button>';
+              const iconLinksHtml = '<span class="task-action-icons">' + chatIconHtml + termIconHtml + '</span>';
 
               phaseHtml += '<div class="' + cardClass + '"' + startTimeAttr + '>' +
                 '<div class="task-main-row">' +
                   '<div class="task-left">' +
                     '<input type="checkbox" ' + checked + ' data-phase-id="' + escapeHtml(p.id) + '" title="Include in pipeline" ' + (anyRunning ? "disabled" : "") + ' />' +
                     '<span class="task-name" data-action="openPhase" data-file="' + safeFileName + '" title="Click to edit ' + safeFileName + ' in VS Code">' + safeTaskName + '</span>' +
+                    iconLinksHtml +
                   '</div>' +
                   '<div class="task-right">' +
                     '<button type="button" class="btn-run" data-action="runPhase" data-id="' + escapeHtml(p.id) + '" ' + runDisabled + ' title="' + escapeHtml(runBtnTitle) + '">' + (ICONS["play"] || "") + ' RUN</button>' +
@@ -3450,7 +3492,6 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
                   '</div>' +
                 '</div>' +
                 failInsightHtml +
-                logLinksHtml +
               '</div>';
             }
             phaseContainer.innerHTML = phaseHtml;

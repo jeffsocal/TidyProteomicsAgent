@@ -1,39 +1,714 @@
-"use strict";var Pe=Object.create;var Z=Object.defineProperty;var Te=Object.getOwnPropertyDescriptor;var Ce=Object.getOwnPropertyNames;var Ie=Object.getPrototypeOf,Le=Object.prototype.hasOwnProperty;var Re=(y,e)=>{for(var t in e)Z(y,t,{get:e[t],enumerable:!0})},pe=(y,e,t,s)=>{if(e&&typeof e=="object"||typeof e=="function")for(let i of Ce(e))!Le.call(y,i)&&i!==t&&Z(y,i,{get:()=>e[i],enumerable:!(s=Te(e,i))||s.enumerable});return y};var N=(y,e,t)=>(t=y!=null?Pe(Ie(y)):{},pe(e||!y||!y.__esModule?Z(t,"default",{value:y,enumerable:!0}):t,y)),Ee=y=>pe(Z({},"__esModule",{value:!0}),y);var Oe={};Re(Oe,{activate:()=>Fe,deactivate:()=>Ue});module.exports=Ee(Oe);var I=N(require("vscode")),X=N(require("path")),V=N(require("fs"));var u=N(require("vscode")),b=N(require("path")),w=N(require("fs"));var E=N(require("fs/promises")),R=N(require("path"));var be=N(require("fs/promises")),D=N(require("path"));var k=N(require("fs")),v=N(require("path")),ge=require("child_process"),G="literature",le="literature_config.json",q=".duckdb",ue=v.join("tools","literature"),ce="@@LITERATURE_JSON@@",he="@@CORPUS_JSON@@";var _e=new Set([".pdf"]),Ae=new Set([".csv",".tsv",".xlsx",".xls"]),$e=3,me=500;function U(y){return v.join(y,G)}function fe(y){if(!y)return;let e=v.join(y,".vscode","corpora"),t=v.join(y,G);if(k.existsSync(e)&&!k.existsSync(t))try{k.mkdirSync(t,{recursive:!0});let s=k.readdirSync(e);for(let i of s){let o=v.join(e,i);if(i.toLowerCase().endsWith(q))k.copyFileSync(o,v.join(t,i));else if(i==="corpus_config.json")try{let n=k.readFileSync(o,"utf-8"),r=JSON.parse(n),a=r.activeLiterature||r.activeCorpus,p={activeLiterature:a,activeCorpus:a,useInSynthesis:!!r.useInSynthesis,updatedAt:r.updatedAt||new Date().toISOString()};k.writeFileSync(v.join(t,le),JSON.stringify(p,null,2)+`
-`,"utf-8")}catch{}}}catch(s){console.warn("[LiteratureService] Auto-migration from .vscode/corpora failed:",s)}}function z(y){let e={useInSynthesis:!1};if(!y)return e;fe(y);try{let t=v.join(U(y),le),s="";if(k.existsSync(t))s=k.readFileSync(t,"utf-8");else{let n=v.join(y,".vscode","corpora","corpus_config.json");if(k.existsSync(n))s=k.readFileSync(n,"utf-8");else return e}let i=JSON.parse(s),o=typeof i.activeLiterature=="string"&&i.activeLiterature||typeof i.activeCorpus=="string"&&i.activeCorpus||void 0;return{activeLiterature:o,activeCorpus:o,useInSynthesis:!!i.useInSynthesis,updatedAt:typeof i.updatedAt=="string"?i.updatedAt:void 0}}catch{return e}}function ye(y){let e=z(y),t=e.activeLiterature||e.activeCorpus;if(!e.useInSynthesis||!t)return;let s=U(y),i=v.join(s,t);if(!k.existsSync(i)){let o=v.join(y,".vscode","corpora",t);if(k.existsSync(o))i=o;else return}return{relPath:v.join(G,t).replace(/\\/g,"/"),absPath:i}}function Ne(y){return String(y||"").trim().replace(/\.duckdb$/i,"").toLowerCase().replace(/[^a-z0-9_-]+/g,"_").replace(/^_+|_+$/g,"").slice(0,64)}var ee=class{constructor(e,t,s=()=>{}){this.workspaceRoot=e;this.extensionPath=t;this.getRscriptOverride=s}queue=[];ingestFolder;writeChain=Promise.resolve();cachedRscript;cachedStats=new Map;setWorkspaceRoot(e){e!==this.workspaceRoot&&(this.workspaceRoot=e||"",this.queue=[],this.ingestFolder=void 0)}getWorkspaceRoot(){return this.workspaceRoot}requireRoot(){if(!this.workspaceRoot)throw new Error("No active workspace directory. Open or choose an analysis folder first.");return this.workspaceRoot}listDatabases(){if(!this.workspaceRoot)return[];fe(this.workspaceRoot);let e=U(this.workspaceRoot);if(!k.existsSync(e))return[];let t=[];for(let s of k.readdirSync(e)){if(!s.toLowerCase().endsWith(q))continue;let i=v.join(e,s);try{let o=k.statSync(i);if(!o.isFile())continue;t.push({name:s.slice(0,-q.length),fileName:s,relPath:v.join(G,s).replace(/\\/g,"/"),absPath:i,sizeBytes:o.size,modified:o.mtime.toISOString()})}catch{}}return t.sort((s,i)=>s.name.localeCompare(i.name))}listCorpora(){return this.listDatabases()}getConfig(){return z(this.workspaceRoot)}writeConfig(e){let t=U(this.requireRoot());k.mkdirSync(t,{recursive:!0});let s=e.activeLiterature||e.activeCorpus,i={...e,activeLiterature:s,activeCorpus:s,updatedAt:new Date().toISOString()};k.writeFileSync(v.join(t,le),JSON.stringify(i,null,2)+`
-`,"utf-8")}getViewState(e){let t=this.listDatabases(),s=this.getConfig(),i=s.activeLiterature||s.activeCorpus;i&&!t.some(a=>a.fileName===i)&&(s={...s,activeLiterature:void 0,activeCorpus:void 0});let o=t.find(a=>a.fileName===i),n=this.workspaceRoot?U(this.workspaceRoot):"",r=i?this.cachedStats.get(v.basename(i)):void 0;return{workspaceRoot:this.workspaceRoot,literatureDir:n,corporaDir:n,databases:t,literature:t,corpora:t,config:s,activeLiterature:i,activeCorpus:i,useInSynthesis:!!s.useInSynthesis,activeLiteratureInfo:o,activeCorpusInfo:o,ingestFolder:this.ingestFolder,queue:[...this.queue],ingestionAvailable:!0,busy:e,isIngesting:e==="ingesting",stats:r}}async createDatabase(e){let t=this.requireRoot(),s=Ne(e);if(!s)throw new Error("Literature database name must contain at least one letter or number.");let i=`${s}${q}`,o=U(t);k.mkdirSync(o,{recursive:!0});let n=v.join(o,i);if(k.existsSync(n))throw new Error(`A literature database named '${i}' already exists.`);let r=await this.runCli("init",[n,e.trim()||s],!0);if(!r.ok)throw new Error(r.error||"Failed to initialize literature database.");this.cachedStats.set(i,{study_count:0,context_count:0,assertion_count:0,unique_symbols:0,organism_count:0,perturbation_count:0,studies:0,contexts:0,assertions:0,symbols:0,organisms:0,perturbations:0}),this.syncWorkspaceScripts();let a=this.getConfig();this.writeConfig({...a,activeLiterature:i,activeCorpus:i});let p=this.listDatabases().find(l=>l.fileName===i);if(!p)throw new Error("Literature database was initialized but could not be found on disk.");return p}async createCorpus(e){return this.createDatabase(e)}setActiveLiterature(e){let t=this.requireRoot();if(e){let o=v.join(U(t),v.basename(e));if(!k.existsSync(o))throw new Error(`Literature database '${e}' not found in ${G}.`)}let s=this.getConfig(),i=e?v.basename(e):void 0;this.writeConfig({...s,activeLiterature:i,activeCorpus:i}),this.syncWorkspaceScripts()}setActiveCorpus(e){this.setActiveLiterature(e)}setUseInSynthesis(e){let t=this.getConfig();this.writeConfig({...t,useInSynthesis:!!e}),e&&this.syncWorkspaceScripts()}async ensureSchema(e){let t=this.resolveLiteraturePath(e),s=await this.runCli("init",[t],!0);if(!s.ok)throw new Error(s.error||"Failed to migrate literature schema.")}async getStats(e){let t=this.getConfig(),s=e||t.activeLiterature||t.activeCorpus;if(!s)return{ok:!1,error:"No active literature database selected."};let i=await this.runCli("stats",[this.resolveLiteraturePath(s)],!1);if(i.ok&&i.data){let o=i.data.totals||i.data.stats||i.data,n={study_count:Number(o.study_count??o.studies??0),context_count:Number(o.context_count??o.contexts??0),assertion_count:Number(o.assertion_count??o.assertions??0),unique_symbols:Number(o.unique_symbols??o.symbols??0),organism_count:Number(o.organism_count??o.organisms??0),perturbation_count:Number(o.perturbation_count??o.perturbations??0),studies:Number(o.studies??o.study_count??0),contexts:Number(o.contexts??o.context_count??0),assertions:Number(o.assertions??o.assertion_count??0),symbols:Number(o.symbols??o.unique_symbols??0),organisms:Number(o.organisms??o.organism_count??0),perturbations:Number(o.perturbations??o.perturbation_count??0)};return this.cachedStats.set(v.basename(s),n),{...i,stats:n,data:{...i.data,stats:n,totals:{...i.data.totals||{},...n}}}}return i}async search(e,t=50,s){let i=this.getConfig(),o=s||i.activeLiterature||i.activeCorpus;if(!o)return{ok:!1,error:"No active literature database selected."};let n=String(e||"").trim();if(!n)return{ok:!1,error:"Enter a protein symbol, alias, functional module, or perturbation."};let r=await this.runCli("search",[this.resolveLiteraturePath(o),n,String(t)],!1);if(r.ok&&r.data){let a=r.data.rows||r.data.results||[];return{...r,results:a,rows:a,query:n,data:{...r.data,rows:a,results:a}}}return r}async generateReport(e,t="docs/literature_database.md"){let s=this.getConfig(),i=e||s.activeLiterature||s.activeCorpus;if(!i)return{ok:!1,error:"No active literature database selected."};let o=this.resolveLiteraturePath(i),n=v.isAbsolute(t)?t:v.join(this.requireRoot(),t);return await this.runCli("report",[o,n],!0)}resolveLiteraturePath(e){let t=v.basename(e),s=t.toLowerCase().endsWith(q)?t:`${t}${q}`,i=v.join(U(this.requireRoot()),s);if(k.existsSync(i))return i;if(this.workspaceRoot){let o=v.join(this.workspaceRoot,".vscode","corpora",s);if(k.existsSync(o))return o}return i}scanIngestFolder(e){if(!e||!k.existsSync(e)||!k.statSync(e).isDirectory())throw new Error(`Folder not found: ${e}`);let t=[],s=(i,o)=>{if(o>$e||t.length>=me)return;let n=[];try{n=k.readdirSync(i,{withFileTypes:!0})}catch{return}n.sort((r,a)=>r.name.localeCompare(a.name));for(let r of n){if(r.name.startsWith(".")||r.name.startsWith("~$"))continue;let a=v.join(i,r.name);if(r.isDirectory()){s(a,o+1);continue}let p=v.extname(r.name).toLowerCase(),l=_e.has(p)?"pdf":Ae.has(p)?"table":void 0;if(!l)continue;let d=0;try{d=k.statSync(a).size}catch{}if(t.push({id:`q${t.length+1}`,fileName:r.name,absPath:a,relPath:v.relative(e,a).replace(/\\/g,"/"),kind:l,sizeBytes:d,stage:"queued"}),t.length>=me)return}};return s(e,0),this.ingestFolder=e,this.queue=t,[...t]}clearQueue(){this.queue=[],this.ingestFolder=void 0}updateQueueItem(e,t){let s=this.queue.find(i=>i.id===e);s&&Object.assign(s,t)}syncWorkspaceScripts(){if(!this.workspaceRoot)return;let e=this.findTemplateScriptsDir();if(!e)return;let t=v.join(this.workspaceRoot,ue);try{k.mkdirSync(t,{recursive:!0});for(let s of k.readdirSync(e))s.endsWith(".R")&&k.copyFileSync(v.join(e,s),v.join(t,s))}catch(s){console.warn("[LiteratureService] Could not sync literature scripts into workspace:",s)}}findTemplateScriptsDir(){return[v.join(this.extensionPath,"templates","shared","tools","literature"),v.join(this.extensionPath,"extension","templates","shared","tools","literature"),v.join(__dirname,"..","templates","shared","tools","literature"),v.join(__dirname,"..","..","templates","shared","tools","literature"),v.join(this.extensionPath,"templates","shared","tools","corpus"),v.join(this.extensionPath,"extension","templates","shared","tools","corpus"),v.join(__dirname,"..","templates","shared","tools","corpus"),v.join(__dirname,"..","..","templates","shared","tools","corpus")].find(t=>k.existsSync(v.join(t,"literature_cli.R"))||k.existsSync(v.join(t,"corpus_cli.R")))}findCliScript(){let e=this.findTemplateScriptsDir();if(e){let t=v.join(e,"literature_cli.R");if(k.existsSync(t))return t;let s=v.join(e,"corpus_cli.R");if(k.existsSync(s))return s}if(this.workspaceRoot){let t=v.join(this.workspaceRoot,ue,"literature_cli.R");if(k.existsSync(t))return t;let s=v.join(this.workspaceRoot,"tools","corpus","corpus_cli.R");if(k.existsSync(s))return s}throw new Error("literature_cli.R not found in extension templates or workspace tools/literature/.")}resolveRscript(){let e=(this.getRscriptOverride()||"").trim();if(e)return e;if(this.cachedRscript)return this.cachedRscript;let t=["/usr/local/bin/Rscript","/opt/homebrew/bin/Rscript","/Library/Frameworks/R.framework/Resources/bin/Rscript","/usr/bin/Rscript"],s=(process.env.PATH||"").split(v.delimiter).filter(Boolean),i=process.platform==="win32"?"Rscript.exe":"Rscript";for(let n of s)t.unshift(v.join(n,i));let o=t.find(n=>{try{return k.statSync(n).isFile()}catch{return!1}});return this.cachedRscript=o||"Rscript",this.cachedRscript}runCli(e,t,s=!0,i=12e4){let o=()=>this.execR(this.findCliScript(),[e,...t],i),n=this.writeChain.then(o,o);return this.writeChain=n.catch(()=>{}),n}execR(e,t,s){return new Promise(i=>{let o;try{o=this.resolveRscript()}catch(n){i({ok:!1,error:n.message});return}(0,ge.execFile)(o,[e,...t],{cwd:this.workspaceRoot||void 0,timeout:s,maxBuffer:20*1024*1024},(n,r,a)=>{let l=String(r||"").split(/\r?\n/).find(g=>g.startsWith(ce)||g.startsWith(he));if(l)try{let g=l.startsWith(ce)?ce:he,m=JSON.parse(l.slice(g.length));m&&m.ok?i({ok:!0,data:m,stderr:String(a||"")}):i({ok:!1,error:m?.error||"Unknown R error",stderr:String(a||"")});return}catch(g){i({ok:!1,error:`Could not parse R output: ${g.message}`,stderr:String(a||"")});return}let d=n?.code,c;d==="ENOENT"?c=`Rscript not found ('${o}'). Install R or set 'tidyproteomicsagent.rscriptPath' in Settings.`:n?.killed?c=`R process timed out after ${Math.round(s/1e3)}s.`:c=String(a||n?.message||"").trim().split(/\r?\n/).slice(-6).join(`
-`)||"R process exited without output.",i({ok:!1,error:c,stderr:String(a||"")})})})}};var te=class{constructor(e,t="agent",s="analysis"){this.workspaceRoot=e;this.promptsDir=t;this.analysisDir=s}setWorkspaceRoot(e){this.workspaceRoot=e||""}async readFileSafe(e){try{if(!this.workspaceRoot&&!D.isAbsolute(e))return"";let t=D.isAbsolute(e)?e:D.join(this.workspaceRoot,e);return await be.readFile(t,"utf-8")}catch{return""}}async buildPhaseContext(e){let t=this.promptsDir,s=await this.readFileSafe(D.join(t,"PROTOCOL.md"));if(!s&&t==="agent"){let T=await this.readFileSafe(D.join("prompts","PROTOCOL.md"));T&&(t="prompts",s=T)}if(!s){let T=await this.readFileSafe(".clinerules"),L=await this.readFileSafe(D.join(t,"INSTRUCT.md"));s=`${T}
+"use strict";
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-${L}`.trim()}let i=await this.readFileSafe(D.join(t,"SKILL.md")),o=await this.readFileSafe(D.join("docs","experiment.md")),n=await this.readFileSafe(D.join(t,"VARIABLES.md"));n||(n=o||"No dataset parameters provided. See docs/experiment.md.");let r=await this.readFileSafe(D.join(t,"BIOLOGY.md")),a=r?`
+// src/extension.ts
+var extension_exports = {};
+__export(extension_exports, {
+  activate: () => activate,
+  deactivate: () => deactivate
+});
+module.exports = __toCommonJS(extension_exports);
+var vscode2 = __toESM(require("vscode"));
+var path9 = __toESM(require("path"));
+var fs9 = __toESM(require("fs"));
+
+// src/ui/SidebarViewProvider.ts
+var vscode = __toESM(require("vscode"));
+var path8 = __toESM(require("path"));
+var fs8 = __toESM(require("fs"));
+
+// src/orchestrator/PipelineOrchestrator.ts
+var fs5 = __toESM(require("fs/promises"));
+var path5 = __toESM(require("path"));
+
+// src/agent/ContextBuilder.ts
+var fs2 = __toESM(require("fs/promises"));
+var path2 = __toESM(require("path"));
+
+// src/literature/LiteratureService.ts
+var fs = __toESM(require("fs"));
+var path = __toESM(require("path"));
+var import_child_process = require("child_process");
+var LITERATURE_REL_DIR = "literature";
+var LITERATURE_CONFIG_FILE = "literature_config.json";
+var LITERATURE_EXT = ".duckdb";
+var LITERATURE_SCRIPTS_REL_DIR = path.join("tools", "literature");
+var JSON_MARKER = "@@LITERATURE_JSON@@";
+var LEGACY_JSON_MARKER = "@@CORPUS_JSON@@";
+var PDF_EXTS = /* @__PURE__ */ new Set([".pdf"]);
+var TABLE_EXTS = /* @__PURE__ */ new Set([".csv", ".tsv", ".xlsx", ".xls"]);
+var MAX_SCAN_DEPTH = 3;
+var MAX_QUEUE_FILES = 500;
+function getLiteratureDir(workspaceRoot) {
+  return path.join(workspaceRoot, LITERATURE_REL_DIR);
+}
+function autoMigrateLegacyCorpora(workspaceRoot) {
+  if (!workspaceRoot)
+    return;
+  const legacyDir = path.join(workspaceRoot, ".vscode", "corpora");
+  const newDir = path.join(workspaceRoot, LITERATURE_REL_DIR);
+  if (fs.existsSync(legacyDir) && !fs.existsSync(newDir)) {
+    try {
+      fs.mkdirSync(newDir, { recursive: true });
+      const entries = fs.readdirSync(legacyDir);
+      for (const entry of entries) {
+        const oldPath = path.join(legacyDir, entry);
+        if (entry.toLowerCase().endsWith(LITERATURE_EXT)) {
+          fs.copyFileSync(oldPath, path.join(newDir, entry));
+        } else if (entry === "corpus_config.json") {
+          try {
+            const raw = fs.readFileSync(oldPath, "utf-8");
+            const parsed = JSON.parse(raw);
+            const active = parsed.activeLiterature || parsed.activeCorpus;
+            const migrated = {
+              activeLiterature: active,
+              activeCorpus: active,
+              useInSynthesis: !!parsed.useInSynthesis,
+              updatedAt: parsed.updatedAt || (/* @__PURE__ */ new Date()).toISOString()
+            };
+            fs.writeFileSync(path.join(newDir, LITERATURE_CONFIG_FILE), JSON.stringify(migrated, null, 2) + "\n", "utf-8");
+          } catch {
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[LiteratureService] Auto-migration from .vscode/corpora failed:", err);
+    }
+  }
+}
+function readLiteratureConfig(workspaceRoot) {
+  const fallback = { useInSynthesis: false };
+  if (!workspaceRoot)
+    return fallback;
+  autoMigrateLegacyCorpora(workspaceRoot);
+  try {
+    const configPath = path.join(getLiteratureDir(workspaceRoot), LITERATURE_CONFIG_FILE);
+    let raw = "";
+    if (fs.existsSync(configPath)) {
+      raw = fs.readFileSync(configPath, "utf-8");
+    } else {
+      const legacyPath = path.join(workspaceRoot, ".vscode", "corpora", "corpus_config.json");
+      if (fs.existsSync(legacyPath)) {
+        raw = fs.readFileSync(legacyPath, "utf-8");
+      } else {
+        return fallback;
+      }
+    }
+    const parsed = JSON.parse(raw);
+    const active = typeof parsed.activeLiterature === "string" && parsed.activeLiterature || typeof parsed.activeCorpus === "string" && parsed.activeCorpus || void 0;
+    return {
+      activeLiterature: active,
+      activeCorpus: active,
+      useInSynthesis: !!parsed.useInSynthesis,
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : void 0
+    };
+  } catch {
+    return fallback;
+  }
+}
+function getActiveSynthesisLiterature(workspaceRoot) {
+  const cfg = readLiteratureConfig(workspaceRoot);
+  const active = cfg.activeLiterature || cfg.activeCorpus;
+  if (!cfg.useInSynthesis || !active)
+    return void 0;
+  const litDir = getLiteratureDir(workspaceRoot);
+  let absPath = path.join(litDir, active);
+  if (!fs.existsSync(absPath)) {
+    const legacyPath = path.join(workspaceRoot, ".vscode", "corpora", active);
+    if (fs.existsSync(legacyPath)) {
+      absPath = legacyPath;
+    } else {
+      return void 0;
+    }
+  }
+  return { relPath: path.join(LITERATURE_REL_DIR, active).replace(/\\/g, "/"), absPath };
+}
+function sanitizeLiteratureName(raw) {
+  return String(raw || "").trim().replace(/\.duckdb$/i, "").toLowerCase().replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 64);
+}
+var LiteratureService = class {
+  constructor(workspaceRoot, extensionPath, getRscriptOverride = () => void 0) {
+    this.workspaceRoot = workspaceRoot;
+    this.extensionPath = extensionPath;
+    this.getRscriptOverride = getRscriptOverride;
+  }
+  queue = [];
+  ingestFolder;
+  writeChain = Promise.resolve();
+  cachedRscript;
+  cachedStats = /* @__PURE__ */ new Map();
+  setWorkspaceRoot(root) {
+    if (root !== this.workspaceRoot) {
+      this.workspaceRoot = root || "";
+      this.queue = [];
+      this.ingestFolder = void 0;
+    }
+  }
+  getWorkspaceRoot() {
+    return this.workspaceRoot;
+  }
+  requireRoot() {
+    if (!this.workspaceRoot) {
+      throw new Error("No active workspace directory. Open or choose an analysis folder first.");
+    }
+    return this.workspaceRoot;
+  }
+  // -------------------------------------------------------------------------
+  // Literature database listing / configuration
+  // -------------------------------------------------------------------------
+  listDatabases() {
+    if (!this.workspaceRoot)
+      return [];
+    autoMigrateLegacyCorpora(this.workspaceRoot);
+    const dir = getLiteratureDir(this.workspaceRoot);
+    if (!fs.existsSync(dir))
+      return [];
+    const out = [];
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.toLowerCase().endsWith(LITERATURE_EXT))
+        continue;
+      const abs = path.join(dir, f);
+      try {
+        const st = fs.statSync(abs);
+        if (!st.isFile())
+          continue;
+        out.push({
+          name: f.slice(0, -LITERATURE_EXT.length),
+          fileName: f,
+          relPath: path.join(LITERATURE_REL_DIR, f).replace(/\\/g, "/"),
+          absPath: abs,
+          sizeBytes: st.size,
+          modified: st.mtime.toISOString()
+        });
+      } catch {
+      }
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  }
+  listCorpora() {
+    return this.listDatabases();
+  }
+  getConfig() {
+    return readLiteratureConfig(this.workspaceRoot);
+  }
+  writeConfig(cfg) {
+    const dir = getLiteratureDir(this.requireRoot());
+    fs.mkdirSync(dir, { recursive: true });
+    const active = cfg.activeLiterature || cfg.activeCorpus;
+    const payload = {
+      ...cfg,
+      activeLiterature: active,
+      activeCorpus: active,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    fs.writeFileSync(path.join(dir, LITERATURE_CONFIG_FILE), JSON.stringify(payload, null, 2) + "\n", "utf-8");
+  }
+  getViewState(busy) {
+    const databases = this.listDatabases();
+    let config = this.getConfig();
+    const active = config.activeLiterature || config.activeCorpus;
+    if (active && !databases.some((c) => c.fileName === active)) {
+      config = { ...config, activeLiterature: void 0, activeCorpus: void 0 };
+    }
+    const activeInfo = databases.find((c) => c.fileName === active);
+    const dir = this.workspaceRoot ? getLiteratureDir(this.workspaceRoot) : "";
+    const stats = active ? this.cachedStats.get(path.basename(active)) : void 0;
+    return {
+      workspaceRoot: this.workspaceRoot,
+      literatureDir: dir,
+      corporaDir: dir,
+      databases,
+      literature: databases,
+      corpora: databases,
+      config,
+      activeLiterature: active,
+      activeCorpus: active,
+      useInSynthesis: !!config.useInSynthesis,
+      activeLiteratureInfo: activeInfo,
+      activeCorpusInfo: activeInfo,
+      ingestFolder: this.ingestFolder,
+      queue: [...this.queue],
+      ingestionAvailable: true,
+      busy,
+      isIngesting: busy === "ingesting",
+      stats
+    };
+  }
+  async createDatabase(rawName) {
+    const root = this.requireRoot();
+    const name = sanitizeLiteratureName(rawName);
+    if (!name)
+      throw new Error("Literature database name must contain at least one letter or number.");
+    const fileName = `${name}${LITERATURE_EXT}`;
+    const dir = getLiteratureDir(root);
+    fs.mkdirSync(dir, { recursive: true });
+    const abs = path.join(dir, fileName);
+    if (fs.existsSync(abs))
+      throw new Error(`A literature database named '${fileName}' already exists.`);
+    const res = await this.runCli("init", [abs, rawName.trim() || name], true);
+    if (!res.ok)
+      throw new Error(res.error || "Failed to initialize literature database.");
+    this.cachedStats.set(fileName, {
+      study_count: 0,
+      context_count: 0,
+      assertion_count: 0,
+      unique_symbols: 0,
+      organism_count: 0,
+      perturbation_count: 0,
+      studies: 0,
+      contexts: 0,
+      assertions: 0,
+      symbols: 0,
+      organisms: 0,
+      perturbations: 0
+    });
+    this.syncWorkspaceScripts();
+    const cfg = this.getConfig();
+    this.writeConfig({ ...cfg, activeLiterature: fileName, activeCorpus: fileName });
+    const info = this.listDatabases().find((c) => c.fileName === fileName);
+    if (!info)
+      throw new Error("Literature database was initialized but could not be found on disk.");
+    return info;
+  }
+  async createCorpus(rawName) {
+    return this.createDatabase(rawName);
+  }
+  setActiveLiterature(fileName) {
+    const root = this.requireRoot();
+    if (fileName) {
+      const abs = path.join(getLiteratureDir(root), path.basename(fileName));
+      if (!fs.existsSync(abs))
+        throw new Error(`Literature database '${fileName}' not found in ${LITERATURE_REL_DIR}.`);
+    }
+    const cfg = this.getConfig();
+    const base = fileName ? path.basename(fileName) : void 0;
+    this.writeConfig({ ...cfg, activeLiterature: base, activeCorpus: base });
+    this.syncWorkspaceScripts();
+  }
+  setActiveCorpus(fileName) {
+    this.setActiveLiterature(fileName);
+  }
+  setUseInSynthesis(enabled) {
+    const cfg = this.getConfig();
+    this.writeConfig({ ...cfg, useInSynthesis: !!enabled });
+    if (enabled)
+      this.syncWorkspaceScripts();
+  }
+  /** Ensures the active literature schema is current (idempotent). */
+  async ensureSchema(fileName) {
+    const abs = this.resolveLiteraturePath(fileName);
+    const res = await this.runCli("init", [abs], true);
+    if (!res.ok)
+      throw new Error(res.error || "Failed to migrate literature schema.");
+  }
+  async getStats(fileName) {
+    const cfg = this.getConfig();
+    const target = fileName || cfg.activeLiterature || cfg.activeCorpus;
+    if (!target)
+      return { ok: false, error: "No active literature database selected." };
+    const res = await this.runCli("stats", [this.resolveLiteraturePath(target)], false);
+    if (res.ok && res.data) {
+      const raw = res.data.totals || res.data.stats || res.data;
+      const normalizedStats = {
+        study_count: Number(raw.study_count ?? raw.studies ?? 0),
+        context_count: Number(raw.context_count ?? raw.contexts ?? 0),
+        assertion_count: Number(raw.assertion_count ?? raw.assertions ?? 0),
+        unique_symbols: Number(raw.unique_symbols ?? raw.symbols ?? 0),
+        organism_count: Number(raw.organism_count ?? raw.organisms ?? 0),
+        perturbation_count: Number(raw.perturbation_count ?? raw.perturbations ?? 0),
+        studies: Number(raw.studies ?? raw.study_count ?? 0),
+        contexts: Number(raw.contexts ?? raw.context_count ?? 0),
+        assertions: Number(raw.assertions ?? raw.assertion_count ?? 0),
+        symbols: Number(raw.symbols ?? raw.unique_symbols ?? 0),
+        organisms: Number(raw.organisms ?? raw.organism_count ?? 0),
+        perturbations: Number(raw.perturbations ?? raw.perturbation_count ?? 0)
+      };
+      this.cachedStats.set(path.basename(target), normalizedStats);
+      return {
+        ...res,
+        stats: normalizedStats,
+        data: {
+          ...res.data,
+          stats: normalizedStats,
+          totals: {
+            ...res.data.totals || {},
+            ...normalizedStats
+          }
+        }
+      };
+    }
+    return res;
+  }
+  async search(query, limit = 50, fileName) {
+    const cfg = this.getConfig();
+    const target = fileName || cfg.activeLiterature || cfg.activeCorpus;
+    if (!target)
+      return { ok: false, error: "No active literature database selected." };
+    const q = String(query || "").trim();
+    if (!q)
+      return { ok: false, error: "Enter a protein symbol, alias, functional module, or perturbation." };
+    const res = await this.runCli("search", [this.resolveLiteraturePath(target), q, String(limit)], false);
+    if (res.ok && res.data) {
+      const rows = res.data.rows || res.data.results || [];
+      return {
+        ...res,
+        results: rows,
+        rows,
+        query: q,
+        data: {
+          ...res.data,
+          rows,
+          results: rows
+        }
+      };
+    }
+    return res;
+  }
+  async generateReport(fileName, outputRelativePath = "docs/literature_database.md") {
+    const cfg = this.getConfig();
+    const target = fileName || cfg.activeLiterature || cfg.activeCorpus;
+    if (!target)
+      return { ok: false, error: "No active literature database selected." };
+    const dbPath = this.resolveLiteraturePath(target);
+    const outPath = path.isAbsolute(outputRelativePath) ? outputRelativePath : path.join(this.requireRoot(), outputRelativePath);
+    return await this.runCli("report", [dbPath, outPath], true);
+  }
+  resolveLiteraturePath(fileName) {
+    const base = path.basename(fileName);
+    const withExt = base.toLowerCase().endsWith(LITERATURE_EXT) ? base : `${base}${LITERATURE_EXT}`;
+    const primary = path.join(getLiteratureDir(this.requireRoot()), withExt);
+    if (fs.existsSync(primary))
+      return primary;
+    if (this.workspaceRoot) {
+      const legacy = path.join(this.workspaceRoot, ".vscode", "corpora", withExt);
+      if (fs.existsSync(legacy))
+        return legacy;
+    }
+    return primary;
+  }
+  // -------------------------------------------------------------------------
+  // Ingestion queue (discovery only; processing is handled by the ingestion runner)
+  // -------------------------------------------------------------------------
+  scanIngestFolder(folder) {
+    if (!folder || !fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) {
+      throw new Error(`Folder not found: ${folder}`);
+    }
+    const found = [];
+    const walk = (dir, depth) => {
+      if (depth > MAX_SCAN_DEPTH || found.length >= MAX_QUEUE_FILES)
+        return;
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      for (const e of entries) {
+        if (e.name.startsWith(".") || e.name.startsWith("~$"))
+          continue;
+        const abs = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          walk(abs, depth + 1);
+          continue;
+        }
+        const ext = path.extname(e.name).toLowerCase();
+        const kind = PDF_EXTS.has(ext) ? "pdf" : TABLE_EXTS.has(ext) ? "table" : void 0;
+        if (!kind)
+          continue;
+        let size = 0;
+        try {
+          size = fs.statSync(abs).size;
+        } catch {
+        }
+        found.push({
+          id: `q${found.length + 1}`,
+          fileName: e.name,
+          absPath: abs,
+          relPath: path.relative(folder, abs).replace(/\\/g, "/"),
+          kind,
+          sizeBytes: size,
+          stage: "queued"
+        });
+        if (found.length >= MAX_QUEUE_FILES)
+          return;
+      }
+    };
+    walk(folder, 0);
+    this.ingestFolder = folder;
+    this.queue = found;
+    return [...found];
+  }
+  clearQueue() {
+    this.queue = [];
+    this.ingestFolder = void 0;
+  }
+  updateQueueItem(id, patch) {
+    const item = this.queue.find((q) => q.id === id);
+    if (item)
+      Object.assign(item, patch);
+  }
+  // -------------------------------------------------------------------------
+  // R plumbing
+  // -------------------------------------------------------------------------
+  /** Copies tools/literature/*.R from extension templates into the workspace so phases can call them. */
+  syncWorkspaceScripts() {
+    if (!this.workspaceRoot)
+      return;
+    const srcDir = this.findTemplateScriptsDir();
+    if (!srcDir)
+      return;
+    const destDir = path.join(this.workspaceRoot, LITERATURE_SCRIPTS_REL_DIR);
+    try {
+      fs.mkdirSync(destDir, { recursive: true });
+      for (const f of fs.readdirSync(srcDir)) {
+        if (f.endsWith(".R"))
+          fs.copyFileSync(path.join(srcDir, f), path.join(destDir, f));
+      }
+    } catch (err) {
+      console.warn("[LiteratureService] Could not sync literature scripts into workspace:", err);
+    }
+  }
+  findTemplateScriptsDir() {
+    const candidates = [
+      path.join(this.extensionPath, "templates", "shared", "tools", "literature"),
+      path.join(this.extensionPath, "extension", "templates", "shared", "tools", "literature"),
+      path.join(__dirname, "..", "templates", "shared", "tools", "literature"),
+      path.join(__dirname, "..", "..", "templates", "shared", "tools", "literature"),
+      // Fallback to legacy
+      path.join(this.extensionPath, "templates", "shared", "tools", "corpus"),
+      path.join(this.extensionPath, "extension", "templates", "shared", "tools", "corpus"),
+      path.join(__dirname, "..", "templates", "shared", "tools", "corpus"),
+      path.join(__dirname, "..", "..", "templates", "shared", "tools", "corpus")
+    ];
+    return candidates.find((p) => fs.existsSync(path.join(p, "literature_cli.R")) || fs.existsSync(path.join(p, "corpus_cli.R")));
+  }
+  findCliScript() {
+    const tplDir = this.findTemplateScriptsDir();
+    if (tplDir) {
+      const lit = path.join(tplDir, "literature_cli.R");
+      if (fs.existsSync(lit))
+        return lit;
+      const corp = path.join(tplDir, "corpus_cli.R");
+      if (fs.existsSync(corp))
+        return corp;
+    }
+    if (this.workspaceRoot) {
+      const wsLit = path.join(this.workspaceRoot, LITERATURE_SCRIPTS_REL_DIR, "literature_cli.R");
+      if (fs.existsSync(wsLit))
+        return wsLit;
+      const wsCorp = path.join(this.workspaceRoot, "tools", "corpus", "corpus_cli.R");
+      if (fs.existsSync(wsCorp))
+        return wsCorp;
+    }
+    throw new Error("literature_cli.R not found in extension templates or workspace tools/literature/.");
+  }
+  /**
+   * Resolves an Rscript binary. VS Code launched from the macOS Dock often has a
+   * minimal PATH, so common install locations are probed explicitly.
+   */
+  resolveRscript() {
+    const override = (this.getRscriptOverride() || "").trim();
+    if (override)
+      return override;
+    if (this.cachedRscript)
+      return this.cachedRscript;
+    const candidates = [
+      "/usr/local/bin/Rscript",
+      "/opt/homebrew/bin/Rscript",
+      "/Library/Frameworks/R.framework/Resources/bin/Rscript",
+      "/usr/bin/Rscript"
+    ];
+    const pathDirs = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
+    const exe = process.platform === "win32" ? "Rscript.exe" : "Rscript";
+    for (const d of pathDirs)
+      candidates.unshift(path.join(d, exe));
+    const hit = candidates.find((c) => {
+      try {
+        return fs.statSync(c).isFile();
+      } catch {
+        return false;
+      }
+    });
+    this.cachedRscript = hit || "Rscript";
+    return this.cachedRscript;
+  }
+  /**
+   * Runs literature_cli.R. Operations are queued sequentially through writeChain
+   * because DuckDB limits concurrent multi-process access to a single file.
+   */
+  runCli(cmd, args, _isWrite = true, timeoutMs = 12e4) {
+    const exec2 = () => this.execR(this.findCliScript(), [cmd, ...args], timeoutMs);
+    const next = this.writeChain.then(exec2, exec2);
+    this.writeChain = next.catch(() => void 0);
+    return next;
+  }
+  execR(script, args, timeoutMs) {
+    return new Promise((resolve2) => {
+      let rscript;
+      try {
+        rscript = this.resolveRscript();
+      } catch (e) {
+        resolve2({ ok: false, error: e.message });
+        return;
+      }
+      (0, import_child_process.execFile)(
+        rscript,
+        [script, ...args],
+        { cwd: this.workspaceRoot || void 0, timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024 },
+        (error, stdout, stderr) => {
+          const lines = String(stdout || "").split(/\r?\n/);
+          const line = lines.find((l) => l.startsWith(JSON_MARKER) || l.startsWith(LEGACY_JSON_MARKER));
+          if (line) {
+            try {
+              const marker = line.startsWith(JSON_MARKER) ? JSON_MARKER : LEGACY_JSON_MARKER;
+              const payload = JSON.parse(line.slice(marker.length));
+              if (payload && payload.ok) {
+                resolve2({ ok: true, data: payload, stderr: String(stderr || "") });
+              } else {
+                resolve2({ ok: false, error: payload?.error || "Unknown R error", stderr: String(stderr || "") });
+              }
+              return;
+            } catch (parseErr) {
+              resolve2({ ok: false, error: `Could not parse R output: ${parseErr.message}`, stderr: String(stderr || "") });
+              return;
+            }
+          }
+          const errCode = error?.code;
+          let msg;
+          if (errCode === "ENOENT") {
+            msg = `Rscript not found ('${rscript}'). Install R or set 'tidyproteomicsagent.rscriptPath' in Settings.`;
+          } else if (error?.killed) {
+            msg = `R process timed out after ${Math.round(timeoutMs / 1e3)}s.`;
+          } else {
+            const tail = String(stderr || error?.message || "").trim().split(/\r?\n/).slice(-6).join("\n");
+            msg = tail || "R process exited without output.";
+          }
+          resolve2({ ok: false, error: msg, stderr: String(stderr || "") });
+        }
+      );
+    });
+  }
+};
+
+// src/agent/ContextBuilder.ts
+var ContextBuilder = class {
+  constructor(workspaceRoot, promptsDir = "agent", analysisDir = "analysis") {
+    this.workspaceRoot = workspaceRoot;
+    this.promptsDir = promptsDir;
+    this.analysisDir = analysisDir;
+  }
+  setWorkspaceRoot(newRoot) {
+    this.workspaceRoot = newRoot || "";
+  }
+  async readFileSafe(relPath) {
+    try {
+      if (!this.workspaceRoot && !path2.isAbsolute(relPath))
+        return "";
+      const fullPath = path2.isAbsolute(relPath) ? relPath : path2.join(this.workspaceRoot, relPath);
+      return await fs2.readFile(fullPath, "utf-8");
+    } catch {
+      return "";
+    }
+  }
+  /**
+   * Builds the isolated context bundle for a specific phase.
+   * Persistent elements (rules, skills, variables, instructions) form the static prefix.
+   * Dynamic elements (blackboard docs/notes.md, experiment.md) and the phase file form the prompt.
+   */
+  async buildPhaseContext(phaseFileName) {
+    let agentDir = this.promptsDir;
+    let protocol = await this.readFileSafe(path2.join(agentDir, "PROTOCOL.md"));
+    if (!protocol && agentDir === "agent") {
+      const fallback = await this.readFileSafe(path2.join("prompts", "PROTOCOL.md"));
+      if (fallback) {
+        agentDir = "prompts";
+        protocol = fallback;
+      }
+    }
+    if (!protocol) {
+      const clinerules = await this.readFileSafe(".clinerules");
+      const instruct = await this.readFileSafe(path2.join(agentDir, "INSTRUCT.md"));
+      protocol = `${clinerules}
+
+${instruct}`.trim();
+    }
+    const skill = await this.readFileSafe(path2.join(agentDir, "SKILL.md"));
+    const experiment = await this.readFileSafe(path2.join("docs", "experiment.md"));
+    let variables = await this.readFileSafe(path2.join(agentDir, "VARIABLES.md"));
+    if (!variables) {
+      variables = experiment || "No dataset parameters provided. See docs/experiment.md.";
+    }
+    const biology = await this.readFileSafe(path2.join(agentDir, "BIOLOGY.md"));
+    const biologySection = biology ? `
 
 # CURATED DOMAIN BIOLOGICAL CONTEXT
-${r}`:"",p=`
+${biology}` : "";
+    const staticPrefixForCache = `
 # AUTONOMOUS ANALYSIS PROTOCOL & QUALITY GATES
-${s}
+${protocol}
 
 # INPUT DATASET PARAMETERS & EXPERIMENT SPECIFICATION
-${n}
-${a}
+${variables}
+${biologySection}
 
 # DOMAIN SKILL SPECIFICATION & API CONVENTIONS
-${i}
-`.trim(),l=await this.readFileSafe(D.join("docs","notes.md")),d=await this.readFileSafe(D.join("docs","llm.md")),c=`
+${skill}
+`.trim();
+    const notes = await this.readFileSafe(path2.join("docs", "notes.md"));
+    const llm = await this.readFileSafe(path2.join("docs", "llm.md"));
+    const blackboardState = `
 ## CURRENT RUNTIME STATE (Shared Memory)
 ### docs/notes.md:
-${l||"No prior execution notes found. Initialize if this is Phase 0 or Phase 1."}
+${notes || "No prior execution notes found. Initialize if this is Phase 0 or Phase 1."}
 
 ### docs/llm.md (ACTIVE MODEL & AGENT SPECIFICATION - READ ONLY):
-${d||"No active model summary found."}
+${llm || "No active model summary found."}
 
 ### docs/experiment.md (USER EXPERIMENT & DATASET SPECIFICATION):
-${o||"No user experiment design provided. Note: Sections 1 & 2 are strictly user-maintained. The agent may append or update Section 3 to scaffold sample grouping, renaming, and contrast suggestions for user confirmation."}
+${experiment || "No user experiment design provided. Note: Sections 1 & 2 are strictly user-maintained. The agent may append or update Section 3 to scaffold sample grouping, renaming, and contrast suggestions for user confirmation."}
 ${this.buildLiteratureSection()}
-`.trim(),g=e;!e.includes("/")&&!e.includes("\\")&&(g=D.join(this.analysisDir,e));let m=await this.readFileSafe(g),f=p,S=D.basename(e).replace(/\.md$/,"").toUpperCase(),P=`
-${c}
+`.trim();
+    let phasePath = phaseFileName;
+    if (!phaseFileName.includes("/") && !phaseFileName.includes("\\")) {
+      phasePath = path2.join(this.analysisDir, phaseFileName);
+    }
+    const phaseContent = await this.readFileSafe(phasePath);
+    const systemPrompt = staticPrefixForCache;
+    const normalizedPhaseName = path2.basename(phaseFileName).replace(/\.md$/, "").toUpperCase();
+    const phasePrompt = `
+${blackboardState}
 
 ---
 
-## ACTIVE PHASE DIRECTIVE (${e})
-${m}
+## ACTIVE PHASE DIRECTIVE (${phaseFileName})
+${phaseContent}
 
 ### Execution Instructions:
 - Adhere strictly to the guidelines and gate checkpoints for this phase.
@@ -46,69 +721,782 @@ ${m}
   Author: PROVIDER | LLM-MODEL
   Agent: TidyProteomicsAgent vX.X.X
 - In docs/experiment.md: Never overwrite or modify Sections 1 & 2 (user hypotheses and dataset parameters). You are authorized and instructed to append or update Section 3 (Sample Grouping, Recoding & Contrast Designations) to scaffold discovered sample groups, renaming/pooling tables, and suggested contrast pairs for user review.
-- Once all checkpoints for this phase are satisfied and verified, invoke complete_phase(phaseName = "${S}", summary = "...").
-- If a mandatory pre-flight gate, configuration prerequisite, or checkpoint fails and requires user intervention (such as unconfigured placeholders or ambiguous/confounded contrasts in docs/experiment.md), scaffold concrete suggestions directly into Section 3 of docs/experiment.md, then immediately invoke fail_phase(phaseName = "${S}", reason = "...", actionableInsights = "...") to halt execution and present actionable insights to the user.
-`.trim();return{systemPrompt:f,phasePrompt:P,blackboardState:c,staticPrefixForCache:p}}buildLiteratureSection(){if(!this.workspaceRoot)return"";let e=z(this.workspaceRoot);if(!(e.activeLiterature||e.activeCorpus)&&!e.useInSynthesis)return"";let s=ye(this.workspaceRoot);return s?`
-### ACTIVE LITERATURE DATABASE (DuckDB - READ ONLY):
-- Status: ENABLED for literature corroboration and synthesis.
-- Database file: \`${s.relPath}\`
-- Schema: studies(study_id, title, year, core_thesis) -> experimental_contexts(context_id, organism, model_name, perturbation_type, perturbation_target, assay_modality) -> molecular_assertions(raw_entity_name, canonical_human_symbol, relationship_type, functional_module, quantitative_note, evidence_quote). Denormalized view: v_assertions_full.
-- Inspect: \`Rscript tools/literature/literature_cli.R stats ${s.relPath}\`
-- Lookup: \`Rscript tools/literature/literature_cli.R search ${s.relPath} <SYMBOL_OR_MODULE> [limit]\`
-- Query Skill: \`Rscript tools/literature/query_literature.R ${s.relPath} "<seed_symbols>" "<pathway_terms>"\`
-- Policy: Prefer literature database evidence (cite study_id + verbatim evidence_quote) over generic web search. Open the database read-only; never modify it during analysis phases.
-`:`
+- Once all checkpoints for this phase are satisfied and verified, invoke complete_phase(phaseName = "${normalizedPhaseName}", summary = "...").
+- If a mandatory pre-flight gate, configuration prerequisite, or checkpoint fails and requires user intervention (such as unconfigured placeholders or ambiguous/confounded contrasts in docs/experiment.md), scaffold concrete suggestions directly into Section 3 of docs/experiment.md, then immediately invoke fail_phase(phaseName = "${normalizedPhaseName}", reason = "...", actionableInsights = "...") to halt execution and present actionable insights to the user.
+`.trim();
+    return {
+      systemPrompt,
+      phasePrompt,
+      blackboardState,
+      staticPrefixForCache
+    };
+  }
+  /**
+   * Describes the active DuckDB literature database (toggled from the Literature tab).
+   * Placed in the dynamic blackboard (not the cached prefix) because it can change between phases.
+   */
+  buildLiteratureSection() {
+    if (!this.workspaceRoot)
+      return "";
+    const cfg = readLiteratureConfig(this.workspaceRoot);
+    const activeName = cfg.activeLiterature || cfg.activeCorpus;
+    if (!activeName && !cfg.useInSynthesis)
+      return "";
+    const active = getActiveSynthesisLiterature(this.workspaceRoot);
+    if (!active) {
+      return `
 ### ACTIVE LITERATURE DATABASE (DuckDB):
 - Status: DISABLED for synthesis (toggle off or no database selected in the Literature tab).
 - Use the standard literature corroboration strategy described in the phase directive.
-`}};var se=class{constructor(e,t,s,i,o,n,r,a){this.phaseName=e;this.phaseTitle=t;this.client=s;this.tools=i;this.context=o;this.onProgress=n;this.chatLogger=r;this.isCancelled=a}messages=[];totalUsage={promptTokens:0,completionTokens:0,totalTokens:0,cachedPromptTokens:0};getTotalUsage(){return{...this.totalUsage}}async run(e=25){let t=Date.now();if(this.messages.push({role:"user",content:this.context.phasePrompt}),this.chatLogger){this.chatLogger.setPhase(this.phaseName);let a=this.client.getConfig();await this.chatLogger.logPhaseStart({phaseTitle:this.phaseTitle||this.phaseName,phaseFileName:this.phaseName,model:a.model,provider:a.provider,systemPromptFiles:["agent/PROTOCOL.md","docs/experiment.md","agent/SKILL.md"],inputPromptFiles:[this.phaseName.includes("/")?this.phaseName:`analysis/${this.phaseName}`,"docs/notes.md","docs/llm.md","docs/experiment.md"]})}let s=0,i="",o=0;for(;s<e;){if(this.isCancelled&&this.isCancelled()){let c="Execution stopped by user.";if(this.chatLogger){let g=Math.round((Date.now()-t)/1e3);await this.chatLogger.logPhaseEnd({phaseTitle:this.phaseTitle||this.phaseName,phaseFileName:this.phaseName,success:!1,summary:c,durationSeconds:g,tokensUsed:this.totalUsage,turnCount:s})}return{success:!1,summary:c,tokensUsed:this.totalUsage,phaseName:this.phaseName,turnCount:s}}s++,this.onProgress({type:"thought",data:`Starting Turn ${s}/${e}...`});let a,p=2,l=0,d=null;for(;l<=p&&(l++,!(this.isCancelled&&this.isCancelled()));)try{a=await this.client.chat({system:this.context.systemPrompt,messages:this.messages,tools:this.tools.getDefinitions(),onToken:c=>{this.onProgress({type:"text",data:c})}}),d=null;break}catch(c){if(d=c,(c.name==="TimeoutError"||c.name==="AbortError"||/timeout|aborted|ETIMEDOUT|ECONNRESET/i.test(c.message||""))&&l<=p&&(!this.isCancelled||!this.isCancelled())){let m=l*3e3;this.onProgress({type:"thought",data:`Turn ${s} timed out on attempt ${l}/${p+1} (${c.message}). Retrying in ${m/1e3}s...`}),await new Promise(f=>setTimeout(f,m));continue}break}if(!a){let c=d?`LLM API Error during turn ${s}: ${d.message}`:"Execution stopped by user.";if(this.chatLogger){let g=Math.round((Date.now()-t)/1e3);await this.chatLogger.logPhaseEnd({phaseTitle:this.phaseTitle||this.phaseName,phaseFileName:this.phaseName,success:!1,summary:c,durationSeconds:g,tokensUsed:this.totalUsage,turnCount:s})}return{success:!1,summary:c,tokensUsed:this.totalUsage,phaseName:this.phaseName,turnCount:s}}if(this.totalUsage.promptTokens+=a.usage.promptTokens,this.totalUsage.completionTokens+=a.usage.completionTokens,this.totalUsage.totalTokens+=a.usage.totalTokens,this.totalUsage.cachedPromptTokens=(this.totalUsage.cachedPromptTokens||0)+(a.usage.cachedPromptTokens||0),this.onProgress({type:"tokens",data:{turn:s,turnUsage:a.usage,totalUsage:{...this.totalUsage}}}),this.messages.push({role:"assistant",content:a.content,tool_calls:a.tool_calls}),this.chatLogger&&await this.chatLogger.logAssistantResponse(s,a.content,a.tool_calls,a.usage),a.truncationDetected){let c=`Output limit reached (finish_reason: "${a.finishReason||"length"}", tokens: ${a.usage.completionTokens}). Generation was truncated.`;this.onProgress({type:"thought",data:c}),this.chatLogger&&await this.chatLogger.logTruncationWarning(s,a.finishReason||"length",a.usage.completionTokens)}if(a.tool_calls&&a.tool_calls.length>0){o=0;for(let c of a.tool_calls){this.onProgress({type:"tool_start",data:{name:c.name,args:c.args}});let g=await this.tools.execute(c.name,c.args);this.onProgress({type:"tool_end",data:{name:c.name,result:g.content,isError:g.isError}});let m=g.content;if(m&&m.length>24e3){let S=m.slice(0,12e3),P=m.slice(-1e4),T=m.length-22e3;m=`${S}
+`;
+    }
+    return `
+### ACTIVE LITERATURE DATABASE (DuckDB - READ ONLY):
+- Status: ENABLED for literature corroboration and synthesis.
+- Database file: \`${active.relPath}\`
+- Schema: studies(study_id, title, year, core_thesis) -> experimental_contexts(context_id, organism, model_name, perturbation_type, perturbation_target, assay_modality) -> molecular_assertions(raw_entity_name, canonical_human_symbol, relationship_type, functional_module, quantitative_note, evidence_quote). Denormalized view: v_assertions_full.
+- Inspect: \`Rscript tools/literature/literature_cli.R stats ${active.relPath}\`
+- Lookup: \`Rscript tools/literature/literature_cli.R search ${active.relPath} <SYMBOL_OR_MODULE> [limit]\`
+- Query Skill: \`Rscript tools/literature/query_literature.R ${active.relPath} "<seed_symbols>" "<pathway_terms>"\`
+- Policy: Prefer literature database evidence (cite study_id + verbatim evidence_quote) over generic web search. Open the database read-only; never modify it during analysis phases.
+`;
+  }
+};
 
-... [Output truncated: ${T.toLocaleString()} characters omitted to preserve context economy. See complete output in workspace/logs/ or inspect with 'read_file'] ...
+// src/agent/AgentLoop.ts
+var AgentLoop = class {
+  constructor(phaseName, phaseTitle, client, tools, context, onProgress, chatLogger, isCancelled) {
+    this.phaseName = phaseName;
+    this.phaseTitle = phaseTitle;
+    this.client = client;
+    this.tools = tools;
+    this.context = context;
+    this.onProgress = onProgress;
+    this.chatLogger = chatLogger;
+    this.isCancelled = isCancelled;
+  }
+  messages = [];
+  totalUsage = {
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    cachedPromptTokens: 0
+  };
+  getTotalUsage() {
+    return { ...this.totalUsage };
+  }
+  async run(maxTurns = 25) {
+    const startTimeMs = Date.now();
+    this.messages.push({
+      role: "user",
+      content: this.context.phasePrompt
+    });
+    if (this.chatLogger) {
+      this.chatLogger.setPhase(this.phaseName);
+      const cfg = this.client.getConfig();
+      await this.chatLogger.logPhaseStart({
+        phaseTitle: this.phaseTitle || this.phaseName,
+        phaseFileName: this.phaseName,
+        model: cfg.model,
+        provider: cfg.provider,
+        systemPromptFiles: ["agent/PROTOCOL.md", "docs/experiment.md", "agent/SKILL.md"],
+        inputPromptFiles: [
+          this.phaseName.includes("/") ? this.phaseName : `analysis/${this.phaseName}`,
+          "docs/notes.md",
+          "docs/llm.md",
+          "docs/experiment.md"
+        ]
+      });
+    }
+    let turn = 0;
+    let completedSummary = "";
+    let consecutiveNoToolTurns = 0;
+    while (turn < maxTurns) {
+      if (this.isCancelled && this.isCancelled()) {
+        const stopSummary = "Execution stopped by user.";
+        if (this.chatLogger) {
+          const durationSeconds2 = Math.round((Date.now() - startTimeMs) / 1e3);
+          await this.chatLogger.logPhaseEnd({
+            phaseTitle: this.phaseTitle || this.phaseName,
+            phaseFileName: this.phaseName,
+            success: false,
+            summary: stopSummary,
+            durationSeconds: durationSeconds2,
+            tokensUsed: this.totalUsage,
+            turnCount: turn
+          });
+        }
+        return {
+          success: false,
+          summary: stopSummary,
+          tokensUsed: this.totalUsage,
+          phaseName: this.phaseName,
+          turnCount: turn
+        };
+      }
+      turn++;
+      this.onProgress({ type: "thought", data: `Starting Turn ${turn}/${maxTurns}...` });
+      let response;
+      const maxRetries = 2;
+      let attempt = 0;
+      let lastError = null;
+      while (attempt <= maxRetries) {
+        attempt++;
+        if (this.isCancelled && this.isCancelled()) {
+          break;
+        }
+        try {
+          response = await this.client.chat({
+            system: this.context.systemPrompt,
+            messages: this.messages,
+            tools: this.tools.getDefinitions(),
+            onToken: (text) => {
+              this.onProgress({ type: "text", data: text });
+            }
+          });
+          lastError = null;
+          break;
+        } catch (err) {
+          lastError = err;
+          const isTimeout = err.name === "TimeoutError" || err.name === "AbortError" || /timeout|aborted|ETIMEDOUT|ECONNRESET/i.test(err.message || "");
+          if (isTimeout && attempt <= maxRetries && (!this.isCancelled || !this.isCancelled())) {
+            const backoffMs = attempt * 3e3;
+            this.onProgress({
+              type: "thought",
+              data: `Turn ${turn} timed out on attempt ${attempt}/${maxRetries + 1} (${err.message}). Retrying in ${backoffMs / 1e3}s...`
+            });
+            await new Promise((r) => setTimeout(r, backoffMs));
+            continue;
+          }
+          break;
+        }
+      }
+      if (!response) {
+        const errorSummary = lastError ? `LLM API Error during turn ${turn}: ${lastError.message}` : "Execution stopped by user.";
+        if (this.chatLogger) {
+          const durationSeconds2 = Math.round((Date.now() - startTimeMs) / 1e3);
+          await this.chatLogger.logPhaseEnd({
+            phaseTitle: this.phaseTitle || this.phaseName,
+            phaseFileName: this.phaseName,
+            success: false,
+            summary: errorSummary,
+            durationSeconds: durationSeconds2,
+            tokensUsed: this.totalUsage,
+            turnCount: turn
+          });
+        }
+        return {
+          success: false,
+          summary: errorSummary,
+          tokensUsed: this.totalUsage,
+          phaseName: this.phaseName,
+          turnCount: turn
+        };
+      }
+      this.totalUsage.promptTokens += response.usage.promptTokens;
+      this.totalUsage.completionTokens += response.usage.completionTokens;
+      this.totalUsage.totalTokens += response.usage.totalTokens;
+      this.totalUsage.cachedPromptTokens = (this.totalUsage.cachedPromptTokens || 0) + (response.usage.cachedPromptTokens || 0);
+      this.onProgress({
+        type: "tokens",
+        data: {
+          turn,
+          turnUsage: response.usage,
+          totalUsage: { ...this.totalUsage }
+        }
+      });
+      this.messages.push({
+        role: "assistant",
+        content: response.content,
+        tool_calls: response.tool_calls
+      });
+      if (this.chatLogger) {
+        await this.chatLogger.logAssistantResponse(
+          turn,
+          response.content,
+          response.tool_calls,
+          response.usage
+        );
+      }
+      if (response.truncationDetected) {
+        const warnMsg = `Output limit reached (finish_reason: "${response.finishReason || "length"}", tokens: ${response.usage.completionTokens}). Generation was truncated.`;
+        this.onProgress({
+          type: "thought",
+          data: warnMsg
+        });
+        if (this.chatLogger) {
+          await this.chatLogger.logTruncationWarning(
+            turn,
+            response.finishReason || "length",
+            response.usage.completionTokens
+          );
+        }
+      }
+      if (response.tool_calls && response.tool_calls.length > 0) {
+        consecutiveNoToolTurns = 0;
+        for (const tc of response.tool_calls) {
+          this.onProgress({
+            type: "tool_start",
+            data: { name: tc.name, args: tc.args }
+          });
+          const result = await this.tools.execute(tc.name, tc.args);
+          this.onProgress({
+            type: "tool_end",
+            data: { name: tc.name, result: result.content, isError: result.isError }
+          });
+          let toolMessageContent = result.content;
+          const MAX_TOOL_CHARS = 24e3;
+          if (toolMessageContent && toolMessageContent.length > MAX_TOOL_CHARS) {
+            const head = toolMessageContent.slice(0, 12e3);
+            const tail = toolMessageContent.slice(-1e4);
+            const omitted = toolMessageContent.length - 22e3;
+            toolMessageContent = `${head}
 
-${P}`}if(this.messages.push({role:"tool",tool_call_id:c.id,tool_name:c.name,content:m}),this.chatLogger&&await this.chatLogger.logToolResult(c.name,c.id,g.content,g.isError,c.args),c.name==="fail_phase"){let S=c.args.reason||"Phase gate or checkpoint failed",P=c.args.actionableInsights||"",T=P?`[Failed] Pre-flight Gate / Checkpoint: ${S}
+... [Output truncated: ${omitted.toLocaleString()} characters omitted to preserve context economy. See complete output in workspace/logs/ or inspect with 'read_file'] ...
+
+${tail}`;
+          }
+          this.messages.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            tool_name: tc.name,
+            content: toolMessageContent
+          });
+          if (this.chatLogger) {
+            await this.chatLogger.logToolResult(tc.name, tc.id, result.content, result.isError, tc.args);
+          }
+          if (tc.name === "fail_phase") {
+            const failReason = tc.args.reason || "Phase gate or checkpoint failed";
+            const actionable = tc.args.actionableInsights || "";
+            const summary = actionable ? `[Failed] Pre-flight Gate / Checkpoint: ${failReason}
 
 Actionable Insights:
-${P}`:`[Failed] Pre-flight Gate / Checkpoint: ${S}`,L=Math.round((Date.now()-t)/1e3);return this.chatLogger&&await this.chatLogger.logPhaseEnd({phaseTitle:this.phaseTitle||this.phaseName,phaseFileName:this.phaseName,success:!1,summary:T,durationSeconds:L,tokensUsed:this.totalUsage,turnCount:s}),{success:!1,summary:T,tokensUsed:this.totalUsage,phaseName:this.phaseName,turnCount:s}}if(c.name==="complete_phase"){i=c.args.summary||a.content;let S=Math.round((Date.now()-t)/1e3);return this.chatLogger&&await this.chatLogger.logPhaseEnd({phaseTitle:this.phaseTitle||this.phaseName,phaseFileName:this.phaseName,success:!0,summary:i,durationSeconds:S,tokensUsed:this.totalUsage,turnCount:s}),{success:!0,summary:i,tokensUsed:this.totalUsage,phaseName:this.phaseName,turnCount:s}}}}else if(o++,a.content.includes("PHASE_COMPLETED")||a.content.includes("CHECKPOINT_PASSED")){let c=Math.round((Date.now()-t)/1e3);return this.chatLogger&&await this.chatLogger.logPhaseEnd({phaseTitle:this.phaseTitle||this.phaseName,phaseFileName:this.phaseName,success:!0,summary:a.content,durationSeconds:c,tokensUsed:this.totalUsage,turnCount:s}),{success:!0,summary:a.content,tokensUsed:this.totalUsage,phaseName:this.phaseName,turnCount:s}}else if(this.isPhaseFailureOrHalt(a.content)){let c=Math.round((Date.now()-t)/1e3);return this.chatLogger&&await this.chatLogger.logPhaseEnd({phaseTitle:this.phaseTitle||this.phaseName,phaseFileName:this.phaseName,success:!1,summary:a.content,durationSeconds:c,tokensUsed:this.totalUsage,turnCount:s}),{success:!1,summary:a.content,tokensUsed:this.totalUsage,phaseName:this.phaseName,turnCount:s}}else if(o>=2){let c=`Execution halted: Agent stopped calling tools and provided instructions to user:
+${actionable}` : `[Failed] Pre-flight Gate / Checkpoint: ${failReason}`;
+            const durationSeconds2 = Math.round((Date.now() - startTimeMs) / 1e3);
+            if (this.chatLogger) {
+              await this.chatLogger.logPhaseEnd({
+                phaseTitle: this.phaseTitle || this.phaseName,
+                phaseFileName: this.phaseName,
+                success: false,
+                summary,
+                durationSeconds: durationSeconds2,
+                tokensUsed: this.totalUsage,
+                turnCount: turn
+              });
+            }
+            return {
+              success: false,
+              summary,
+              tokensUsed: this.totalUsage,
+              phaseName: this.phaseName,
+              turnCount: turn
+            };
+          }
+          if (tc.name === "complete_phase") {
+            completedSummary = tc.args.summary || response.content;
+            const durationSeconds2 = Math.round((Date.now() - startTimeMs) / 1e3);
+            if (this.chatLogger) {
+              await this.chatLogger.logPhaseEnd({
+                phaseTitle: this.phaseTitle || this.phaseName,
+                phaseFileName: this.phaseName,
+                success: true,
+                summary: completedSummary,
+                durationSeconds: durationSeconds2,
+                tokensUsed: this.totalUsage,
+                turnCount: turn
+              });
+            }
+            return {
+              success: true,
+              summary: completedSummary,
+              tokensUsed: this.totalUsage,
+              phaseName: this.phaseName,
+              turnCount: turn
+            };
+          }
+        }
+      } else {
+        consecutiveNoToolTurns++;
+        if (response.content.includes("PHASE_COMPLETED") || response.content.includes("CHECKPOINT_PASSED")) {
+          const durationSeconds2 = Math.round((Date.now() - startTimeMs) / 1e3);
+          if (this.chatLogger) {
+            await this.chatLogger.logPhaseEnd({
+              phaseTitle: this.phaseTitle || this.phaseName,
+              phaseFileName: this.phaseName,
+              success: true,
+              summary: response.content,
+              durationSeconds: durationSeconds2,
+              tokensUsed: this.totalUsage,
+              turnCount: turn
+            });
+          }
+          return {
+            success: true,
+            summary: response.content,
+            tokensUsed: this.totalUsage,
+            phaseName: this.phaseName,
+            turnCount: turn
+          };
+        } else if (this.isPhaseFailureOrHalt(response.content)) {
+          const durationSeconds2 = Math.round((Date.now() - startTimeMs) / 1e3);
+          if (this.chatLogger) {
+            await this.chatLogger.logPhaseEnd({
+              phaseTitle: this.phaseTitle || this.phaseName,
+              phaseFileName: this.phaseName,
+              success: false,
+              summary: response.content,
+              durationSeconds: durationSeconds2,
+              tokensUsed: this.totalUsage,
+              turnCount: turn
+            });
+          }
+          return {
+            success: false,
+            summary: response.content,
+            tokensUsed: this.totalUsage,
+            phaseName: this.phaseName,
+            turnCount: turn
+          };
+        } else if (consecutiveNoToolTurns >= 2) {
+          const summary = `Execution halted: Agent stopped calling tools and provided instructions to user:
 
-${a.content}`,g=Math.round((Date.now()-t)/1e3);return this.chatLogger&&await this.chatLogger.logPhaseEnd({phaseTitle:this.phaseTitle||this.phaseName,phaseFileName:this.phaseName,success:!1,summary:c,durationSeconds:g,tokensUsed:this.totalUsage,turnCount:s}),{success:!1,summary:c,tokensUsed:this.totalUsage,phaseName:this.phaseName,turnCount:s}}else a.truncationDetected?this.messages.push({role:"user",content:`[System Notice]: Your response reached the maximum output token limit (finish_reason: "${a.finishReason||"length"}", completion tokens: ${a.usage.completionTokens}). Any attempted tool call was truncated before completion and could not be parsed. Please write the output in smaller sections or verify that Max Output Tokens in settings is set sufficiently high.`}):this.messages.push({role:"user",content:"Please execute the required tools to fulfill the objectives of this phase, or call complete_phase when finished, or call fail_phase if a prerequisite/gate failed."})}let n=`Turn limit reached (${e} turns) without completing phase checkpoints.`,r=Math.round((Date.now()-t)/1e3);return this.chatLogger&&await this.chatLogger.logPhaseEnd({phaseTitle:this.phaseTitle||this.phaseName,phaseFileName:this.phaseName,success:!1,summary:n,durationSeconds:r,tokensUsed:this.totalUsage,turnCount:e}),{success:!1,summary:n,tokensUsed:this.totalUsage,phaseName:this.phaseName,turnCount:e}}isPhaseFailureOrHalt(e){if(!e)return!1;let t=e.toLowerCase();return!!([/pre-flight\s+gate\s+fail/i,/specification\s+gate\s+fail/i,/checkpoint\s+gate\s+fail/i,/\bgate\s+failed\b/i,/\bphase\s+(?:[0-9a-zA-Z_]+\s+)?(?:is\s+blocked|remains\s+blocked|cannot\s+be\s+completed|is\s+halted)\b/i,/\bphase_failed\b/i,/\bphase_blocked\b/i,/\bphase_halted\b/i,/\bblocked_specification_gate\b/i,/\bhalt(?:ed)?\s+(?:immediately\s+)?with\s+status\s+`?failed`?/i,/\bhalt\s+directive\b/i].some(i=>i.test(e))||e.includes("\u274C")&&(t.includes("placeholder")||t.includes("blocked")||t.includes("rerun phase")||t.includes("gate")))}};var H=N(require("fs/promises")),W=N(require("path")),ie=class{constructor(e,t=""){this.workspaceRoot=e;this.workspaceRoot=e||"",t?this.setPhase(t):this.pipelineLogPath=this.resolveLogPath("logs/pipeline.md")}currentPhaseTag="";logPath="";consoleLogPath="";pipelineLogPath="";writeQueue=Promise.resolve();setWorkspaceRoot(e){this.workspaceRoot=e||"",this.currentPhaseTag?this.setPhase(this.currentPhaseTag):this.pipelineLogPath=this.resolveLogPath("logs/pipeline.md")}setPhase(e){if(!e)return;let t=W.basename(e).replace(/\.md$/i,"").toLowerCase();t.startsWith("instruct")&&(t="00_install"),this.currentPhaseTag=t,this.logPath=this.resolveLogPath(`logs/${t}/chat.md`),this.consoleLogPath=this.resolveLogPath(`logs/${t}/console.log`),this.pipelineLogPath=this.resolveLogPath("logs/pipeline.md")}getPhaseTag(){return this.currentPhaseTag}getLogPath(){return this.logPath||this.pipelineLogPath}getConsoleLogPath(){return this.consoleLogPath}getPipelineLogPath(){return this.pipelineLogPath}resolveLogPath(e){return W.isAbsolute(e)?e:this.workspaceRoot?W.join(this.workspaceRoot,e):""}async appendToFile(e,t){if(!(!this.workspaceRoot||!e))return this.writeQueue=this.writeQueue.then(async()=>{try{let s=W.dirname(e);await H.mkdir(s,{recursive:!0}),await H.appendFile(e,t+`
-`,"utf-8")}catch(s){console.error(`[ChatLogger] Failed to write to ${e}:`,s)}}),this.writeQueue}async append(e){let t=this.logPath||this.pipelineLogPath;return this.appendToFile(t,e)}async ensurePipelineSummaryHeader(){if(!(!this.workspaceRoot||!this.pipelineLogPath))try{await H.stat(this.pipelineLogPath)}catch{let e=["# TidyProteomics Pipeline Execution Summary","","> Master index of autonomous reasoning traces and raw execution logs per phase.","","| Phase | Title | Status | Duration | Total Tokens | Logs |","| :--- | :--- | :--- | :--- | :--- | :--- |"].join(`
-`);await this.appendToFile(this.pipelineLogPath,e)}}async logPhaseStart(e){this.setPhase(e.phaseFileName),await this.ensurePipelineSummaryHeader(),this.consoleLogPath&&await this.writeQueue.then(async()=>{try{await H.mkdir(W.dirname(this.consoleLogPath),{recursive:!0}),await H.appendFile(this.consoleLogPath,`=== Phase Started: ${e.phaseTitle} [${new Date().toISOString()}] ===
-`,"utf-8")}catch{}});let t=new Date().toISOString(),s=e.systemPromptFiles||["agent/PROTOCOL.md","docs/experiment.md","agent/SKILL.md"],i=e.inputPromptFiles||[e.phaseFileName.includes("/")?e.phaseFileName:`analysis/${e.phaseFileName}`,"docs/notes.md","docs/llm.md","docs/experiment.md"],o=["","---","",`# [${t}] Phase Start: ${e.phaseTitle}`,`- **Phase Directive**: \`${e.phaseFileName}\``,`- **Model**: \`${e.model}\` | **Provider**: \`${e.provider}\``,`- **Console Output**: [\`logs/${this.currentPhaseTag}/console.log\`](./console.log)`,"","### Persistent System Frame (Sent & Cached Prefix)",...s.map(n=>`- \`${n}\``),"","### Input Prompts & Blackboard Directives (Turn 1)",...i.map(n=>`- \`${n}\``),""];await this.append(o.join(`
-`))}async logAssistantResponse(e,t,s,i){let n=[`### [${new Date().toISOString()}] Assistant (Turn ${e})`];if(t&&t.trim().length>0&&(n.push(""),n.push(t.trim())),s&&s.length>0){n.push(""),n.push("**Tool Calls**:");for(let r of s)n.push(`- **\`${r.name}\`** (id: \`${r.id}\`)`),n.push("  ```json"),n.push(JSON.stringify(r.args,null,2).split(`
-`).map(a=>`  ${a}`).join(`
-`)),n.push("  ```")}if(i){let r=i.cachedPromptTokens||0;n.push(""),n.push(`> **Metrics**: Turn Tokens: **${i.totalTokens.toLocaleString()}** (Prompt: ${i.promptTokens.toLocaleString()}, Completion: ${i.completionTokens.toLocaleString()}, Cached: ${r.toLocaleString()})`)}n.push(""),await this.append(n.join(`
-`))}async logTruncationWarning(e,t,s){let i=new Date().toISOString(),o=[`> **WARNING (Turn ${e})**: Generation hit output token limit (\`finish_reason: "${t}"\`, completion tokens: **${s.toLocaleString()}**). Response or pending tool calls were truncated mid-stream!`,""];await this.append(o.join(`
-`))}async logToolResult(e,t,s,i,o){let n=new Date().toISOString(),r=i?"FAILED":"SUCCESS",a=s?s.trim():"(No output)";if(e==="execute_command"){let l=o?.command||"(command string unavailable)";if(this.consoleLogPath){let g=["================================================================================",`[${n}] Command: ${l}`,`Status: ${r} (id: ${t})`,"================================================================================",a,""].join(`
-`);await this.appendToFile(this.consoleLogPath,g)}let c=[`#### [${n}] Tool Result: \`${e}\` [${r}] (id: \`${t}\`)`,`- **Command**: \`${l}\``,`- **Status**: ${i?"\u274C Command failed":"\u2713 Command executed successfully"}`,`- **Console Output**: Logged to [\`logs/${this.currentPhaseTag}/console.log\`](./console.log)`];if(i){let g=a.split(`
-`),m=g.filter(S=>/error|failed|exception|cannot|fatal/i.test(S)),f=m.length>0?m.slice(-10):g.slice(-10);c.push("- **Error Excerpt**:"),c.push("  ```text");for(let S of f)c.push(`  ${S.trim()}`);c.push("  ```")}else{let g=a.split(`
-`).filter(m=>/CHECKPOINT.*PASS|ALL_CHECKPOINTS_PASSED|PHASE_.*_PASS/i.test(m)).slice(0,3);if(g.length>0)for(let m of g)c.push(`- **Checkpoint Highlight**: \`${m.trim()}\``);else{let m=a.split(`
-`).length;c.push(`- **Console Volume**: ${m.toLocaleString()} lines captured in console.log`)}}c.push(""),await this.append(c.join(`
-`));return}if(e==="write_file"){let l=o?.filePath||"",d=[`#### [${n}] Tool Result: \`${e}\` [${r}] (id: \`${t}\`)`,`- **Target File**: \`${l}\``,`- **Result**: ${a}`,""];await this.append(d.join(`
-`));return}if(e==="read_file"){let l=o?.filePath||"",d=a.split(`
-`),c=[`#### [${n}] Tool Result: \`${e}\` [${r}] (id: \`${t}\`)`,`- **Inspected File**: \`${l}\``];if(d.length>25){let g=d.slice(0,15).join(`
-`);c.push("```"),c.push(g),c.push(`
-... [${(d.length-15).toLocaleString()} lines omitted in chat log for economy] ...`),c.push("```")}else c.push("```"),c.push(a),c.push("```");c.push(""),await this.append(c.join(`
-`));return}let p=[`#### [${n}] Tool Result: \`${e}\` [${r}] (id: \`${t}\`)`,"```",a,"```",""];await this.append(p.join(`
-`))}async logPhaseEnd(e){let t=new Date().toISOString(),s=e.success?"\u2713":"\u274C",i=e.success?"COMPLETED":"FAILED",o=e.tokensUsed.cachedPromptTokens||0,n=[`### [${t}] ${s} Phase ${i}: ${e.phaseTitle}`,`- **Duration**: ${e.durationSeconds}s | **Total Turns**: ${e.turnCount}`,`- **Cumulative Tokens**: Total: **${e.tokensUsed.totalTokens.toLocaleString()}** | Prompt: ${e.tokensUsed.promptTokens.toLocaleString()} | Completion: ${e.tokensUsed.completionTokens.toLocaleString()} | Cached: ${o.toLocaleString()}`,"- **Logs**: [`chat.md`](./chat.md) | [`console.log`](./console.log)","","**Summary**:",e.summary,"","---",""].join(`
-`);if(await this.append(n),this.pipelineLogPath){let r=`| ${s} **${this.currentPhaseTag}** | ${e.phaseTitle} | ${i} | ${e.durationSeconds}s | ${e.tokensUsed.totalTokens.toLocaleString()} | [Chat](./${this.currentPhaseTag}/chat.md) \\| [Console](./${this.currentPhaseTag}/console.log) |`;await this.appendToFile(this.pipelineLogPath,r)}}};var K=N(require("fs/promises")),de=N(require("path"));function Me(y=new Date){let e=r=>r.toString().padStart(2,"0"),t=y.getFullYear(),s=e(y.getMonth()+1),i=e(y.getDate()),o=e(y.getHours()),n=e(y.getMinutes());return`${t}-${s}-${i} ${o}:${n}`}function De(y,e="0.1.0",t=new Date){let s=Me(t),i=(y.provider||"anthropic").toUpperCase(),o=y.model||"claude-3-7-sonnet-20250219",n=y.provider==="anthropic"||y.provider==="openrouter"?"Active \u26A1":"Standard",r=(y.maxTokens||32768).toLocaleString(),a=`${y.timeoutSeconds||600}s`,p=y.apiKey?"Configured":y.provider==="ollama"?"Not Required (Local)":"Missing",l=y.baseUrl&&y.baseUrl.trim()?y.baseUrl.trim():"Default",d=`TidyProteomicsAgent v${e||"0.1.0"}`,c=`${i} | ${o}`;return`# Active Model Summary
+${response.content}`;
+          const durationSeconds2 = Math.round((Date.now() - startTimeMs) / 1e3);
+          if (this.chatLogger) {
+            await this.chatLogger.logPhaseEnd({
+              phaseTitle: this.phaseTitle || this.phaseName,
+              phaseFileName: this.phaseName,
+              success: false,
+              summary,
+              durationSeconds: durationSeconds2,
+              tokensUsed: this.totalUsage,
+              turnCount: turn
+            });
+          }
+          return {
+            success: false,
+            summary,
+            tokensUsed: this.totalUsage,
+            phaseName: this.phaseName,
+            turnCount: turn
+          };
+        } else if (response.truncationDetected) {
+          this.messages.push({
+            role: "user",
+            content: `[System Notice]: Your response reached the maximum output token limit (finish_reason: "${response.finishReason || "length"}", completion tokens: ${response.usage.completionTokens}). Any attempted tool call was truncated before completion and could not be parsed. Please write the output in smaller sections or verify that Max Output Tokens in settings is set sufficiently high.`
+          });
+        } else {
+          this.messages.push({
+            role: "user",
+            content: "Please execute the required tools to fulfill the objectives of this phase, or call complete_phase when finished, or call fail_phase if a prerequisite/gate failed."
+          });
+        }
+      }
+    }
+    const failureSummary = `Turn limit reached (${maxTurns} turns) without completing phase checkpoints.`;
+    const durationSeconds = Math.round((Date.now() - startTimeMs) / 1e3);
+    if (this.chatLogger) {
+      await this.chatLogger.logPhaseEnd({
+        phaseTitle: this.phaseTitle || this.phaseName,
+        phaseFileName: this.phaseName,
+        success: false,
+        summary: failureSummary,
+        durationSeconds,
+        tokensUsed: this.totalUsage,
+        turnCount: maxTurns
+      });
+    }
+    return {
+      success: false,
+      summary: failureSummary,
+      tokensUsed: this.totalUsage,
+      phaseName: this.phaseName,
+      turnCount: maxTurns
+    };
+  }
+  isPhaseFailureOrHalt(content) {
+    if (!content)
+      return false;
+    const lower = content.toLowerCase();
+    const failurePatterns = [
+      /pre-flight\s+gate\s+fail/i,
+      /specification\s+gate\s+fail/i,
+      /checkpoint\s+gate\s+fail/i,
+      /\bgate\s+failed\b/i,
+      /\bphase\s+(?:[0-9a-zA-Z_]+\s+)?(?:is\s+blocked|remains\s+blocked|cannot\s+be\s+completed|is\s+halted)\b/i,
+      /\bphase_failed\b/i,
+      /\bphase_blocked\b/i,
+      /\bphase_halted\b/i,
+      /\bblocked_specification_gate\b/i,
+      /\bhalt(?:ed)?\s+(?:immediately\s+)?with\s+status\s+`?failed`?/i,
+      /\bhalt\s+directive\b/i
+    ];
+    if (failurePatterns.some((pattern) => pattern.test(content))) {
+      return true;
+    }
+    if (content.includes("\u274C") && (lower.includes("placeholder") || lower.includes("blocked") || lower.includes("rerun phase") || lower.includes("gate"))) {
+      return true;
+    }
+    return false;
+  }
+};
 
-Created: ${s}
-Author: ${c}
-Agent: ${d}
+// src/agent/ChatLogger.ts
+var fs3 = __toESM(require("fs/promises"));
+var path3 = __toESM(require("path"));
+var ChatLogger = class {
+  constructor(workspaceRoot, initialPhase = "") {
+    this.workspaceRoot = workspaceRoot;
+    this.workspaceRoot = workspaceRoot || "";
+    if (initialPhase) {
+      this.setPhase(initialPhase);
+    } else {
+      this.pipelineLogPath = this.resolveLogPath("logs/pipeline.md");
+    }
+  }
+  currentPhaseTag = "";
+  logPath = "";
+  consoleLogPath = "";
+  pipelineLogPath = "";
+  writeQueue = Promise.resolve();
+  setWorkspaceRoot(newRoot) {
+    this.workspaceRoot = newRoot || "";
+    if (this.currentPhaseTag) {
+      this.setPhase(this.currentPhaseTag);
+    } else {
+      this.pipelineLogPath = this.resolveLogPath("logs/pipeline.md");
+    }
+  }
+  /**
+   * Switches the active logging context to a specific phase directory:
+   *   logs/<phaseTag>/chat.md      -> Phase chat & LLM reasoning trace
+   *   logs/<phaseTag>/console.log  -> Raw R / command stdout and stderr
+   */
+  setPhase(phaseFileNameOrTag) {
+    if (!phaseFileNameOrTag)
+      return;
+    let tag = path3.basename(phaseFileNameOrTag).replace(/\.md$/i, "").toLowerCase();
+    if (tag.startsWith("instruct")) {
+      tag = "00_install";
+    }
+    this.currentPhaseTag = tag;
+    this.logPath = this.resolveLogPath(`logs/${tag}/chat.md`);
+    this.consoleLogPath = this.resolveLogPath(`logs/${tag}/console.log`);
+    this.pipelineLogPath = this.resolveLogPath("logs/pipeline.md");
+  }
+  getPhaseTag() {
+    return this.currentPhaseTag;
+  }
+  getLogPath() {
+    return this.logPath || this.pipelineLogPath;
+  }
+  getConsoleLogPath() {
+    return this.consoleLogPath;
+  }
+  getPipelineLogPath() {
+    return this.pipelineLogPath;
+  }
+  resolveLogPath(fileName) {
+    if (path3.isAbsolute(fileName)) {
+      return fileName;
+    }
+    if (!this.workspaceRoot)
+      return "";
+    return path3.join(this.workspaceRoot, fileName);
+  }
+  async appendToFile(targetPath, text) {
+    if (!this.workspaceRoot || !targetPath)
+      return;
+    this.writeQueue = this.writeQueue.then(async () => {
+      try {
+        const dir = path3.dirname(targetPath);
+        await fs3.mkdir(dir, { recursive: true });
+        await fs3.appendFile(targetPath, text + "\n", "utf-8");
+      } catch (err) {
+        console.error(`[ChatLogger] Failed to write to ${targetPath}:`, err);
+      }
+    });
+    return this.writeQueue;
+  }
+  async append(text) {
+    const target = this.logPath || this.pipelineLogPath;
+    return this.appendToFile(target, text);
+  }
+  /**
+   * Initializes or updates the master logs/pipeline.md summary table.
+   */
+  async ensurePipelineSummaryHeader() {
+    if (!this.workspaceRoot || !this.pipelineLogPath)
+      return;
+    try {
+      await fs3.stat(this.pipelineLogPath);
+    } catch {
+      const header = [
+        "# TidyProteomics Pipeline Execution Summary",
+        "",
+        "> Master index of autonomous reasoning traces and raw execution logs per phase.",
+        "",
+        "| Phase | Title | Status | Duration | Total Tokens | Logs |",
+        "| :--- | :--- | :--- | :--- | :--- | :--- |"
+      ].join("\n");
+      await this.appendToFile(this.pipelineLogPath, header);
+    }
+  }
+  /**
+   * Logs phase initialization. Documents WHICH prompts were sent into the persistent system frame
+   * and dynamic input directives WITHOUT dumping their entire text contents, keeping the log lean.
+   */
+  async logPhaseStart(params) {
+    this.setPhase(params.phaseFileName);
+    await this.ensurePipelineSummaryHeader();
+    if (this.consoleLogPath) {
+      await this.writeQueue.then(async () => {
+        try {
+          await fs3.mkdir(path3.dirname(this.consoleLogPath), { recursive: true });
+          await fs3.appendFile(
+            this.consoleLogPath,
+            `=== Phase Started: ${params.phaseTitle} [${(/* @__PURE__ */ new Date()).toISOString()}] ===
+`,
+            "utf-8"
+          );
+        } catch {
+        }
+      });
+    }
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+    const systemFiles = params.systemPromptFiles || [
+      "agent/PROTOCOL.md",
+      "docs/experiment.md",
+      "agent/SKILL.md"
+    ];
+    const inputFiles = params.inputPromptFiles || [
+      params.phaseFileName.includes("/") ? params.phaseFileName : `analysis/${params.phaseFileName}`,
+      "docs/notes.md",
+      "docs/llm.md",
+      "docs/experiment.md"
+    ];
+    const lines = [
+      "",
+      "---",
+      "",
+      `# [${timestamp}] Phase Start: ${params.phaseTitle}`,
+      `- **Phase Directive**: \`${params.phaseFileName}\``,
+      `- **Model**: \`${params.model}\` | **Provider**: \`${params.provider}\``,
+      `- **Console Output**: [\`logs/${this.currentPhaseTag}/console.log\`](./console.log)`,
+      "",
+      "### Persistent System Frame (Sent & Cached Prefix)",
+      ...systemFiles.map((f) => `- \`${f}\``),
+      "",
+      "### Input Prompts & Blackboard Directives (Turn 1)",
+      ...inputFiles.map((f) => `- \`${f}\``),
+      ""
+    ];
+    await this.append(lines.join("\n"));
+  }
+  async logAssistantResponse(turn, content, toolCalls, usage) {
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+    const lines = [
+      `### [${timestamp}] Assistant (Turn ${turn})`
+    ];
+    if (content && content.trim().length > 0) {
+      lines.push("");
+      lines.push(content.trim());
+    }
+    if (toolCalls && toolCalls.length > 0) {
+      lines.push("");
+      lines.push("**Tool Calls**:");
+      for (const tc of toolCalls) {
+        lines.push(`- **\`${tc.name}\`** (id: \`${tc.id}\`)`);
+        lines.push("  ```json");
+        lines.push(
+          JSON.stringify(tc.args, null, 2).split("\n").map((l) => `  ${l}`).join("\n")
+        );
+        lines.push("  ```");
+      }
+    }
+    if (usage) {
+      const cached = usage.cachedPromptTokens || 0;
+      lines.push("");
+      lines.push(
+        `> **Metrics**: Turn Tokens: **${usage.totalTokens.toLocaleString()}** (Prompt: ${usage.promptTokens.toLocaleString()}, Completion: ${usage.completionTokens.toLocaleString()}, Cached: ${cached.toLocaleString()})`
+      );
+    }
+    lines.push("");
+    await this.append(lines.join("\n"));
+  }
+  async logTruncationWarning(turn, finishReason, completionTokens) {
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+    const lines = [
+      `> **WARNING (Turn ${turn})**: Generation hit output token limit (\`finish_reason: "${finishReason}"\`, completion tokens: **${completionTokens.toLocaleString()}**). Response or pending tool calls were truncated mid-stream!`,
+      ""
+    ];
+    await this.append(lines.join("\n"));
+  }
+  /**
+   * Logs tool results. For `execute_command` (especially R scripts), writes the complete, unvarnished
+   * stdout and stderr to `logs/<phaseTag>/console.log` while inserting a lean "Execution Card" into `chat.md`.
+   */
+  async logToolResult(toolName, callId, result, isError, toolArgs) {
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+    const status = isError ? "FAILED" : "SUCCESS";
+    const cleanResult = result ? result.trim() : "(No output)";
+    if (toolName === "execute_command") {
+      const command = toolArgs?.command || "(command string unavailable)";
+      if (this.consoleLogPath) {
+        const consoleEntry = [
+          "================================================================================",
+          `[${timestamp}] Command: ${command}`,
+          `Status: ${status} (id: ${callId})`,
+          "================================================================================",
+          cleanResult,
+          ""
+        ].join("\n");
+        await this.appendToFile(this.consoleLogPath, consoleEntry);
+      }
+      const relConsole = `./console.log`;
+      const lines2 = [
+        `#### [${timestamp}] Tool Result: \`${toolName}\` [${status}] (id: \`${callId}\`)`,
+        `- **Command**: \`${command}\``,
+        `- **Status**: ${isError ? "\u274C Command failed" : "\u2713 Command executed successfully"}`,
+        `- **Console Output**: Logged to [\`logs/${this.currentPhaseTag}/console.log\`](${relConsole})`
+      ];
+      if (isError) {
+        const rawLines = cleanResult.split("\n");
+        const errorLines = rawLines.filter(
+          (l) => /error|failed|exception|cannot|fatal/i.test(l)
+        );
+        const snippetLines = errorLines.length > 0 ? errorLines.slice(-10) : rawLines.slice(-10);
+        lines2.push("- **Error Excerpt**:");
+        lines2.push("  ```text");
+        for (const el of snippetLines) {
+          lines2.push(`  ${el.trim()}`);
+        }
+        lines2.push("  ```");
+      } else {
+        const passLines = cleanResult.split("\n").filter((l) => /CHECKPOINT.*PASS|ALL_CHECKPOINTS_PASSED|PHASE_.*_PASS/i.test(l)).slice(0, 3);
+        if (passLines.length > 0) {
+          for (const pl of passLines) {
+            lines2.push(`- **Checkpoint Highlight**: \`${pl.trim()}\``);
+          }
+        } else {
+          const lineCount = cleanResult.split("\n").length;
+          lines2.push(`- **Console Volume**: ${lineCount.toLocaleString()} lines captured in console.log`);
+        }
+      }
+      lines2.push("");
+      await this.append(lines2.join("\n"));
+      return;
+    }
+    if (toolName === "write_file") {
+      const filePath = toolArgs?.filePath || "";
+      const lines2 = [
+        `#### [${timestamp}] Tool Result: \`${toolName}\` [${status}] (id: \`${callId}\`)`,
+        `- **Target File**: \`${filePath}\``,
+        `- **Result**: ${cleanResult}`,
+        ""
+      ];
+      await this.append(lines2.join("\n"));
+      return;
+    }
+    if (toolName === "read_file") {
+      const filePath = toolArgs?.filePath || "";
+      const rawLines = cleanResult.split("\n");
+      const lines2 = [
+        `#### [${timestamp}] Tool Result: \`${toolName}\` [${status}] (id: \`${callId}\`)`,
+        `- **Inspected File**: \`${filePath}\``
+      ];
+      if (rawLines.length > 25) {
+        const preview = rawLines.slice(0, 15).join("\n");
+        lines2.push("```");
+        lines2.push(preview);
+        lines2.push(`
+... [${(rawLines.length - 15).toLocaleString()} lines omitted in chat log for economy] ...`);
+        lines2.push("```");
+      } else {
+        lines2.push("```");
+        lines2.push(cleanResult);
+        lines2.push("```");
+      }
+      lines2.push("");
+      await this.append(lines2.join("\n"));
+      return;
+    }
+    const lines = [
+      `#### [${timestamp}] Tool Result: \`${toolName}\` [${status}] (id: \`${callId}\`)`,
+      "```",
+      cleanResult,
+      "```",
+      ""
+    ];
+    await this.append(lines.join("\n"));
+  }
+  async logPhaseEnd(params) {
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+    const statusIcon = params.success ? "\u2713" : "\u274C";
+    const statusText = params.success ? "COMPLETED" : "FAILED";
+    const cached = params.tokensUsed.cachedPromptTokens || 0;
+    const banner = [
+      `### [${timestamp}] ${statusIcon} Phase ${statusText}: ${params.phaseTitle}`,
+      `- **Duration**: ${params.durationSeconds}s | **Total Turns**: ${params.turnCount}`,
+      `- **Cumulative Tokens**: Total: **${params.tokensUsed.totalTokens.toLocaleString()}** | Prompt: ${params.tokensUsed.promptTokens.toLocaleString()} | Completion: ${params.tokensUsed.completionTokens.toLocaleString()} | Cached: ${cached.toLocaleString()}`,
+      `- **Logs**: [\`chat.md\`](./chat.md) | [\`console.log\`](./console.log)`,
+      "",
+      `**Summary**:`,
+      params.summary,
+      "",
+      "---",
+      ""
+    ].join("\n");
+    await this.append(banner);
+    if (this.pipelineLogPath) {
+      const summaryRow = `| ${statusIcon} **${this.currentPhaseTag}** | ${params.phaseTitle} | ${statusText} | ${params.durationSeconds}s | ${params.tokensUsed.totalTokens.toLocaleString()} | [Chat](./${this.currentPhaseTag}/chat.md) \\| [Console](./${this.currentPhaseTag}/console.log) |`;
+      await this.appendToFile(this.pipelineLogPath, summaryRow);
+    }
+  }
+};
+
+// src/orchestrator/ModelSummaryWriter.ts
+var fs4 = __toESM(require("fs/promises"));
+var path4 = __toESM(require("path"));
+function formatDateTime(d = /* @__PURE__ */ new Date()) {
+  const pad = (n) => n.toString().padStart(2, "0");
+  const year = d.getFullYear();
+  const month = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const hours = pad(d.getHours());
+  const minutes = pad(d.getMinutes());
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
+}
+function generateActiveModelSummaryMarkdown(config, extensionVersion = "0.1.0", date = /* @__PURE__ */ new Date()) {
+  const timestampStr = formatDateTime(date);
+  const providerStr = (config.provider || "anthropic").toUpperCase();
+  const modelStr = config.model || "claude-3-7-sonnet-20250219";
+  const cachingStr = config.provider === "anthropic" || config.provider === "openrouter" ? "Active \u26A1" : "Standard";
+  const maxTokensStr = (config.maxTokens || 32768).toLocaleString();
+  const timeoutStr = `${config.timeoutSeconds || 600}s`;
+  const keyStatusStr = config.apiKey ? "Configured" : config.provider === "ollama" ? "Not Required (Local)" : "Missing";
+  const baseUrlStr = config.baseUrl && config.baseUrl.trim() ? config.baseUrl.trim() : "Default";
+  const agentStr = `TidyProteomicsAgent v${extensionVersion || "0.1.0"}`;
+  const authorStr = `${providerStr} | ${modelStr}`;
+  return `# Active Model Summary
+
+Created: ${timestampStr}
+Author: ${authorStr}
+Agent: ${agentStr}
 
 ## Active Configuration
 
 | Configuration Property | Value |
 | :--- | :--- |
-| **Provider** | ${i} |
-| **Model** | ${o} |
-| **Author** | ${c} |
-| **Agent** | ${d} |
-| **Prompt Caching** | ${n} |
-| **Max Output Tokens** | ${r} |
-| **Request Timeout** | ${a} |
-| **Key Status** | ${p} |
-| **Base URL** | ${l} |
+| **Provider** | ${providerStr} |
+| **Model** | ${modelStr} |
+| **Author** | ${authorStr} |
+| **Agent** | ${agentStr} |
+| **Prompt Caching** | ${cachingStr} |
+| **Max Output Tokens** | ${maxTokensStr} |
+| **Request Timeout** | ${timeoutStr} |
+| **Key Status** | ${keyStatusStr} |
+| **Base URL** | ${baseUrlStr} |
 
 ---
 
@@ -119,62 +1507,2070 @@ All agent-authored documents and reports (including \`docs/observations.md\`, \`
 Title
 
 Created: YYYY-MM-DD HH:MM
-Author: ${c}
-Agent: ${d}
+Author: ${authorStr}
+Agent: ${agentStr}
 \`\`\`
-`}async function Q(y,e,t="0.1.0"){if(!y)return"";let s=de.join(y,"docs");await K.mkdir(s,{recursive:!0});let i=de.join(s,"llm.md"),o=De(e,t);try{let n=await K.readFile(i,"utf-8"),r=a=>a.replace(/Created:\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/g,"");if(r(n)===r(o))return i}catch{}return await K.writeFile(i,o,"utf-8"),i}var oe=class{constructor(e,t,s,i,o,n="0.1.0"){this.workspaceRoot=e;this.client=t;this.tools=s;this.onStateChange=i;this.onLog=o;this.extensionVersion=n;this.workspaceRoot=e||"",this.chatLogger=new ie(this.workspaceRoot),this.workspaceRoot&&this.rescanPhases().catch(r=>{console.error("[PipelineOrchestrator] Error rescanning phases:",r)})}phases=[];isRunning=!1;isFullPipelineRunning=!1;shouldStop=!1;chatLogger;setExtensionVersion(e){this.extensionVersion=e||"0.1.0"}async syncModelSummary(){return this.workspaceRoot?await Q(this.workspaceRoot,this.client.getConfig(),this.extensionVersion):""}ts(){return new Date().toTimeString().split(" ")[0]}logPhase(e,t,s=!1){let i=`[${this.ts()}] ${e}: ${t}`;this.onLog(this.truncateTo(i,120),s)}logPipeline(e,t=!1){this.logPhase("Pipeline",e,t)}truncateTo(e,t=120){return e.length<=t?e:e.slice(0,t-3)+"..."}formatToolHeader(e,t){switch(e){case"execute_command":return`[Command] ${String(t?.command||"").trim().replace(/\s+/g," ")}`;case"read_file":{let s=String(t?.filePath||"").trim(),i=t?.startLine?` (lines ${t.startLine}-${Number(t.startLine)+Number(t.maxLines||0)-1})`:"";return`[Read] ${s}${i}`}case"write_file":{let s=String(t?.filePath||"").trim(),i=typeof t?.content=="string"?` (${t.content.length} chars)`:"";return`[Write] ${s}${i}`}case"replace_file_content":return`[Edit] ${String(t?.filePath||"").trim()}`;case"list_directory":{let s=String(t?.dirPath||".").trim();return`[List] ${!s||s==="."||s==="./"?"directory contents":s}`}case"check_checkpoint_gate":return`[Check Gate] ${Array.isArray(t?.requiredFiles)?t.requiredFiles.join(", "):""}`;case"complete_phase":return`[Complete Phase] ${String(t?.phaseName||"").trim()}`;case"fail_phase":{let s=String(t?.phaseName||"").trim(),i=String(t?.reason||"").trim();return`[Halt Phase] ${s}${i?": "+i:""}`}default:{let s=Object.keys(t||{}),i=s.length>0?` (${s.join(", ")})`:"";return`[${e}]${i}`}}}getIsRunning(){return this.isRunning}getIsFullPipelineRunning(){return this.isFullPipelineRunning}async setWorkingDirectory(e){if(this.isRunning){this.logPipeline("Cannot change working directory while a pipeline or phase is actively running.");return}this.workspaceRoot=e||"",this.tools.setWorkspaceRoot(this.workspaceRoot),this.chatLogger.setWorkspaceRoot(this.workspaceRoot);try{await this.rescanPhases()}catch(t){console.error("[PipelineOrchestrator] Error rescanning phases on directory change:",t)}}getWorkingDirectory(){return this.workspaceRoot}async loadNotesRecords(){let e=new Map;if(!this.workspaceRoot)return e;try{let t=R.join(this.workspaceRoot,"docs","notes.md"),i=(await E.readFile(t,"utf-8")).split(/\n(?=###\s+)/);for(let o of i){let n=o.match(/- \*\*File\*\*:\s*`([^`]+)`/);if(!n)continue;let r=n[1].trim(),a=o.match(/- \*\*Duration\*\*:\s*(\d+)s/),p=a?parseInt(a[1],10):void 0,l=o.match(/- \*\*Start\*\*:\s*([^\n\r]+)/),d=l?l[1].trim():void 0,c=o.match(/- \*\*End\*\*:\s*([^\n\r]+)/),g=c?c[1].trim():void 0,m=o.match(/- \*\*Token Usage\*\*:\s*Total:\s*(\d+|N\/A),\s*Prompt:\s*(\d+|N\/A),\s*Completion:\s*(\d+|N\/A)(?:,\s*Cached:\s*(\d+|N\/A))?/i),f;if(m){let C=m[1]!=="N/A"?parseInt(m[1],10):0,x=m[2]!=="N/A"?parseInt(m[2],10):0,$=m[3]!=="N/A"?parseInt(m[3],10):0,O=m[4]&&m[4]!=="N/A"?parseInt(m[4],10):0;f={totalTokens:C,promptTokens:x,completionTokens:$,cachedPromptTokens:O}}let S=o.includes("- COMPLETED"),P=o.includes("- FAILED"),T=S?"completed":P?"failed":"completed",L=o.match(/\*\*Summary\*\*:\s*\n([\s\S]*?)(?:\n---|\n###|$)/),B=L?L[1].trim():void 0,h={status:T,durationSeconds:p,tokenUsage:f,summary:B,startTime:d,endTime:g};e.set(r,h);let _=R.basename(r);e.has(_)||e.set(_,h)}}catch{}return e}async forceReloadFromDisk(){if(this.isRunning){this.logPipeline("Cannot force reload while an active pipeline run is in flight.");return}await this.rescanPhases(!0),this.logPipeline("Reloaded all tasks and progress from disk.")}async resetAllState(){if(this.isRunning){this.logPipeline("Cannot reset state while an active run is in flight.");return}let e=R.join(this.workspaceRoot,"docs","notes.md");try{let t=`# Autonomous Proteomics Analysis Notes
+`;
+}
+async function writeActiveModelSummaryFile(workspaceRoot, config, extensionVersion = "0.1.0") {
+  if (!workspaceRoot)
+    return "";
+  const docsDir = path4.join(workspaceRoot, "docs");
+  await fs4.mkdir(docsDir, { recursive: true });
+  const llmPath = path4.join(docsDir, "llm.md");
+  const markdown = generateActiveModelSummaryMarkdown(config, extensionVersion);
+  try {
+    const existing = await fs4.readFile(llmPath, "utf-8");
+    const stripCreated = (s) => s.replace(/Created:\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/g, "");
+    if (stripCreated(existing) === stripCreated(markdown)) {
+      return llmPath;
+    }
+  } catch {
+  }
+  await fs4.writeFile(llmPath, markdown, "utf-8");
+  return llmPath;
+}
+
+// src/orchestrator/PipelineOrchestrator.ts
+var PipelineOrchestrator = class {
+  constructor(workspaceRoot, client, tools, onStateChange, onLog, extensionVersion = "0.1.0") {
+    this.workspaceRoot = workspaceRoot;
+    this.client = client;
+    this.tools = tools;
+    this.onStateChange = onStateChange;
+    this.onLog = onLog;
+    this.extensionVersion = extensionVersion;
+    this.workspaceRoot = workspaceRoot || "";
+    this.chatLogger = new ChatLogger(this.workspaceRoot);
+    if (this.workspaceRoot) {
+      this.rescanPhases().catch((err) => {
+        console.error("[PipelineOrchestrator] Error rescanning phases:", err);
+      });
+    }
+  }
+  phases = [];
+  isRunning = false;
+  isFullPipelineRunning = false;
+  shouldStop = false;
+  chatLogger;
+  setExtensionVersion(version) {
+    this.extensionVersion = version || "0.1.0";
+  }
+  async syncModelSummary() {
+    if (!this.workspaceRoot)
+      return "";
+    return await writeActiveModelSummaryFile(this.workspaceRoot, this.client.getConfig(), this.extensionVersion);
+  }
+  ts() {
+    const d = /* @__PURE__ */ new Date();
+    return d.toTimeString().split(" ")[0];
+  }
+  logPhase(tag, message, updateLast = false) {
+    const line = `[${this.ts()}] ${tag}: ${message}`;
+    this.onLog(this.truncateTo(line, 120), updateLast);
+  }
+  logPipeline(message, updateLast = false) {
+    this.logPhase("Pipeline", message, updateLast);
+  }
+  truncateTo(line, maxLen = 120) {
+    if (line.length <= maxLen)
+      return line;
+    return line.slice(0, maxLen - 3) + "...";
+  }
+  formatToolHeader(name, args) {
+    switch (name) {
+      case "execute_command": {
+        const cmd = String(args?.command || "").trim().replace(/\s+/g, " ");
+        return `[Command] ${cmd}`;
+      }
+      case "read_file": {
+        const filePath = String(args?.filePath || "").trim();
+        const range = args?.startLine ? ` (lines ${args.startLine}-${Number(args.startLine) + Number(args.maxLines || 0) - 1})` : "";
+        return `[Read] ${filePath}${range}`;
+      }
+      case "write_file": {
+        const filePath = String(args?.filePath || "").trim();
+        const len = typeof args?.content === "string" ? ` (${args.content.length} chars)` : "";
+        return `[Write] ${filePath}${len}`;
+      }
+      case "replace_file_content": {
+        const filePath = String(args?.filePath || "").trim();
+        return `[Edit] ${filePath}`;
+      }
+      case "list_directory": {
+        const dp = String(args?.dirPath || ".").trim();
+        const display = !dp || dp === "." || dp === "./" ? "directory contents" : dp;
+        return `[List] ${display}`;
+      }
+      case "check_checkpoint_gate": {
+        const files = Array.isArray(args?.requiredFiles) ? args.requiredFiles.join(", ") : "";
+        return `[Check Gate] ${files}`;
+      }
+      case "complete_phase": {
+        const pName = String(args?.phaseName || "").trim();
+        return `[Complete Phase] ${pName}`;
+      }
+      case "fail_phase": {
+        const pName = String(args?.phaseName || "").trim();
+        const reason = String(args?.reason || "").trim();
+        return `[Halt Phase] ${pName}${reason ? ": " + reason : ""}`;
+      }
+      default: {
+        const keys = Object.keys(args || {});
+        const summary = keys.length > 0 ? ` (${keys.join(", ")})` : "";
+        return `[${name}]${summary}`;
+      }
+    }
+  }
+  getIsRunning() {
+    return this.isRunning;
+  }
+  getIsFullPipelineRunning() {
+    return this.isFullPipelineRunning;
+  }
+  async setWorkingDirectory(newRoot) {
+    if (this.isRunning) {
+      this.logPipeline("Cannot change working directory while a pipeline or phase is actively running.");
+      return;
+    }
+    this.workspaceRoot = newRoot || "";
+    this.tools.setWorkspaceRoot(this.workspaceRoot);
+    this.chatLogger.setWorkspaceRoot(this.workspaceRoot);
+    try {
+      await this.rescanPhases();
+    } catch (err) {
+      console.error("[PipelineOrchestrator] Error rescanning phases on directory change:", err);
+    }
+  }
+  getWorkingDirectory() {
+    return this.workspaceRoot;
+  }
+  /**
+   * Dynamically inspects the workspace directory for analysis/*.md phases and agent/INSTRUCT.md
+   */
+  async loadNotesRecords() {
+    const map = /* @__PURE__ */ new Map();
+    if (!this.workspaceRoot)
+      return map;
+    try {
+      const notesPath = path5.join(this.workspaceRoot, "docs", "notes.md");
+      const content = await fs5.readFile(notesPath, "utf-8");
+      const sections = content.split(/\n(?=###\s+)/);
+      for (const section of sections) {
+        const fileMatch = section.match(/- \*\*File\*\*:\s*`([^`]+)`/);
+        if (!fileMatch)
+          continue;
+        const rawFileName = fileMatch[1].trim();
+        const durationMatch = section.match(/- \*\*Duration\*\*:\s*(\d+)s/);
+        const durationSeconds = durationMatch ? parseInt(durationMatch[1], 10) : void 0;
+        const startMatch = section.match(/- \*\*Start\*\*:\s*([^\n\r]+)/);
+        const startTime = startMatch ? startMatch[1].trim() : void 0;
+        const endMatch = section.match(/- \*\*End\*\*:\s*([^\n\r]+)/);
+        const endTime = endMatch ? endMatch[1].trim() : void 0;
+        const tokenMatch = section.match(
+          /- \*\*Token Usage\*\*:\s*Total:\s*(\d+|N\/A),\s*Prompt:\s*(\d+|N\/A),\s*Completion:\s*(\d+|N\/A)(?:,\s*Cached:\s*(\d+|N\/A))?/i
+        );
+        let tokenUsage;
+        if (tokenMatch) {
+          const totalTokens = tokenMatch[1] !== "N/A" ? parseInt(tokenMatch[1], 10) : 0;
+          const promptTokens = tokenMatch[2] !== "N/A" ? parseInt(tokenMatch[2], 10) : 0;
+          const completionTokens = tokenMatch[3] !== "N/A" ? parseInt(tokenMatch[3], 10) : 0;
+          const cachedPromptTokens = tokenMatch[4] && tokenMatch[4] !== "N/A" ? parseInt(tokenMatch[4], 10) : 0;
+          tokenUsage = { totalTokens, promptTokens, completionTokens, cachedPromptTokens };
+        }
+        const isCompleted = section.includes("- COMPLETED");
+        const isFailed = section.includes("- FAILED");
+        const status = isCompleted ? "completed" : isFailed ? "failed" : "completed";
+        const summaryMatch = section.match(/\*\*Summary\*\*:\s*\n([\s\S]*?)(?:\n---|\n###|$)/);
+        const summary = summaryMatch ? summaryMatch[1].trim() : void 0;
+        const record = { status, durationSeconds, tokenUsage, summary, startTime, endTime };
+        map.set(rawFileName, record);
+        const base = path5.basename(rawFileName);
+        if (!map.has(base)) {
+          map.set(base, record);
+        }
+      }
+    } catch {
+    }
+    return map;
+  }
+  async forceReloadFromDisk() {
+    if (this.isRunning) {
+      this.logPipeline("Cannot force reload while an active pipeline run is in flight.");
+      return;
+    }
+    await this.rescanPhases(true);
+    this.logPipeline("Reloaded all tasks and progress from disk.");
+  }
+  async resetAllState() {
+    if (this.isRunning) {
+      this.logPipeline("Cannot reset state while an active run is in flight.");
+      return;
+    }
+    const notesPath = path5.join(this.workspaceRoot, "docs", "notes.md");
+    try {
+      const header = `# Autonomous Proteomics Analysis Notes
 Model: ${this.client.getConfig().model}
 
-`;await E.writeFile(e,t,"utf-8")}catch{}for(let t of this.phases)t.status="pending",t.startTime=void 0,t.endTime=void 0,t.durationSeconds=void 0,t.tokenUsage=void 0,t.summary=void 0,t.error=void 0;await this.rescanPhases(!0),this.logPipeline("State and runtime blackboard reset to initial state.")}async rescanPhases(e=!1){if(this.isRunning)return;if(!this.workspaceRoot){this.phases=[],await this.notifyState();return}let t=await this.loadNotesRecords(),s=e?new Map:new Map(this.phases.map(a=>[a.fileName,a])),i=new Map(this.phases.map(a=>[a.fileName,a.enabled])),o=[],n=R.join(this.workspaceRoot,"analysis"),r=!1;try{let p=(await E.readdir(n)).filter(l=>l.endsWith(".md")).sort();for(let l=0;l<p.length;l++){let d=p[l];d.startsWith("00_")&&(r=!0);let c=s.get(d),g=t.get(d)||t.get(R.basename(d)),m=c?.title;if(!m){try{let B=(await E.readFile(R.join(n,d),"utf-8")).split(`
-`).find(h=>h.trim().startsWith("#"));B&&(m=B.replace(/^#+\s*/,"").trim())}catch{}m||(m=d.replace(/^[0-9]+_/,"").replace(/\.md$/,"").replace(/_/g," "),m=`Phase: ${m}`)}let f=d.match(/^([0-9]+)/)?.[1]||String(l+1).padStart(2,"0"),S=d.startsWith("00_"),P="pending";c?.status&&c.status!=="running"?P=c.status:g?.status&&(P=g.status);let T=i.has(d)?i.get(d):c?c.enabled:!0;o.push({id:f,fileName:d,title:m,status:P,enabled:T,isMasterSetup:S,startTime:c?.startTime||g?.startTime,endTime:c?.endTime||g?.endTime,durationSeconds:c?.durationSeconds||g?.durationSeconds,tokenUsage:c?.tokenUsage||g?.tokenUsage,summary:c?.summary||g?.summary,error:c?.error||(P==="failed"?g?.summary:void 0)})}}catch{this.logPipeline(`Note: 'analysis' directory not found in ${this.workspaceRoot}`)}if(!r){let a="agent/INSTRUCT.md",p=R.join(this.workspaceRoot,"agent","INSTRUCT.md");try{await E.stat(p)}catch{a="prompts/INSTRUCT.md",p=R.join(this.workspaceRoot,"prompts","INSTRUCT.md")}try{await E.stat(p);let l=s.get(a)||s.get("agent/INSTRUCT.md")||s.get("prompts/INSTRUCT.md"),d=t.get(a)||t.get("agent/INSTRUCT.md")||t.get("prompts/INSTRUCT.md")||t.get("INSTRUCT.md"),c="pending";l?.status&&l.status!=="running"?c=l.status:d?.status&&(c=d.status);let g=i.has(a)?i.get(a):l?l.enabled:!0;o.unshift({id:"00",fileName:a,title:"Phase 0: Master Setup & Environment",status:c,enabled:g,isMasterSetup:!0,startTime:l?.startTime||d?.startTime,endTime:l?.endTime||d?.endTime,durationSeconds:l?.durationSeconds||d?.durationSeconds,tokenUsage:l?.tokenUsage||d?.tokenUsage,summary:l?.summary||d?.summary,error:l?.error||(c==="failed"?d?.summary:void 0)})}catch{}}this.phases=o,await this.notifyState()}async getPromptFiles(){let e="agent";try{await E.stat(R.join(this.workspaceRoot,"agent"))}catch{e="prompts"}let t=[{name:"Analysis Protocol",relPath:`${e}/PROTOCOL.md`},{name:"TidyProteomics Skills",relPath:`${e}/SKILL.md`},{name:"Experiment & Dataset Spec",relPath:"docs/experiment.md"},{name:"Shared Memory",relPath:"docs/notes.md"},{name:"Active Model Summary",relPath:"docs/llm.md"},{name:"Pipeline Summary",relPath:"logs/pipeline.md"}];try{let i=R.join(this.workspaceRoot,"logs"),o=await E.readdir(i,{withFileTypes:!0});for(let n of o)if(n.isDirectory()){let r=n.name,a=`logs/${r}/chat.md`,p=`logs/${r}/console.log`;t.push({name:`${r} Chat Trace`,relPath:a}),t.push({name:`${r} Console Log`,relPath:p})}}catch{}try{await E.stat(R.join(this.workspaceRoot,"logs/llm_chat.md")),t.push({name:"Legacy LLM Chat Log",relPath:"logs/llm_chat.md"})}catch{}try{await E.stat(R.join(this.workspaceRoot,`${e}/BIOLOGY.md`)),t.splice(1,0,{name:"Curated Biological Context",relPath:`${e}/BIOLOGY.md`})}catch{}try{await E.stat(R.join(this.workspaceRoot,`${e}/VARIABLES.md`)),t.splice(1,0,{name:"Legacy Dataset Variables",relPath:`${e}/VARIABLES.md`})}catch{}let s=[];for(let i of t){let o=!1;try{await E.stat(R.join(this.workspaceRoot,i.relPath)),o=!0}catch{o=!1}s.push({...i,exists:o})}return s}getPhases(){return[...this.phases]}togglePhase(e,t){let s=this.phases.find(i=>i.id===e);s&&(s.enabled=t,this.notifyState())}async addPhase(e,t){let s=e.endsWith(".md")?e:`${e}.md`,i=R.join(this.workspaceRoot,"analysis");await E.mkdir(i,{recursive:!0});let o=R.join(i,s),r=`### Phase: ${t||s.replace(/\.md$/,"").replace(/_/g," ")}
+`;
+      await fs5.writeFile(notesPath, header, "utf-8");
+    } catch {
+    }
+    for (const p of this.phases) {
+      p.status = "pending";
+      p.startTime = void 0;
+      p.endTime = void 0;
+      p.durationSeconds = void 0;
+      p.tokenUsage = void 0;
+      p.summary = void 0;
+      p.error = void 0;
+    }
+    await this.rescanPhases(true);
+    this.logPipeline("State and runtime blackboard reset to initial state.");
+  }
+  async rescanPhases(forceReload = false) {
+    if (this.isRunning) {
+      return;
+    }
+    if (!this.workspaceRoot) {
+      this.phases = [];
+      await this.notifyState();
+      return;
+    }
+    const notesRecords = await this.loadNotesRecords();
+    const existingMap = forceReload ? /* @__PURE__ */ new Map() : new Map(this.phases.map((p) => [p.fileName, p]));
+    const enabledMap = new Map(this.phases.map((p) => [p.fileName, p.enabled]));
+    const newPhases = [];
+    const analysisDir = path5.join(this.workspaceRoot, "analysis");
+    let hasSetupInAnalysis = false;
+    try {
+      const files = await fs5.readdir(analysisDir);
+      const mdFiles = files.filter((f) => f.endsWith(".md")).sort();
+      for (let i = 0; i < mdFiles.length; i++) {
+        const fileName = mdFiles[i];
+        if (fileName.startsWith("00_")) {
+          hasSetupInAnalysis = true;
+        }
+        const prev = existingMap.get(fileName);
+        const noteRec = notesRecords.get(fileName) || notesRecords.get(path5.basename(fileName));
+        let title = prev?.title;
+        if (!title) {
+          try {
+            const content = await fs5.readFile(path5.join(analysisDir, fileName), "utf-8");
+            const firstHeader = content.split("\n").find((l) => l.trim().startsWith("#"));
+            if (firstHeader) {
+              title = firstHeader.replace(/^#+\s*/, "").trim();
+            }
+          } catch {
+          }
+          if (!title) {
+            title = fileName.replace(/^[0-9]+_/, "").replace(/\.md$/, "").replace(/_/g, " ");
+            title = `Phase: ${title}`;
+          }
+        }
+        const id = fileName.match(/^([0-9]+)/)?.[1] || String(i + 1).padStart(2, "0");
+        const isMaster = fileName.startsWith("00_");
+        let resolvedStatus = "pending";
+        if (prev?.status && prev.status !== "running") {
+          resolvedStatus = prev.status;
+        } else if (noteRec?.status) {
+          resolvedStatus = noteRec.status;
+        }
+        const isEnabled = enabledMap.has(fileName) ? enabledMap.get(fileName) : prev ? prev.enabled : true;
+        newPhases.push({
+          id,
+          fileName,
+          title,
+          status: resolvedStatus,
+          enabled: isEnabled,
+          isMasterSetup: isMaster,
+          startTime: prev?.startTime || noteRec?.startTime,
+          endTime: prev?.endTime || noteRec?.endTime,
+          durationSeconds: prev?.durationSeconds || noteRec?.durationSeconds,
+          tokenUsage: prev?.tokenUsage || noteRec?.tokenUsage,
+          summary: prev?.summary || noteRec?.summary,
+          error: prev?.error || (resolvedStatus === "failed" ? noteRec?.summary : void 0)
+        });
+      }
+    } catch (e) {
+      this.logPipeline(`Note: 'analysis' directory not found in ${this.workspaceRoot}`);
+    }
+    if (!hasSetupInAnalysis) {
+      let instructRel = "agent/INSTRUCT.md";
+      let instructPath = path5.join(this.workspaceRoot, "agent", "INSTRUCT.md");
+      try {
+        await fs5.stat(instructPath);
+      } catch {
+        instructRel = "prompts/INSTRUCT.md";
+        instructPath = path5.join(this.workspaceRoot, "prompts", "INSTRUCT.md");
+      }
+      try {
+        await fs5.stat(instructPath);
+        const prev = existingMap.get(instructRel) || existingMap.get("agent/INSTRUCT.md") || existingMap.get("prompts/INSTRUCT.md");
+        const noteRec = notesRecords.get(instructRel) || notesRecords.get("agent/INSTRUCT.md") || notesRecords.get("prompts/INSTRUCT.md") || notesRecords.get("INSTRUCT.md");
+        let resolvedStatus = "pending";
+        if (prev?.status && prev.status !== "running") {
+          resolvedStatus = prev.status;
+        } else if (noteRec?.status) {
+          resolvedStatus = noteRec.status;
+        }
+        const isEnabled = enabledMap.has(instructRel) ? enabledMap.get(instructRel) : prev ? prev.enabled : true;
+        newPhases.unshift({
+          id: "00",
+          fileName: instructRel,
+          title: "Phase 0: Master Setup & Environment",
+          status: resolvedStatus,
+          enabled: isEnabled,
+          isMasterSetup: true,
+          startTime: prev?.startTime || noteRec?.startTime,
+          endTime: prev?.endTime || noteRec?.endTime,
+          durationSeconds: prev?.durationSeconds || noteRec?.durationSeconds,
+          tokenUsage: prev?.tokenUsage || noteRec?.tokenUsage,
+          summary: prev?.summary || noteRec?.summary,
+          error: prev?.error || (resolvedStatus === "failed" ? noteRec?.summary : void 0)
+        });
+      } catch {
+      }
+    }
+    this.phases = newPhases;
+    await this.notifyState();
+  }
+  async getPromptFiles() {
+    let agentDir = "agent";
+    try {
+      await fs5.stat(path5.join(this.workspaceRoot, "agent"));
+    } catch {
+      agentDir = "prompts";
+    }
+    const list = [
+      { name: "Analysis Protocol", relPath: `${agentDir}/PROTOCOL.md` },
+      { name: "TidyProteomics Skills", relPath: `${agentDir}/SKILL.md` },
+      { name: "Experiment & Dataset Spec", relPath: "docs/experiment.md" },
+      { name: "Shared Memory", relPath: "docs/notes.md" },
+      { name: "Active Model Summary", relPath: "docs/llm.md" },
+      { name: "Pipeline Summary", relPath: "logs/pipeline.md" }
+    ];
+    try {
+      const logsDir = path5.join(this.workspaceRoot, "logs");
+      const entries = await fs5.readdir(logsDir, { withFileTypes: true });
+      for (const ent of entries) {
+        if (ent.isDirectory()) {
+          const phaseDir = ent.name;
+          const chatRel = `logs/${phaseDir}/chat.md`;
+          const consoleRel = `logs/${phaseDir}/console.log`;
+          list.push({ name: `${phaseDir} Chat Trace`, relPath: chatRel });
+          list.push({ name: `${phaseDir} Console Log`, relPath: consoleRel });
+        }
+      }
+    } catch {
+    }
+    try {
+      await fs5.stat(path5.join(this.workspaceRoot, "logs/llm_chat.md"));
+      list.push({ name: "Legacy LLM Chat Log", relPath: "logs/llm_chat.md" });
+    } catch {
+    }
+    try {
+      await fs5.stat(path5.join(this.workspaceRoot, `${agentDir}/BIOLOGY.md`));
+      list.splice(1, 0, { name: "Curated Biological Context", relPath: `${agentDir}/BIOLOGY.md` });
+    } catch {
+    }
+    try {
+      await fs5.stat(path5.join(this.workspaceRoot, `${agentDir}/VARIABLES.md`));
+      list.splice(1, 0, { name: "Legacy Dataset Variables", relPath: `${agentDir}/VARIABLES.md` });
+    } catch {
+    }
+    const result = [];
+    for (const item of list) {
+      let exists = false;
+      try {
+        await fs5.stat(path5.join(this.workspaceRoot, item.relPath));
+        exists = true;
+      } catch {
+        exists = false;
+      }
+      result.push({ ...item, exists });
+    }
+    return result;
+  }
+  getPhases() {
+    return [...this.phases];
+  }
+  togglePhase(phaseId, enabled) {
+    const phase = this.phases.find((p) => p.id === phaseId);
+    if (phase) {
+      phase.enabled = enabled;
+      this.notifyState();
+    }
+  }
+  async addPhase(fileName, title) {
+    const cleanFileName = fileName.endsWith(".md") ? fileName : `${fileName}.md`;
+    const analysisDir = path5.join(this.workspaceRoot, "analysis");
+    await fs5.mkdir(analysisDir, { recursive: true });
+    const fullPath = path5.join(analysisDir, cleanFileName);
+    const defaultTitle = title || cleanFileName.replace(/\.md$/, "").replace(/_/g, " ");
+    const template = `### Phase: ${defaultTitle}
 Construct and execute code for this phase, capturing output to logs.
 
 #### Tasks:
 - [ ] Task 1: Initialize step.
 - [ ] Task 2: Execute analysis in R or shell.
 - [ ] Checkpoint: Verify outputs and log files.
-`;return await E.writeFile(o,r,"utf-8"),await this.rescanPhases(),o}async removePhase(e){let t=this.phases.findIndex(s=>s.id===e);if(t!==-1){let s=this.phases[t];if(!s.isMasterSetup)try{await E.unlink(R.join(this.workspaceRoot,"analysis",s.fileName))}catch{}this.phases.splice(t,1),await this.notifyState()}}async getFoldersStatus(){let e="agent";try{await E.stat(R.join(this.workspaceRoot,"agent"))}catch{e="prompts"}let t=[{name:"analysis",relPath:"analysis",description:"Phase Prompts (00_INSTALL.md .. 10_SYNTHESIS.md)"},{name:e,relPath:e,description:"Protocol, Variables & Skills (Cached Prefix)"},{name:"code",relPath:"code",description:"Generated Analysis Scripts"},{name:"tools",relPath:"tools",description:"Linter & Execution Helper Utilities"},{name:"docs",relPath:"docs",description:"Shared Memory (notes.md, llm.md) & Experiment Design"},{name:"logs",relPath:"logs",description:"Phase Chat Traces & Console Logs (logs/<phase>/)"},{name:"data",relPath:"data",description:"Raw Input Proteomics Data"}],s=[];if(!this.workspaceRoot)return s;for(let i of t){let o=R.join(this.workspaceRoot,i.relPath),n=!1,r=0;try{(await E.stat(o)).isDirectory()&&(n=!0,r=(await E.readdir(o)).filter(l=>!l.startsWith(".")).length)}catch{n=!1}s.push({...i,exists:n,itemCount:r})}return s}async getState(){let e=this.client.getConfig(),t=0,s=0,i=0,o=0;for(let l of this.phases)l.tokenUsage&&(t+=l.tokenUsage.promptTokens,s+=l.tokenUsage.completionTokens,i+=l.tokenUsage.totalTokens,o+=l.tokenUsage.cachedPromptTokens||0);let n=await this.getPromptFiles(),r=await this.getFoldersStatus(),a=r.find(l=>l.name==="analysis"),p=!this.workspaceRoot||!a||!a.exists||(a.itemCount||0)===0||this.phases.length===0;return{workingDirectory:this.workspaceRoot,workspaceName:this.workspaceRoot?R.basename(this.workspaceRoot):"No Folder Open",model:e.model,provider:e.provider,startTime:new Date().toISOString(),isRunning:this.isRunning,isFullPipelineRunning:this.isFullPipelineRunning,currentPhaseIndex:this.phases.findIndex(l=>l.status==="running"),phases:this.phases,promptFiles:n,folders:r,totalTokens:{promptTokens:t,completionTokens:s,totalTokens:i,cachedPromptTokens:o},isAnalysisMissingOrEmpty:p,literature:z(this.workspaceRoot),knowledgeCorpus:z(this.workspaceRoot)}}async notifyState(){try{let e=await this.getState();this.onStateChange(e)}catch(e){console.error("[PipelineOrchestrator] Error in notifyState:",e)}}stop(){this.shouldStop=!0,this.isFullPipelineRunning=!1;for(let e of this.phases)e.status==="running"&&(e.status="failed",e.error="Stopped by user");this.isRunning=!1,this.logPipeline("Execution stopped by user."),this.notifyState()}async pruneNotesFromPhase(e){if(!this.workspaceRoot)return;let t=this.phases.slice(e);if(t.length===0)return;let s=new Set;for(let o of t)s.add(o.fileName),s.add(R.basename(o.fileName)),o.isMasterSetup&&(s.add("agent/INSTRUCT.md"),s.add("prompts/INSTRUCT.md"),s.add("INSTRUCT.md"));let i=R.join(this.workspaceRoot,"docs","notes.md");try{let n=(await E.readFile(i,"utf-8")).split(/\n(?=###\s+)/),r=[];for(let p of n){let l=p.match(/- \*\*File\*\*:\s*`([^`]+)`/);if(l){let d=l[1].trim(),c=R.basename(d);if(s.has(d)||s.has(c))continue}r.push(p)}let a=r.join(`
-`).replace(/\n{3,}/g,`
-
-`).trim()+`
-`;await E.writeFile(i,a,"utf-8")}catch{}}async runSinglePhase(e){if(this.isRunning){this.logPipeline("Execution busy: A pipeline or phase is already running. Please wait or stop it first.");return}let t=this.phases.findIndex(s=>s.id===e);if(t===-1){this.logPipeline(`Phase ID '${e}' not found.`);return}for(let s=t;s<this.phases.length;s++){let i=this.phases[s];s===t?(i.status="running",i.startTime=new Date().toISOString(),i.endTime=void 0,i.durationSeconds=void 0,i.tokenUsage=void 0,i.summary=void 0,i.error=void 0):(i.status="pending",i.startTime=void 0,i.endTime=void 0,i.durationSeconds=void 0,i.tokenUsage=void 0,i.summary=void 0,i.error=void 0)}await this.pruneNotesFromPhase(t),await this.notifyState(),this.isRunning=!0,this.isFullPipelineRunning=!1,this.shouldStop=!1;try{await this.executePhase(t)}catch(s){this.logPipeline(`Error running phase ${e}: ${s.message}`)}finally{this.isRunning=!1,this.isFullPipelineRunning=!1,await this.notifyState()}}async runFullPipeline(){if(this.isRunning){this.logPipeline("Execution busy: A pipeline is already running.");return}if(!this.workspaceRoot||this.phases.length===0){this.logPipeline("No analysis tasks found to execute. Please initialize an analysis pipeline first.");return}this.isRunning=!0,this.isFullPipelineRunning=!0,this.shouldStop=!1,this.logPipeline(`Starting autonomous run at ${new Date().toLocaleTimeString()}`),this.logPipeline(`Working Directory: ${this.workspaceRoot}`);try{for(let e=0;e<this.phases.length;e++){if(this.shouldStop){this.logPipeline("Execution stopped by user.");break}let t=this.phases[e];if(!t.enabled){this.logPipeline(`Skipping disabled phase: ${t.title}`);continue}if(await this.pruneNotesFromPhase(e),!await this.executePhase(e)){this.logPipeline(`Pipeline paused due to checkpoint failure in ${t.title}`);break}}}catch(e){this.logPipeline(`Full pipeline error: ${e.message}`)}finally{this.isRunning=!1,this.isFullPipelineRunning=!1,this.shouldStop=!1,await this.notifyState()}}async executePhase(e){let t=this.phases[e]?.id,s=()=>{if(t){let p=this.phases.find(l=>l.id===t);if(p)return p}return this.phases[e]},i=s();if(!i)return!1;let o=R.basename(i.fileName).replace(/\.md$/i,""),n=(i.title||"").replace(/^Phase\s+\d+:\s*/i,"").trim();this.chatLogger.setPhase(i.fileName),i.status="running",i.startTime=new Date().toISOString(),i.endTime=void 0,i.error=void 0,i.tokenUsage||(i.tokenUsage={promptTokens:0,completionTokens:0,totalTokens:0,cachedPromptTokens:0});let r=Date.now();await this.notifyState(),this.logPhase(o,`[Starting] ${n} (${i.fileName})`);let a;try{try{await Q(this.workspaceRoot,this.client.getConfig(),this.extensionVersion)}catch(f){console.warn("[PipelineOrchestrator] Could not write docs/llm.md before phase execution:",f)}let l=await new te(this.workspaceRoot).buildPhaseContext(i.fileName),d="";a=new se(i.fileName,i.title,this.client,this.tools,l,async f=>{if(f.type==="thought"){let S=String(f.data||"").trim(),P=S.match(/Starting Turn\s+(\d+\/\d+)\.{0,3}/i);if(P)this.logPhase(o,`Turn ${P[1]} ...`);else{let T=S.replace(/^[⚠️🔄❌✓💡]\s*/g,"").trim();this.logPhase(o,T)}}else if(f.type!=="text"){if(f.type==="tool_start"){let S=this.formatToolHeader(f.data.name,f.data.args),P=`[${this.ts()}] ${o}: `,T=Math.max(25,100-P.length-18),L=S;L.length>T&&(L=L.slice(0,T-3).trim()),L.endsWith("...")&&(L=L.slice(0,-3).trim()),d=`${P}${L} ...`,this.onLog(d,!1)}else if(f.type==="tool_end"){let S=d?d.replace(/\s*\.{3}$/,""):`[${this.ts()}] ${o}: [${f.data.name}]`;if(f.data.isError){this.onLog(`${S} ... \u274C  [failed]`,!0);let P="failed";if(f.data.result){let T=String(f.data.result).trim().split(`
-`)[0].trim();T&&!T.startsWith("{")&&T.length<50&&(P=`failed: ${T.replace(/^Error:\s*/i,"")}`)}this.logPhase(o,`\u274C  ${P}`,!1)}else this.onLog(`${S} ...  \u2713 [completed]`,!0);d=""}else if(f.type==="tokens"){let S=s();S.tokenUsage={...f.data.totalUsage},await this.notifyState()}}},this.chatLogger,()=>this.shouldStop);let c=await a.run(),g=Math.max(1,Math.round((Date.now()-r)/1e3)),m=s();if(m.endTime=new Date().toISOString(),m.durationSeconds=g,m.tokenUsage=c.tokensUsed,m.summary=c.summary,c.success)return m.status="completed",this.logPhase(o,`[Completed] ${n} in ${g}s (${c.tokensUsed.totalTokens.toLocaleString()} tokens)`),await this.appendPhaseRecordToNotes(m),await this.notifyState(),!0;{m.status="failed",m.error=c.summary;let S=String(c.summary||"Phase failed").trim().split(`
-`),P=S[0];this.logPhase(o,`\u274C [Failed] ${n}: ${P}`);for(let T=1;T<S.length;T++){let L=S[T].trim();L&&this.logPhase(o,`  ${L}`)}return await this.appendPhaseRecordToNotes(m),await this.notifyState(),!1}}catch(p){let l=s();return l.status="failed",l.error=p.message,a&&(!l.tokenUsage||l.tokenUsage.totalTokens===0)&&(l.tokenUsage=a.getTotalUsage()),this.logPhase(o,`\u274C Error in ${n}: ${p.message}`),await this.notifyState(),!1}}async appendPhaseRecordToNotes(e){let t=R.join(this.workspaceRoot,"docs","notes.md"),s=e.status==="failed"?"FAILED":"COMPLETED",i=e.summary||(e.status==="failed"?e.error||"Phase halted or failed.":"Phase checkpoints verified."),o=`
-### ${e.title} - ${s}
-- **File**: \`${e.fileName}\`
-- **Duration**: ${e.durationSeconds}s
-- **Start**: ${e.startTime}
-- **End**: ${e.endTime}
-- **Token Usage**: Total: ${e.tokenUsage?.totalTokens||"N/A"}, Prompt: ${e.tokenUsage?.promptTokens||"N/A"}, Completion: ${e.tokenUsage?.completionTokens||"N/A"}, Cached: ${e.tokenUsage?.cachedPromptTokens||0}
+`;
+    await fs5.writeFile(fullPath, template, "utf-8");
+    await this.rescanPhases();
+    return fullPath;
+  }
+  async removePhase(phaseId) {
+    const idx = this.phases.findIndex((p) => p.id === phaseId);
+    if (idx !== -1) {
+      const phase = this.phases[idx];
+      if (!phase.isMasterSetup) {
+        try {
+          await fs5.unlink(path5.join(this.workspaceRoot, "analysis", phase.fileName));
+        } catch {
+        }
+      }
+      this.phases.splice(idx, 1);
+      await this.notifyState();
+    }
+  }
+  async getFoldersStatus() {
+    let agentFolder = "agent";
+    try {
+      await fs5.stat(path5.join(this.workspaceRoot, "agent"));
+    } catch {
+      agentFolder = "prompts";
+    }
+    const list = [
+      { name: "analysis", relPath: "analysis", description: "Phase Prompts (00_INSTALL.md .. 10_SYNTHESIS.md)" },
+      { name: agentFolder, relPath: agentFolder, description: "Protocol, Variables & Skills (Cached Prefix)" },
+      { name: "code", relPath: "code", description: "Generated Analysis Scripts" },
+      { name: "tools", relPath: "tools", description: "Linter & Execution Helper Utilities" },
+      { name: "docs", relPath: "docs", description: "Shared Memory (notes.md, llm.md) & Experiment Design" },
+      { name: "logs", relPath: "logs", description: "Phase Chat Traces & Console Logs (logs/<phase>/)" },
+      { name: "data", relPath: "data", description: "Raw Input Proteomics Data" }
+    ];
+    const result = [];
+    if (!this.workspaceRoot)
+      return result;
+    for (const item of list) {
+      const full = path5.join(this.workspaceRoot, item.relPath);
+      let exists = false;
+      let itemCount = 0;
+      try {
+        const stat4 = await fs5.stat(full);
+        if (stat4.isDirectory()) {
+          exists = true;
+          const files = await fs5.readdir(full);
+          itemCount = files.filter((f) => !f.startsWith(".")).length;
+        }
+      } catch {
+        exists = false;
+      }
+      result.push({ ...item, exists, itemCount });
+    }
+    return result;
+  }
+  async getState() {
+    const config = this.client.getConfig();
+    let totalPrompt = 0;
+    let totalCompletion = 0;
+    let totalTokens = 0;
+    let totalCached = 0;
+    for (const p of this.phases) {
+      if (p.tokenUsage) {
+        totalPrompt += p.tokenUsage.promptTokens;
+        totalCompletion += p.tokenUsage.completionTokens;
+        totalTokens += p.tokenUsage.totalTokens;
+        totalCached += p.tokenUsage.cachedPromptTokens || 0;
+      }
+    }
+    const promptFiles = await this.getPromptFiles();
+    const folders = await this.getFoldersStatus();
+    const analysisFolder = folders.find((f) => f.name === "analysis");
+    const isAnalysisMissingOrEmpty = !this.workspaceRoot || !analysisFolder || !analysisFolder.exists || (analysisFolder.itemCount || 0) === 0 || this.phases.length === 0;
+    return {
+      workingDirectory: this.workspaceRoot,
+      workspaceName: this.workspaceRoot ? path5.basename(this.workspaceRoot) : "No Folder Open",
+      model: config.model,
+      provider: config.provider,
+      startTime: (/* @__PURE__ */ new Date()).toISOString(),
+      isRunning: this.isRunning,
+      isFullPipelineRunning: this.isFullPipelineRunning,
+      currentPhaseIndex: this.phases.findIndex((p) => p.status === "running"),
+      phases: this.phases,
+      promptFiles,
+      folders,
+      totalTokens: {
+        promptTokens: totalPrompt,
+        completionTokens: totalCompletion,
+        totalTokens,
+        cachedPromptTokens: totalCached
+      },
+      isAnalysisMissingOrEmpty,
+      literature: readLiteratureConfig(this.workspaceRoot),
+      knowledgeCorpus: readLiteratureConfig(this.workspaceRoot)
+    };
+  }
+  async notifyState() {
+    try {
+      const state = await this.getState();
+      this.onStateChange(state);
+    } catch (err) {
+      console.error("[PipelineOrchestrator] Error in notifyState:", err);
+    }
+  }
+  stop() {
+    this.shouldStop = true;
+    this.isFullPipelineRunning = false;
+    for (const p of this.phases) {
+      if (p.status === "running") {
+        p.status = "failed";
+        p.error = "Stopped by user";
+      }
+    }
+    this.isRunning = false;
+    this.logPipeline("Execution stopped by user.");
+    this.notifyState();
+  }
+  /**
+   * Prunes records from docs/notes.md for a given phase and all downstream phases.
+   * This ensures that restarting a step clears obsolete blackboard context for the LLM.
+   */
+  async pruneNotesFromPhase(startIndex) {
+    if (!this.workspaceRoot)
+      return;
+    const targetPhases = this.phases.slice(startIndex);
+    if (targetPhases.length === 0)
+      return;
+    const filesToRemove = /* @__PURE__ */ new Set();
+    for (const p of targetPhases) {
+      filesToRemove.add(p.fileName);
+      filesToRemove.add(path5.basename(p.fileName));
+      if (p.isMasterSetup) {
+        filesToRemove.add("agent/INSTRUCT.md");
+        filesToRemove.add("prompts/INSTRUCT.md");
+        filesToRemove.add("INSTRUCT.md");
+      }
+    }
+    const notesPath = path5.join(this.workspaceRoot, "docs", "notes.md");
+    try {
+      const content = await fs5.readFile(notesPath, "utf-8");
+      const sections = content.split(/\n(?=###\s+)/);
+      const kept = [];
+      for (const section of sections) {
+        const fileMatch = section.match(/- \*\*File\*\*:\s*`([^`]+)`/);
+        if (fileMatch) {
+          const rawFileName = fileMatch[1].trim();
+          const baseName = path5.basename(rawFileName);
+          if (filesToRemove.has(rawFileName) || filesToRemove.has(baseName)) {
+            continue;
+          }
+        }
+        kept.push(section);
+      }
+      const updated = kept.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+      await fs5.writeFile(notesPath, updated, "utf-8");
+    } catch {
+    }
+  }
+  /**
+   * Run a single phase in isolation with automatic cascading reset of downstream phases
+   */
+  async runSinglePhase(phaseId) {
+    if (this.isRunning) {
+      this.logPipeline("Execution busy: A pipeline or phase is already running. Please wait or stop it first.");
+      return;
+    }
+    const phaseIndex = this.phases.findIndex((p) => p.id === phaseId);
+    if (phaseIndex === -1) {
+      this.logPipeline(`Phase ID '${phaseId}' not found.`);
+      return;
+    }
+    for (let i = phaseIndex; i < this.phases.length; i++) {
+      const p = this.phases[i];
+      if (i === phaseIndex) {
+        p.status = "running";
+        p.startTime = (/* @__PURE__ */ new Date()).toISOString();
+        p.endTime = void 0;
+        p.durationSeconds = void 0;
+        p.tokenUsage = void 0;
+        p.summary = void 0;
+        p.error = void 0;
+      } else {
+        p.status = "pending";
+        p.startTime = void 0;
+        p.endTime = void 0;
+        p.durationSeconds = void 0;
+        p.tokenUsage = void 0;
+        p.summary = void 0;
+        p.error = void 0;
+      }
+    }
+    await this.pruneNotesFromPhase(phaseIndex);
+    await this.notifyState();
+    this.isRunning = true;
+    this.isFullPipelineRunning = false;
+    this.shouldStop = false;
+    try {
+      await this.executePhase(phaseIndex);
+    } catch (err) {
+      this.logPipeline(`Error running phase ${phaseId}: ${err.message}`);
+    } finally {
+      this.isRunning = false;
+      this.isFullPipelineRunning = false;
+      await this.notifyState();
+    }
+  }
+  /**
+   * Run the complete multi-phase pipeline sequentially
+   */
+  async runFullPipeline() {
+    if (this.isRunning) {
+      this.logPipeline("Execution busy: A pipeline is already running.");
+      return;
+    }
+    if (!this.workspaceRoot || this.phases.length === 0) {
+      this.logPipeline("No analysis tasks found to execute. Please initialize an analysis pipeline first.");
+      return;
+    }
+    this.isRunning = true;
+    this.isFullPipelineRunning = true;
+    this.shouldStop = false;
+    this.logPipeline(`Starting autonomous run at ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}`);
+    this.logPipeline(`Working Directory: ${this.workspaceRoot}`);
+    try {
+      for (let i = 0; i < this.phases.length; i++) {
+        if (this.shouldStop) {
+          this.logPipeline("Execution stopped by user.");
+          break;
+        }
+        const phase = this.phases[i];
+        if (!phase.enabled) {
+          this.logPipeline(`Skipping disabled phase: ${phase.title}`);
+          continue;
+        }
+        await this.pruneNotesFromPhase(i);
+        const success = await this.executePhase(i);
+        if (!success) {
+          this.logPipeline(`Pipeline paused due to checkpoint failure in ${phase.title}`);
+          break;
+        }
+      }
+    } catch (err) {
+      this.logPipeline(`Full pipeline error: ${err.message}`);
+    } finally {
+      this.isRunning = false;
+      this.isFullPipelineRunning = false;
+      this.shouldStop = false;
+      await this.notifyState();
+    }
+  }
+  async executePhase(index) {
+    const targetId = this.phases[index]?.id;
+    const getActivePhase = () => {
+      if (targetId) {
+        const found = this.phases.find((p) => p.id === targetId);
+        if (found)
+          return found;
+      }
+      return this.phases[index];
+    };
+    const phase = getActivePhase();
+    if (!phase)
+      return false;
+    const phaseTag = path5.basename(phase.fileName).replace(/\.md$/i, "");
+    const cleanTitle = (phase.title || "").replace(/^Phase\s+\d+:\s*/i, "").trim();
+    this.chatLogger.setPhase(phase.fileName);
+    phase.status = "running";
+    phase.startTime = (/* @__PURE__ */ new Date()).toISOString();
+    phase.endTime = void 0;
+    phase.error = void 0;
+    if (!phase.tokenUsage) {
+      phase.tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedPromptTokens: 0 };
+    }
+    const startTimeMs = Date.now();
+    await this.notifyState();
+    this.logPhase(phaseTag, `[Starting] ${cleanTitle} (${phase.fileName})`);
+    let loop;
+    try {
+      try {
+        await writeActiveModelSummaryFile(this.workspaceRoot, this.client.getConfig(), this.extensionVersion);
+      } catch (err) {
+        console.warn("[PipelineOrchestrator] Could not write docs/llm.md before phase execution:", err);
+      }
+      const contextBuilder = new ContextBuilder(this.workspaceRoot);
+      const context = await contextBuilder.buildPhaseContext(phase.fileName);
+      let lastToolPendingText = "";
+      loop = new AgentLoop(
+        phase.fileName,
+        phase.title,
+        this.client,
+        this.tools,
+        context,
+        async (event) => {
+          if (event.type === "thought") {
+            const raw = String(event.data || "").trim();
+            const turnMatch = raw.match(/Starting Turn\s+(\d+\/\d+)\.{0,3}/i);
+            if (turnMatch) {
+              this.logPhase(phaseTag, `Turn ${turnMatch[1]} ...`);
+            } else {
+              const cleanData = raw.replace(/^[⚠️🔄❌✓💡]\s*/g, "").trim();
+              this.logPhase(phaseTag, cleanData);
+            }
+          } else if (event.type === "text") {
+          } else if (event.type === "tool_start") {
+            const rawHeader = this.formatToolHeader(event.data.name, event.data.args);
+            const prefix = `[${this.ts()}] ${phaseTag}: `;
+            const maxBodyLen = Math.max(25, 100 - prefix.length - 18);
+            let body = rawHeader;
+            if (body.length > maxBodyLen) {
+              body = body.slice(0, maxBodyLen - 3).trim();
+            }
+            if (body.endsWith("...")) {
+              body = body.slice(0, -3).trim();
+            }
+            lastToolPendingText = `${prefix}${body} ...`;
+            this.onLog(lastToolPendingText, false);
+          } else if (event.type === "tool_end") {
+            const base = lastToolPendingText ? lastToolPendingText.replace(/\s*\.{3}$/, "") : `[${this.ts()}] ${phaseTag}: [${event.data.name}]`;
+            if (event.data.isError) {
+              this.onLog(`${base} ... \u274C  [failed]`, true);
+              let failSnippet = "failed";
+              if (event.data.result) {
+                const firstLine = String(event.data.result).trim().split("\n")[0].trim();
+                if (firstLine && !firstLine.startsWith("{") && firstLine.length < 50) {
+                  failSnippet = `failed: ${firstLine.replace(/^Error:\s*/i, "")}`;
+                }
+              }
+              this.logPhase(phaseTag, `\u274C  ${failSnippet}`, false);
+            } else {
+              this.onLog(`${base} ...  \u2713 [completed]`, true);
+            }
+            lastToolPendingText = "";
+          } else if (event.type === "tokens") {
+            const currentPhase2 = getActivePhase();
+            currentPhase2.tokenUsage = { ...event.data.totalUsage };
+            await this.notifyState();
+          }
+        },
+        this.chatLogger,
+        () => this.shouldStop
+      );
+      const result = await loop.run();
+      const durationSeconds = Math.max(1, Math.round((Date.now() - startTimeMs) / 1e3));
+      const currentPhase = getActivePhase();
+      currentPhase.endTime = (/* @__PURE__ */ new Date()).toISOString();
+      currentPhase.durationSeconds = durationSeconds;
+      currentPhase.tokenUsage = result.tokensUsed;
+      currentPhase.summary = result.summary;
+      if (result.success) {
+        currentPhase.status = "completed";
+        this.logPhase(
+          phaseTag,
+          `[Completed] ${cleanTitle} in ${durationSeconds}s (${result.tokensUsed.totalTokens.toLocaleString()} tokens)`
+        );
+        await this.appendPhaseRecordToNotes(currentPhase);
+        await this.notifyState();
+        return true;
+      } else {
+        currentPhase.status = "failed";
+        currentPhase.error = result.summary;
+        const summaryText = String(result.summary || "Phase failed").trim();
+        const lines = summaryText.split("\n");
+        const firstLine = lines[0];
+        this.logPhase(phaseTag, `\u274C [Failed] ${cleanTitle}: ${firstLine}`);
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (line) {
+            this.logPhase(phaseTag, `  ${line}`);
+          }
+        }
+        await this.appendPhaseRecordToNotes(currentPhase);
+        await this.notifyState();
+        return false;
+      }
+    } catch (err) {
+      const currentPhase = getActivePhase();
+      currentPhase.status = "failed";
+      currentPhase.error = err.message;
+      if (loop && (!currentPhase.tokenUsage || currentPhase.tokenUsage.totalTokens === 0)) {
+        currentPhase.tokenUsage = loop.getTotalUsage();
+      }
+      this.logPhase(phaseTag, `\u274C Error in ${cleanTitle}: ${err.message}`);
+      await this.notifyState();
+      return false;
+    }
+  }
+  async appendPhaseRecordToNotes(phase) {
+    const notesPath = path5.join(this.workspaceRoot, "docs", "notes.md");
+    const statusText = phase.status === "failed" ? "FAILED" : "COMPLETED";
+    const summaryContent = phase.summary || (phase.status === "failed" ? phase.error || "Phase halted or failed." : "Phase checkpoints verified.");
+    const entry = `
+### ${phase.title} - ${statusText}
+- **File**: \`${phase.fileName}\`
+- **Duration**: ${phase.durationSeconds}s
+- **Start**: ${phase.startTime}
+- **End**: ${phase.endTime}
+- **Token Usage**: Total: ${phase.tokenUsage?.totalTokens || "N/A"}, Prompt: ${phase.tokenUsage?.promptTokens || "N/A"}, Completion: ${phase.tokenUsage?.completionTokens || "N/A"}, Cached: ${phase.tokenUsage?.cachedPromptTokens || 0}
 - **Summary**:
-${i}
+${summaryContent}
 
 ---
-`;try{await E.mkdir(R.dirname(t),{recursive:!0});let n="";try{n=await E.readFile(t,"utf-8")}catch{n=`# Autonomous Proteomics Analysis Notes
+`;
+    try {
+      await fs5.mkdir(path5.dirname(notesPath), { recursive: true });
+      let current = "";
+      try {
+        current = await fs5.readFile(notesPath, "utf-8");
+      } catch {
+        current = `# Autonomous Proteomics Analysis Notes
 Model: ${this.client.getConfig().model}
 
-`}await E.writeFile(t,n+o,"utf-8")}catch(n){this.logPipeline(`Warning: Failed to update docs/notes.md: ${n}`)}}};var ne=class{constructor(e){this.config=e}updateConfig(e){this.config={...this.config,...e}}getConfig(){return{...this.config}}getTimeoutSeconds(){return this.config.timeoutSeconds&&this.config.timeoutSeconds>0?this.config.timeoutSeconds:600}getTimeoutMs(){return this.getTimeoutSeconds()*1e3}async chat(e){switch(this.config.provider){case"anthropic":return this.chatAnthropic(e);case"gemini":return this.chatGemini(e);case"openrouter":return this.chatOpenRouter(e);case"ollama":return this.chatOllama(e);case"openai":default:return this.chatOpenAI(e)}}async chatAnthropic(e){let t="https://api.anthropic.com/v1/messages",s=e.tools.map(x=>({name:x.name,description:x.description,input_schema:x.parameters})),i=[],o=0;for(;o<e.messages.length;){let x=e.messages[o];if(x.role==="system"){o++;continue}if(x.role==="tool"){let $=[];for(;o<e.messages.length&&e.messages[o].role==="tool";){let O=e.messages[o];$.push({type:"tool_result",tool_use_id:O.tool_call_id,content:O.content}),o++}i.push({role:"user",content:$});continue}else if(x.role==="assistant"&&x.tool_calls&&x.tool_calls.length>0){let $=[];x.content&&$.push({type:"text",text:x.content});for(let O of x.tool_calls)$.push({type:"tool_use",id:O.id,name:O.name,input:O.args});i.push({role:"assistant",content:$})}else i.push({role:x.role==="assistant"?"assistant":"user",content:x.content});o++}let n=[];for(let x of i){let $=n[n.length-1];if($&&$.role===x.role){let O=Array.isArray($.content)?$.content:[{type:"text",text:String($.content)}],ke=Array.isArray(x.content)?x.content:[{type:"text",text:String(x.content)}];$.content=[...O,...ke]}else n.push(x)}let r=[{type:"text",text:e.system,cache_control:{type:"ephemeral"}}],a=this.config.maxTokens||16384,p={model:this.config.model||"claude-3-7-sonnet-20250219",max_tokens:a,temperature:this.config.temperature??.2,system:r,messages:n,tools:s},l=this.getTimeoutSeconds(),d;try{d=await fetch(t,{method:"POST",headers:{"Content-Type":"application/json","x-api-key":this.config.apiKey,"anthropic-version":"2023-06-01","anthropic-beta":"prompt-caching-2024-07-31"},body:JSON.stringify(p),signal:AbortSignal.timeout(this.getTimeoutMs())})}catch(x){throw x.name==="TimeoutError"||x.message&&x.message.includes("timeout")?new Error(`Anthropic API request timed out after ${l}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`):x}if(!d.ok){let x=await d.text();throw new Error(`Anthropic API error (${d.status}): ${x}`)}let c=await d.json(),g="",m=[];for(let x of c.content||[])x.type==="text"?(g+=x.text,e.onToken&&e.onToken(x.text)):x.type==="tool_use"&&m.push({id:x.id,name:x.name,args:x.input||{}});let f=c.stop_reason,S=f==="max_tokens";S&&console.warn(`[ProviderClient] Anthropic generation cut off: hit max_tokens limit (${a}).`);let P=c.usage?.cache_read_input_tokens||0,T=c.usage?.cache_creation_input_tokens||0,L=c.usage?.input_tokens||0,B=c.usage?.output_tokens||0,h=L+P+T,_=h+B,C={promptTokens:h,completionTokens:B,totalTokens:_,cachedPromptTokens:P};return{content:g,tool_calls:m.length>0?m:void 0,usage:C,finishReason:f,truncationDetected:S}}async chatGemini(e){let s=`https://generativelanguage.googleapis.com/v1beta/models/${this.config.model||"gemini-1.5-pro"}:generateContent?key=${this.config.apiKey}`,i=[{functionDeclarations:e.tools.map(C=>({name:C.name,description:C.description,parameters:C.parameters}))}],o=[],n=0;for(;n<e.messages.length;){let C=e.messages[n];if(C.role==="system"){n++;continue}if(C.role==="tool"){let x=[];for(;n<e.messages.length&&e.messages[n].role==="tool";){let $=e.messages[n];x.push({functionResponse:{name:$.tool_name||$.tool_call_id||"tool_result",response:{output:$.content}}}),n++}o.push({role:"user",parts:x});continue}else if(C.role==="assistant"&&C.tool_calls){let x=[];C.content&&x.push({text:C.content});for(let $ of C.tool_calls)x.push({functionCall:{name:$.name,args:$.args}});o.push({role:"model",parts:x})}else o.push({role:C.role==="assistant"?"model":"user",parts:[{text:C.content}]});n++}let r=[];for(let C of o){let x=r[r.length-1];x&&x.role===C.role?x.parts.push(...C.parts):r.push(C)}let a=this.config.maxTokens||16384,p={systemInstruction:{parts:[{text:e.system}]},contents:r,tools:i,generationConfig:{temperature:this.config.temperature??.2,maxOutputTokens:a}},l=this.getTimeoutSeconds(),d;try{d=await fetch(s,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(p),signal:AbortSignal.timeout(this.getTimeoutMs())})}catch(C){throw C.name==="TimeoutError"||C.message&&C.message.includes("timeout")?new Error(`Gemini API request timed out after ${l}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`):C}if(!d.ok){let C=await d.text();throw new Error(`Gemini API error (${d.status}): ${C}`)}let c=await d.json(),g=c.candidates?.[0],m=g?.finishReason,f=m==="MAX_TOKENS";f&&console.warn(`[ProviderClient] Gemini generation cut off: hit MAX_TOKENS limit (${a}).`);let S="",P=[];for(let C of g?.content?.parts||[])C.text&&(S+=C.text,e.onToken&&e.onToken(C.text)),C.functionCall&&P.push({id:`call_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,name:C.functionCall.name,args:C.functionCall.args||{}});let T=c.usageMetadata?.promptTokenCount||0,L=c.usageMetadata?.candidatesTokenCount||0,B=c.usageMetadata?.cachedContentTokenCount||0,h=c.usageMetadata?.totalTokenCount??T+L,_={promptTokens:T,completionTokens:L,totalTokens:h,cachedPromptTokens:B};return{content:S,tool_calls:P.length>0?P:void 0,usage:_,finishReason:m,truncationDetected:f}}async chatOpenAI(e){let s=`${this.config.baseUrl||"https://api.openai.com/v1"}/chat/completions`,i=e.tools.map(h=>({type:"function",function:{name:h.name,description:h.description,parameters:h.parameters}})),o=[{role:"system",content:e.system}];for(let h of e.messages)h.role==="tool"?o.push({role:"tool",tool_call_id:h.tool_call_id,content:h.content}):h.role==="assistant"&&h.tool_calls?o.push({role:"assistant",content:h.content||null,tool_calls:h.tool_calls.map(_=>({id:_.id,type:"function",function:{name:_.name,arguments:JSON.stringify(_.args)}}))}):o.push({role:h.role,content:h.content});let n=this.config.maxTokens||16384,r={model:this.config.model||"gpt-4o",messages:o,tools:i.length>0?i:void 0,temperature:this.config.temperature??.2,max_tokens:n},a=this.getTimeoutSeconds(),p;try{p=await fetch(s,{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${this.config.apiKey}`},body:JSON.stringify(r),signal:AbortSignal.timeout(this.getTimeoutMs())})}catch(h){throw h.name==="TimeoutError"||h.message&&h.message.includes("timeout")?new Error(`OpenAI API request timed out after ${a}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`):h}if(!p.ok){let h=await p.text();throw new Error(`OpenAI API error (${p.status}): ${h}`)}let l=await p.json(),d=l.choices?.[0]?.message,c=l.choices?.[0]?.finish_reason,g=c==="length"||c==="max_tokens",m=d?.content||"";m&&e.onToken&&e.onToken(m);let f=[];for(let h of d?.tool_calls||[])try{f.push({id:h.id,name:h.function.name,args:typeof h.function.arguments=="string"?JSON.parse(h.function.arguments):h.function.arguments||{}})}catch(_){console.error(`[ProviderClient] Failed to parse tool call arguments for ${h.function?.name}:`,_),g&&console.error(`[ProviderClient] Output truncated at max_tokens (${n}) with finish_reason="${c}". Tool call JSON was incomplete.`)}let S=l.usage?.prompt_tokens||0,P=l.usage?.completion_tokens||0,T=l.usage?.prompt_tokens_details?.cached_tokens||0,L=l.usage?.total_tokens??S+P,B={promptTokens:S,completionTokens:P,totalTokens:L,cachedPromptTokens:T};return{content:m,tool_calls:f.length>0?f:void 0,usage:B,finishReason:c,truncationDetected:g}}async chatOpenRouter(e){let s=`${(this.config.baseUrl||"https://openrouter.ai/api/v1").replace(/\/+$/,"")}/chat/completions`,i=e.tools.map(h=>({type:"function",function:{name:h.name,description:h.description,parameters:h.parameters}})),o=[{role:"system",content:e.system}];for(let h of e.messages)h.role==="tool"?o.push({role:"tool",tool_call_id:h.tool_call_id,content:h.content}):h.role==="assistant"&&h.tool_calls?o.push({role:"assistant",content:h.content||null,tool_calls:h.tool_calls.map(_=>({id:_.id,type:"function",function:{name:_.name,arguments:JSON.stringify(_.args)}}))}):o.push({role:h.role,content:h.content});let n=this.config.maxTokens||32768,r={model:this.config.model||"anthropic/claude-3.7-sonnet",messages:o,tools:i.length>0?i:void 0,temperature:this.config.temperature??.2,max_tokens:n},a=this.getTimeoutSeconds(),p;try{p=await fetch(s,{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${this.config.apiKey}`,"HTTP-Referer":"https://github.com/tidyproteomicsagent","X-Title":"TidyProteomicsAgent"},body:JSON.stringify(r),signal:AbortSignal.timeout(this.getTimeoutMs())})}catch(h){throw h.name==="TimeoutError"||h.message&&h.message.includes("timeout")?new Error(`OpenRouter API request timed out after ${a}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`):h}if(!p.ok){let h=await p.text();throw new Error(`OpenRouter API error (${p.status}): ${h}`)}let l=await p.json(),d=l.choices?.[0]?.message,c=l.choices?.[0]?.finish_reason,g=c==="length"||c==="max_tokens",m=d?.content||"";m&&e.onToken&&e.onToken(m);let f=[];for(let h of d?.tool_calls||[])try{f.push({id:h.id,name:h.function.name,args:typeof h.function.arguments=="string"?JSON.parse(h.function.arguments):h.function.arguments||{}})}catch(_){console.error(`[ProviderClient] Failed to parse tool call arguments for ${h.function?.name}:`,_),g&&console.error(`[ProviderClient] Output truncated at max_tokens (${n}) with finish_reason="${c}". Tool call JSON was incomplete.`)}let S=l.usage?.prompt_tokens||0,P=l.usage?.completion_tokens||0,T=l.usage?.prompt_tokens_details?.cached_tokens??l.usage?.cache_read_input_tokens??0,L=l.usage?.total_tokens??S+P,B={promptTokens:S,completionTokens:P,totalTokens:L,cachedPromptTokens:T};return{content:m,tool_calls:f.length>0?f:void 0,usage:B,finishReason:c,truncationDetected:g}}async chatOllama(e){let t=(this.config.baseUrl||"http://localhost:11434").replace(/\/+$/,"");t.endsWith("/v1")||(t+="/v1");let s=`${t}/chat/completions`,i=e.tools.map(h=>({type:"function",function:{name:h.name,description:h.description,parameters:h.parameters}})),o=[{role:"system",content:e.system}];for(let h of e.messages)h.role==="tool"?o.push({role:"tool",tool_call_id:h.tool_call_id,content:h.content}):h.role==="assistant"&&h.tool_calls?o.push({role:"assistant",content:h.content||null,tool_calls:h.tool_calls.map(_=>({id:_.id,type:"function",function:{name:_.name,arguments:JSON.stringify(_.args)}}))}):o.push({role:h.role,content:h.content});let n=this.config.maxTokens||16384,r={model:this.config.model||"llama3.3:70b",messages:o,tools:i.length>0?i:void 0,temperature:this.config.temperature??.2,max_tokens:n,options:{num_predict:n},stream:!1},a={"Content-Type":"application/json"};this.config.apiKey&&(a.Authorization=`Bearer ${this.config.apiKey}`);let p=this.getTimeoutSeconds(),l;try{l=await fetch(s,{method:"POST",headers:a,body:JSON.stringify(r),signal:AbortSignal.timeout(this.getTimeoutMs())})}catch(h){throw h.name==="TimeoutError"||h.message&&h.message.includes("timeout")?new Error(`Remote Ollama API request timed out after ${p}s at ${s}. For local/remote 70B models, increase Request Timeout in settings.`):h}if(!l.ok){let h=await l.text();throw new Error(`Remote Ollama API error at ${s} (${l.status}): ${h}`)}let d=await l.json(),c=d.choices?.[0]?.message,g=d.choices?.[0]?.finish_reason||d.done_reason,m=g==="length",f=c?.content||"";f&&e.onToken&&e.onToken(f);let S=[];for(let h of c?.tool_calls||[])try{S.push({id:h.id||`call_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,name:h.function.name,args:typeof h.function.arguments=="string"?JSON.parse(h.function.arguments):h.function.arguments||{}})}catch(_){console.error(`[ProviderClient] Failed to parse tool call arguments for ${h.function?.name}:`,_),m&&console.error(`[ProviderClient] Output truncated at max_tokens (${n}) with finish_reason="${g}".`)}let P=d.usage?.prompt_tokens??d.prompt_eval_count??0,T=d.usage?.completion_tokens??d.eval_count??0,L=d.usage?.total_tokens??P+T,B={promptTokens:P,completionTokens:T,totalTokens:L,cachedPromptTokens:0};return{content:f,tool_calls:S.length>0?S:void 0,usage:B,finishReason:g,truncationDetected:m}}};var F=N(require("fs/promises")),J=N(require("fs")),ve=N(require("readline")),A=N(require("path")),we=require("child_process"),Se=require("util"),Be=(0,Se.promisify)(we.exec),ae=class{constructor(e){this.workspaceRoot=e;this.workspaceRoot=e||"",this.registerDefaultTools()}tools=new Map;setWorkspaceRoot(e){this.workspaceRoot=e||""}getDefinitions(){return Array.from(this.tools.values()).map(e=>e.definition)}async execute(e,t){let s=this.tools.get(e);if(!s)return{tool_call_id:"",content:`Error: Tool '${e}' not found. Available tools: ${Array.from(this.tools.keys()).join(", ")}`,isError:!0};try{return{tool_call_id:"",content:await s.execute(t),isError:!1}}catch(i){return{tool_call_id:"",content:`Error executing tool '${e}': ${i.message||String(i)}`,isError:!0}}}resolvePath(e){let t=this.workspaceRoot||"";if(!t)throw new Error("No active workspace directory set.");let s=A.isAbsolute(e)?A.resolve(e):A.resolve(t,e),i=A.resolve(t);if(s!==i&&!s.startsWith(i+A.sep))throw new Error(`Security restriction: access to '${e}' outside workspace root is denied.`);return s}assertNotProtected(e){let t=this.workspaceRoot||"",s=A.isAbsolute(e)?A.resolve(e):A.resolve(t,e),i=t?A.relative(A.resolve(t),s).replace(/\\/g,"/"):e.replace(/\\/g,"/");if(["docs/llm.md","agent/PROTOCOL.md","agent/SKILL.md","agent/VARIABLES.md"].some(n=>i===n||i.endsWith("/"+n)))throw new Error(`Security Policy Violation: '${e}' is a protected user or extension specification file and cannot be modified by the agent. Record runtime logs in 'docs/notes.md' and biological findings across docs/ (observations.md, knowledge.md, websearch.md, literature.md).`)}registerDefaultTools(){this.tools.set("execute_command",{definition:{name:"execute_command",description:"Executes a shell command in the workspace directory (e.g. running Rscript code/01_inspect_dataset.R). Captures stdout and stderr.",parameters:{type:"object",properties:{command:{type:"string",description:"The shell command line to run"},timeoutMs:{type:"number",description:"Optional execution timeout in milliseconds (default: 600000ms / 10m)"}},required:["command"]}},execute:async e=>{let t=e.timeoutMs||6e5;try{let s=this.workspaceRoot;if(!s)throw new Error("Cannot execute command: No active workspace directory is configured.");let i=process.platform==="win32"?void 0:process.env.SHELL&&J.existsSync(process.env.SHELL)?process.env.SHELL:J.existsSync("/bin/bash")?"/bin/bash":"/bin/sh",{stdout:o,stderr:n}=await Be(e.command,{cwd:s,timeout:t,maxBuffer:10*1024*1024,shell:i}),r="";return o&&(r+=`STDOUT:
-${o}
-`),n&&(r+=`STDERR:
-${n}
-`),r.trim()||"Command executed successfully with no console output."}catch(s){let i=`Command failed with exit code ${s.code??"unknown"}
-`;return s.stdout&&(i+=`STDOUT:
-${s.stdout}
-`),s.stderr&&(i+=`STDERR:
-${s.stderr}
-`),s.message&&(i+=`Error message: ${s.message}
-`),i}}}),this.tools.set("read_file",{definition:{name:"read_file",description:"Reads file content from the workspace with optional startLine and maxLines for context economy.",parameters:{type:"object",properties:{filePath:{type:"string",description:"Relative or absolute path to the file to read"},startLine:{type:"number",description:"Optional 1-based start line number"},maxLines:{type:"number",description:"Optional maximum lines to read (prevents dumping large logs or tables)"}},required:["filePath"]}},execute:async e=>{let t=this.resolvePath(e.filePath),s=Math.max(1,e.startLine||1),i=Math.max(1,e.maxLines||2e3),o=J.createReadStream(t,{encoding:"utf-8"}),n=ve.createInterface({input:o,crlfDelay:1/0}),r=[],a=0,p=0;for await(let d of n)a++,p=a,a>=s&&r.length<i&&r.push(`${a}: ${d}`);let l=r.length>0?s+r.length-1:s;return`File: ${e.filePath} (Lines ${s}-${l} of ${p}):
-${r.join(`
-`)}`}}),this.tools.set("write_file",{definition:{name:"write_file",description:"Creates or overwrites a file in the workspace with new content.",parameters:{type:"object",properties:{filePath:{type:"string",description:"Relative path to the file to write"},content:{type:"string",description:"Complete text content to write into the file"}},required:["filePath","content"]}},execute:async e=>{this.assertNotProtected(e.filePath);let t=this.resolvePath(e.filePath);return await F.mkdir(A.dirname(t),{recursive:!0}),await F.writeFile(t,e.content,"utf-8"),`Successfully wrote ${e.content.length} characters to ${e.filePath}`}}),this.tools.set("replace_file_content",{definition:{name:"replace_file_content",description:"Replaces an exact target substring with replacement content in an existing file. Note: For analysis scripts and files under 150 lines, prefer 'write_file' to overwrite the complete file cleanly and avoid whitespace mismatch errors.",parameters:{type:"object",properties:{filePath:{type:"string",description:"Relative path to the file to edit"},targetContent:{type:"string",description:"Exact substring to find and replace"},replacementContent:{type:"string",description:"New content to replace the target substring with"}},required:["filePath","targetContent","replacementContent"]}},execute:async e=>{this.assertNotProtected(e.filePath);let t=this.resolvePath(e.filePath),s=await F.readFile(t,"utf-8");if(!s.includes(e.targetContent))throw new Error(`Target content was not found in ${e.filePath}. Ensure exact whitespace and line match.`);let i=s.replace(e.targetContent,()=>e.replacementContent);return await F.writeFile(t,i,"utf-8"),`Successfully replaced content in ${e.filePath}`}}),this.tools.set("list_directory",{definition:{name:"list_directory",description:"Lists files and folders inside a given workspace directory.",parameters:{type:"object",properties:{dirPath:{type:"string",description:"Relative path to directory to inspect (e.g. 'data', 'logs', 'code')"}},required:["dirPath"]}},execute:async e=>{let t=this.resolvePath(e.dirPath||"."),i=(await F.readdir(t,{withFileTypes:!0})).map(o=>`${o.isDirectory()?"[DIR]":"[FILE]"} ${o.name}`).join(`
-`);return`Directory '${e.dirPath}':
-${i||"(empty)"}`}}),this.tools.set("check_checkpoint_gate",{definition:{name:"check_checkpoint_gate",description:"Checks whether required checkpoint files exist, are non-empty, and returns their file size.",parameters:{type:"object",properties:{requiredFiles:{type:"array",description:"Array of relative paths to files that must exist (e.g. ['logs/01_data_quality.log', 'data/tidyproteomics_data.rds'])",items:{type:"string"}}},required:["requiredFiles"]}},execute:async e=>{let t=[],s=!0;for(let i of e.requiredFiles){let o=this.resolvePath(i);if(i.includes("*")){let n=A.dirname(o),r=A.basename(i);try{let a=await F.readdir(n),p="^"+r.replace(/[-/\\^$+?.()|[\]{}]/g,"\\$&").replace(/\\\*/g,".*")+"$",l=new RegExp(p),d=a.filter(c=>l.test(c));if(d.length>0){let c=!1;for(let g of d){let m=await F.stat(A.join(n,g));m.size>0&&(c=!0,t.push(`PASS: ${A.join(A.dirname(i),g)} (size: ${m.size} bytes)`))}c||(t.push(`FAIL: ${i} matched files but all had 0 bytes`),s=!1)}else t.push(`FAIL: ${i} matched 0 files in directory`),s=!1}catch{t.push(`FAIL: Directory for ${i} does not exist`),s=!1}}else try{let n=await F.stat(o);n.size>0?t.push(`PASS: ${i} (size: ${n.size} bytes)`):(t.push(`FAIL: ${i} exists but has 0 bytes`),s=!1)}catch{t.push(`FAIL: ${i} does not exist`),s=!1}}return`Checkpoint Gate Status: ${s?"ALL CHECKPOINTS PASSED":"GATE FAILED"}
-${t.join(`
-`)}`}}),this.tools.set("complete_phase",{definition:{name:"complete_phase",description:"Signals that the current phase's objectives, code execution, and quality gates have completed successfully.",parameters:{type:"object",properties:{phaseName:{type:"string",description:"The name or filename of the completed phase"},summary:{type:"string",description:"Structured summary of findings, verified outputs, and gate status to update notes.md"}},required:["phaseName","summary"]}},execute:async e=>`PHASE_COMPLETED: ${e.phaseName}
+`;
+      }
+      await fs5.writeFile(notesPath, current + entry, "utf-8");
+    } catch (e) {
+      this.logPipeline(`Warning: Failed to update docs/notes.md: ${e}`);
+    }
+  }
+};
+
+// src/llm/ProviderClient.ts
+var ProviderClient = class {
+  constructor(config) {
+    this.config = config;
+  }
+  updateConfig(config) {
+    this.config = { ...this.config, ...config };
+  }
+  getConfig() {
+    return { ...this.config };
+  }
+  getTimeoutSeconds() {
+    return this.config.timeoutSeconds && this.config.timeoutSeconds > 0 ? this.config.timeoutSeconds : 600;
+  }
+  getTimeoutMs() {
+    return this.getTimeoutSeconds() * 1e3;
+  }
+  async chat(params) {
+    switch (this.config.provider) {
+      case "anthropic":
+        return this.chatAnthropic(params);
+      case "gemini":
+        return this.chatGemini(params);
+      case "openrouter":
+        return this.chatOpenRouter(params);
+      case "ollama":
+        return this.chatOllama(params);
+      case "openai":
+      default:
+        return this.chatOpenAI(params);
+    }
+  }
+  /**
+   * Anthropic Messages API with native Prompt Caching enabled on the static system prompt!
+   */
+  async chatAnthropic(params) {
+    const url = "https://api.anthropic.com/v1/messages";
+    const anthropicTools = params.tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.parameters
+    }));
+    const rawAnthropic = [];
+    let i = 0;
+    while (i < params.messages.length) {
+      const msg = params.messages[i];
+      if (msg.role === "system") {
+        i++;
+        continue;
+      }
+      if (msg.role === "tool") {
+        const toolResults = [];
+        while (i < params.messages.length && params.messages[i].role === "tool") {
+          const tm = params.messages[i];
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: tm.tool_call_id,
+            content: tm.content
+          });
+          i++;
+        }
+        rawAnthropic.push({
+          role: "user",
+          content: toolResults
+        });
+        continue;
+      } else if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
+        const contentBlocks = [];
+        if (msg.content) {
+          contentBlocks.push({ type: "text", text: msg.content });
+        }
+        for (const tc of msg.tool_calls) {
+          contentBlocks.push({
+            type: "tool_use",
+            id: tc.id,
+            name: tc.name,
+            input: tc.args
+          });
+        }
+        rawAnthropic.push({ role: "assistant", content: contentBlocks });
+      } else {
+        rawAnthropic.push({
+          role: msg.role === "assistant" ? "assistant" : "user",
+          content: msg.content
+        });
+      }
+      i++;
+    }
+    const anthropicMessages = [];
+    for (const m of rawAnthropic) {
+      const last = anthropicMessages[anthropicMessages.length - 1];
+      if (last && last.role === m.role) {
+        const lastBlocks = Array.isArray(last.content) ? last.content : [{ type: "text", text: String(last.content) }];
+        const currBlocks = Array.isArray(m.content) ? m.content : [{ type: "text", text: String(m.content) }];
+        last.content = [...lastBlocks, ...currBlocks];
+      } else {
+        anthropicMessages.push(m);
+      }
+    }
+    const systemPayload = [
+      {
+        type: "text",
+        text: params.system,
+        cache_control: { type: "ephemeral" }
+      }
+    ];
+    const maxTokens = this.config.maxTokens || 16384;
+    const body = {
+      model: this.config.model || "claude-3-7-sonnet-20250219",
+      max_tokens: maxTokens,
+      temperature: this.config.temperature ?? 0.2,
+      system: systemPayload,
+      messages: anthropicMessages,
+      tools: anthropicTools
+    };
+    const timeoutSeconds = this.getTimeoutSeconds();
+    let res;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": this.config.apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-beta": "prompt-caching-2024-07-31"
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(this.getTimeoutMs())
+      });
+    } catch (err) {
+      if (err.name === "TimeoutError" || err.message && err.message.includes("timeout")) {
+        throw new Error(`Anthropic API request timed out after ${timeoutSeconds}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`);
+      }
+      throw err;
+    }
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Anthropic API error (${res.status}): ${errText}`);
+    }
+    const data = await res.json();
+    let textContent = "";
+    const toolCalls = [];
+    for (const block of data.content || []) {
+      if (block.type === "text") {
+        textContent += block.text;
+        if (params.onToken)
+          params.onToken(block.text);
+      } else if (block.type === "tool_use") {
+        toolCalls.push({
+          id: block.id,
+          name: block.name,
+          args: block.input || {}
+        });
+      }
+    }
+    const stopReason = data.stop_reason;
+    const isTruncated = stopReason === "max_tokens";
+    if (isTruncated) {
+      console.warn(`[ProviderClient] Anthropic generation cut off: hit max_tokens limit (${maxTokens}).`);
+    }
+    const cacheRead = data.usage?.cache_read_input_tokens || 0;
+    const cacheCreation = data.usage?.cache_creation_input_tokens || 0;
+    const rawInput = data.usage?.input_tokens || 0;
+    const completionTokens = data.usage?.output_tokens || 0;
+    const promptTokens = rawInput + cacheRead + cacheCreation;
+    const totalTokens = promptTokens + completionTokens;
+    const usage = {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      cachedPromptTokens: cacheRead
+    };
+    return {
+      content: textContent,
+      tool_calls: toolCalls.length > 0 ? toolCalls : void 0,
+      usage,
+      finishReason: stopReason,
+      truncationDetected: isTruncated
+    };
+  }
+  /**
+   * Google Gemini API implementation
+   */
+  async chatGemini(params) {
+    const model = this.config.model || "gemini-1.5-pro";
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.config.apiKey}`;
+    const geminiTools = [
+      {
+        functionDeclarations: params.tools.map((t) => ({
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters
+        }))
+      }
+    ];
+    const rawContents = [];
+    let j = 0;
+    while (j < params.messages.length) {
+      const msg = params.messages[j];
+      if (msg.role === "system") {
+        j++;
+        continue;
+      }
+      if (msg.role === "tool") {
+        const functionParts = [];
+        while (j < params.messages.length && params.messages[j].role === "tool") {
+          const tm = params.messages[j];
+          functionParts.push({
+            functionResponse: {
+              name: tm.tool_name || tm.tool_call_id || "tool_result",
+              response: { output: tm.content }
+            }
+          });
+          j++;
+        }
+        rawContents.push({ role: "user", parts: functionParts });
+        continue;
+      } else if (msg.role === "assistant" && msg.tool_calls) {
+        const parts = [];
+        if (msg.content)
+          parts.push({ text: msg.content });
+        for (const tc of msg.tool_calls) {
+          parts.push({
+            functionCall: {
+              name: tc.name,
+              args: tc.args
+            }
+          });
+        }
+        rawContents.push({ role: "model", parts });
+      } else {
+        rawContents.push({
+          role: msg.role === "assistant" ? "model" : "user",
+          parts: [{ text: msg.content }]
+        });
+      }
+      j++;
+    }
+    const contents = [];
+    for (const c of rawContents) {
+      const last = contents[contents.length - 1];
+      if (last && last.role === c.role) {
+        last.parts.push(...c.parts);
+      } else {
+        contents.push(c);
+      }
+    }
+    const maxTokens = this.config.maxTokens || 16384;
+    const body = {
+      systemInstruction: {
+        parts: [{ text: params.system }]
+      },
+      contents,
+      tools: geminiTools,
+      generationConfig: {
+        temperature: this.config.temperature ?? 0.2,
+        maxOutputTokens: maxTokens
+      }
+    };
+    const timeoutSeconds = this.getTimeoutSeconds();
+    let res;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(this.getTimeoutMs())
+      });
+    } catch (err) {
+      if (err.name === "TimeoutError" || err.message && err.message.includes("timeout")) {
+        throw new Error(`Gemini API request timed out after ${timeoutSeconds}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`);
+      }
+      throw err;
+    }
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Gemini API error (${res.status}): ${errText}`);
+    }
+    const data = await res.json();
+    const candidate = data.candidates?.[0];
+    const finishReason = candidate?.finishReason;
+    const isTruncated = finishReason === "MAX_TOKENS";
+    if (isTruncated) {
+      console.warn(`[ProviderClient] Gemini generation cut off: hit MAX_TOKENS limit (${maxTokens}).`);
+    }
+    let textContent = "";
+    const toolCalls = [];
+    for (const part of candidate?.content?.parts || []) {
+      if (part.text) {
+        textContent += part.text;
+        if (params.onToken)
+          params.onToken(part.text);
+      }
+      if (part.functionCall) {
+        toolCalls.push({
+          id: `call_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          name: part.functionCall.name,
+          args: part.functionCall.args || {}
+        });
+      }
+    }
+    const promptTokens = data.usageMetadata?.promptTokenCount || 0;
+    const completionTokens = data.usageMetadata?.candidatesTokenCount || 0;
+    const cachedPromptTokens = data.usageMetadata?.cachedContentTokenCount || 0;
+    const totalTokens = data.usageMetadata?.totalTokenCount ?? promptTokens + completionTokens;
+    const usage = {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      cachedPromptTokens
+    };
+    return {
+      content: textContent,
+      tool_calls: toolCalls.length > 0 ? toolCalls : void 0,
+      usage,
+      finishReason,
+      truncationDetected: isTruncated
+    };
+  }
+  /**
+   * OpenAI / Compatible API implementation
+   */
+  async chatOpenAI(params) {
+    const baseUrl = this.config.baseUrl || "https://api.openai.com/v1";
+    const url = `${baseUrl}/chat/completions`;
+    const openAiTools = params.tools.map((t) => ({
+      type: "function",
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters
+      }
+    }));
+    const formattedMessages = [{ role: "system", content: params.system }];
+    for (const msg of params.messages) {
+      if (msg.role === "tool") {
+        formattedMessages.push({
+          role: "tool",
+          tool_call_id: msg.tool_call_id,
+          content: msg.content
+        });
+      } else if (msg.role === "assistant" && msg.tool_calls) {
+        formattedMessages.push({
+          role: "assistant",
+          content: msg.content || null,
+          tool_calls: msg.tool_calls.map((tc) => ({
+            id: tc.id,
+            type: "function",
+            function: {
+              name: tc.name,
+              arguments: JSON.stringify(tc.args)
+            }
+          }))
+        });
+      } else {
+        formattedMessages.push({
+          role: msg.role,
+          content: msg.content
+        });
+      }
+    }
+    const maxTokens = this.config.maxTokens || 16384;
+    const body = {
+      model: this.config.model || "gpt-4o",
+      messages: formattedMessages,
+      tools: openAiTools.length > 0 ? openAiTools : void 0,
+      temperature: this.config.temperature ?? 0.2,
+      max_tokens: maxTokens
+    };
+    const timeoutSeconds = this.getTimeoutSeconds();
+    let res;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey}`
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(this.getTimeoutMs())
+      });
+    } catch (err) {
+      if (err.name === "TimeoutError" || err.message && err.message.includes("timeout")) {
+        throw new Error(`OpenAI API request timed out after ${timeoutSeconds}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`);
+      }
+      throw err;
+    }
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`OpenAI API error (${res.status}): ${errText}`);
+    }
+    const data = await res.json();
+    const message = data.choices?.[0]?.message;
+    const finishReason = data.choices?.[0]?.finish_reason;
+    const isTruncated = finishReason === "length" || finishReason === "max_tokens";
+    const textContent = message?.content || "";
+    if (textContent && params.onToken) {
+      params.onToken(textContent);
+    }
+    const toolCalls = [];
+    for (const tc of message?.tool_calls || []) {
+      try {
+        toolCalls.push({
+          id: tc.id,
+          name: tc.function.name,
+          args: typeof tc.function.arguments === "string" ? JSON.parse(tc.function.arguments) : tc.function.arguments || {}
+        });
+      } catch (err) {
+        console.error(`[ProviderClient] Failed to parse tool call arguments for ${tc.function?.name}:`, err);
+        if (isTruncated) {
+          console.error(`[ProviderClient] Output truncated at max_tokens (${maxTokens}) with finish_reason="${finishReason}". Tool call JSON was incomplete.`);
+        }
+      }
+    }
+    const promptTokens = data.usage?.prompt_tokens || 0;
+    const completionTokens = data.usage?.completion_tokens || 0;
+    const cachedPromptTokens = data.usage?.prompt_tokens_details?.cached_tokens || 0;
+    const totalTokens = data.usage?.total_tokens ?? promptTokens + completionTokens;
+    const usage = {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      cachedPromptTokens
+    };
+    return {
+      content: textContent,
+      tool_calls: toolCalls.length > 0 ? toolCalls : void 0,
+      usage,
+      finishReason,
+      truncationDetected: isTruncated
+    };
+  }
+  /**
+   * OpenRouter API implementation (Unified gateway for Claude, DeepSeek, Llama, Qwen, etc.)
+   */
+  async chatOpenRouter(params) {
+    const baseUrl = (this.config.baseUrl || "https://openrouter.ai/api/v1").replace(/\/+$/, "");
+    const url = `${baseUrl}/chat/completions`;
+    const openAiTools = params.tools.map((t) => ({
+      type: "function",
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters
+      }
+    }));
+    const formattedMessages = [{ role: "system", content: params.system }];
+    for (const msg of params.messages) {
+      if (msg.role === "tool") {
+        formattedMessages.push({
+          role: "tool",
+          tool_call_id: msg.tool_call_id,
+          content: msg.content
+        });
+      } else if (msg.role === "assistant" && msg.tool_calls) {
+        formattedMessages.push({
+          role: "assistant",
+          content: msg.content || null,
+          tool_calls: msg.tool_calls.map((tc) => ({
+            id: tc.id,
+            type: "function",
+            function: {
+              name: tc.name,
+              arguments: JSON.stringify(tc.args)
+            }
+          }))
+        });
+      } else {
+        formattedMessages.push({
+          role: msg.role,
+          content: msg.content
+        });
+      }
+    }
+    const maxTokens = this.config.maxTokens || 32768;
+    const body = {
+      model: this.config.model || "anthropic/claude-3.7-sonnet",
+      messages: formattedMessages,
+      tools: openAiTools.length > 0 ? openAiTools : void 0,
+      temperature: this.config.temperature ?? 0.2,
+      max_tokens: maxTokens
+    };
+    const timeoutSeconds = this.getTimeoutSeconds();
+    let res;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey}`,
+          "HTTP-Referer": "https://github.com/tidyproteomicsagent",
+          "X-Title": "TidyProteomicsAgent"
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(this.getTimeoutMs())
+      });
+    } catch (err) {
+      if (err.name === "TimeoutError" || err.message && err.message.includes("timeout")) {
+        throw new Error(`OpenRouter API request timed out after ${timeoutSeconds}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`);
+      }
+      throw err;
+    }
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`OpenRouter API error (${res.status}): ${errText}`);
+    }
+    const data = await res.json();
+    const message = data.choices?.[0]?.message;
+    const finishReason = data.choices?.[0]?.finish_reason;
+    const isTruncated = finishReason === "length" || finishReason === "max_tokens";
+    const textContent = message?.content || "";
+    if (textContent && params.onToken) {
+      params.onToken(textContent);
+    }
+    const toolCalls = [];
+    for (const tc of message?.tool_calls || []) {
+      try {
+        toolCalls.push({
+          id: tc.id,
+          name: tc.function.name,
+          args: typeof tc.function.arguments === "string" ? JSON.parse(tc.function.arguments) : tc.function.arguments || {}
+        });
+      } catch (err) {
+        console.error(`[ProviderClient] Failed to parse tool call arguments for ${tc.function?.name}:`, err);
+        if (isTruncated) {
+          console.error(`[ProviderClient] Output truncated at max_tokens (${maxTokens}) with finish_reason="${finishReason}". Tool call JSON was incomplete.`);
+        }
+      }
+    }
+    const promptTokens = data.usage?.prompt_tokens || 0;
+    const completionTokens = data.usage?.completion_tokens || 0;
+    const cachedPromptTokens = data.usage?.prompt_tokens_details?.cached_tokens ?? data.usage?.cache_read_input_tokens ?? 0;
+    const totalTokens = data.usage?.total_tokens ?? promptTokens + completionTokens;
+    const usage = {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      cachedPromptTokens
+    };
+    return {
+      content: textContent,
+      tool_calls: toolCalls.length > 0 ? toolCalls : void 0,
+      usage,
+      finishReason,
+      truncationDetected: isTruncated
+    };
+  }
+  /**
+   * Remote Hosted Ollama API implementation (OpenAI-compatible endpoint with function calling)
+   */
+  async chatOllama(params) {
+    let baseUrl = (this.config.baseUrl || "http://localhost:11434").replace(/\/+$/, "");
+    if (!baseUrl.endsWith("/v1")) {
+      baseUrl += "/v1";
+    }
+    const url = `${baseUrl}/chat/completions`;
+    const openAiTools = params.tools.map((t) => ({
+      type: "function",
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters
+      }
+    }));
+    const formattedMessages = [{ role: "system", content: params.system }];
+    for (const msg of params.messages) {
+      if (msg.role === "tool") {
+        formattedMessages.push({
+          role: "tool",
+          tool_call_id: msg.tool_call_id,
+          content: msg.content
+        });
+      } else if (msg.role === "assistant" && msg.tool_calls) {
+        formattedMessages.push({
+          role: "assistant",
+          content: msg.content || null,
+          tool_calls: msg.tool_calls.map((tc) => ({
+            id: tc.id,
+            type: "function",
+            function: {
+              name: tc.name,
+              arguments: JSON.stringify(tc.args)
+            }
+          }))
+        });
+      } else {
+        formattedMessages.push({
+          role: msg.role,
+          content: msg.content
+        });
+      }
+    }
+    const maxTokens = this.config.maxTokens || 16384;
+    const body = {
+      model: this.config.model || "llama3.3:70b",
+      messages: formattedMessages,
+      tools: openAiTools.length > 0 ? openAiTools : void 0,
+      temperature: this.config.temperature ?? 0.2,
+      max_tokens: maxTokens,
+      options: {
+        num_predict: maxTokens
+      },
+      stream: false
+    };
+    const headers = {
+      "Content-Type": "application/json"
+    };
+    if (this.config.apiKey) {
+      headers["Authorization"] = `Bearer ${this.config.apiKey}`;
+    }
+    const timeoutSeconds = this.getTimeoutSeconds();
+    let res;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(this.getTimeoutMs())
+      });
+    } catch (err) {
+      if (err.name === "TimeoutError" || err.message && err.message.includes("timeout")) {
+        throw new Error(`Remote Ollama API request timed out after ${timeoutSeconds}s at ${url}. For local/remote 70B models, increase Request Timeout in settings.`);
+      }
+      throw err;
+    }
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Remote Ollama API error at ${url} (${res.status}): ${errText}`);
+    }
+    const data = await res.json();
+    const message = data.choices?.[0]?.message;
+    const finishReason = data.choices?.[0]?.finish_reason || data.done_reason;
+    const isTruncated = finishReason === "length";
+    const textContent = message?.content || "";
+    if (textContent && params.onToken) {
+      params.onToken(textContent);
+    }
+    const toolCalls = [];
+    for (const tc of message?.tool_calls || []) {
+      try {
+        toolCalls.push({
+          id: tc.id || `call_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          name: tc.function.name,
+          args: typeof tc.function.arguments === "string" ? JSON.parse(tc.function.arguments) : tc.function.arguments || {}
+        });
+      } catch (err) {
+        console.error(`[ProviderClient] Failed to parse tool call arguments for ${tc.function?.name}:`, err);
+        if (isTruncated) {
+          console.error(`[ProviderClient] Output truncated at max_tokens (${maxTokens}) with finish_reason="${finishReason}".`);
+        }
+      }
+    }
+    const promptTokens = data.usage?.prompt_tokens ?? data.prompt_eval_count ?? 0;
+    const completionTokens = data.usage?.completion_tokens ?? data.eval_count ?? 0;
+    const totalTokens = data.usage?.total_tokens ?? promptTokens + completionTokens;
+    const usage = {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      cachedPromptTokens: 0
+    };
+    return {
+      content: textContent,
+      tool_calls: toolCalls.length > 0 ? toolCalls : void 0,
+      usage,
+      finishReason,
+      truncationDetected: isTruncated
+    };
+  }
+};
+
+// src/tools/ToolRegistry.ts
+var fs6 = __toESM(require("fs/promises"));
+var fsSync = __toESM(require("fs"));
+var readline = __toESM(require("readline"));
+var path6 = __toESM(require("path"));
+var import_child_process2 = require("child_process");
+var import_util = require("util");
+var execAsync = (0, import_util.promisify)(import_child_process2.exec);
+var ToolRegistry = class {
+  constructor(workspaceRoot) {
+    this.workspaceRoot = workspaceRoot;
+    this.workspaceRoot = workspaceRoot || "";
+    this.registerDefaultTools();
+  }
+  tools = /* @__PURE__ */ new Map();
+  setWorkspaceRoot(newRoot) {
+    this.workspaceRoot = newRoot || "";
+  }
+  getDefinitions() {
+    return Array.from(this.tools.values()).map((t) => t.definition);
+  }
+  async execute(name, args) {
+    const handler = this.tools.get(name);
+    if (!handler) {
+      return {
+        tool_call_id: "",
+        content: `Error: Tool '${name}' not found. Available tools: ${Array.from(this.tools.keys()).join(", ")}`,
+        isError: true
+      };
+    }
+    try {
+      const output = await handler.execute(args);
+      return {
+        tool_call_id: "",
+        content: output,
+        isError: false
+      };
+    } catch (err) {
+      return {
+        tool_call_id: "",
+        content: `Error executing tool '${name}': ${err.message || String(err)}`,
+        isError: true
+      };
+    }
+  }
+  resolvePath(filePath) {
+    const root = this.workspaceRoot || "";
+    if (!root) {
+      throw new Error("No active workspace directory set.");
+    }
+    const resolved = path6.isAbsolute(filePath) ? path6.resolve(filePath) : path6.resolve(root, filePath);
+    const normalizedRoot = path6.resolve(root);
+    if (resolved !== normalizedRoot && !resolved.startsWith(normalizedRoot + path6.sep)) {
+      throw new Error(`Security restriction: access to '${filePath}' outside workspace root is denied.`);
+    }
+    return resolved;
+  }
+  assertNotProtected(filePath) {
+    const root = this.workspaceRoot || "";
+    const resolved = path6.isAbsolute(filePath) ? path6.resolve(filePath) : path6.resolve(root, filePath);
+    const normalizedRel = root ? path6.relative(path6.resolve(root), resolved).replace(/\\/g, "/") : filePath.replace(/\\/g, "/");
+    const PROTECTED_FILES = [
+      "docs/llm.md",
+      "agent/PROTOCOL.md",
+      "agent/SKILL.md",
+      "agent/VARIABLES.md"
+    ];
+    if (PROTECTED_FILES.some((p) => normalizedRel === p || normalizedRel.endsWith("/" + p))) {
+      throw new Error(
+        `Security Policy Violation: '${filePath}' is a protected user or extension specification file and cannot be modified by the agent. Record runtime logs in 'docs/notes.md' and biological findings across docs/ (observations.md, knowledge.md, websearch.md, literature.md).`
+      );
+    }
+  }
+  registerDefaultTools() {
+    this.tools.set("execute_command", {
+      definition: {
+        name: "execute_command",
+        description: "Executes a shell command in the workspace directory (e.g. running Rscript code/01_inspect_dataset.R). Captures stdout and stderr.",
+        parameters: {
+          type: "object",
+          properties: {
+            command: {
+              type: "string",
+              description: "The shell command line to run"
+            },
+            timeoutMs: {
+              type: "number",
+              description: "Optional execution timeout in milliseconds (default: 600000ms / 10m)"
+            }
+          },
+          required: ["command"]
+        }
+      },
+      execute: async (args) => {
+        const timeout = args.timeoutMs || 6e5;
+        try {
+          const effectiveCwd = this.workspaceRoot;
+          if (!effectiveCwd) {
+            throw new Error("Cannot execute command: No active workspace directory is configured.");
+          }
+          const defaultShell = process.platform === "win32" ? void 0 : process.env.SHELL && fsSync.existsSync(process.env.SHELL) ? process.env.SHELL : fsSync.existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
+          const { stdout, stderr } = await execAsync(args.command, {
+            cwd: effectiveCwd,
+            timeout,
+            maxBuffer: 10 * 1024 * 1024,
+            shell: defaultShell
+          });
+          let result = "";
+          if (stdout)
+            result += `STDOUT:
+${stdout}
+`;
+          if (stderr)
+            result += `STDERR:
+${stderr}
+`;
+          return result.trim() || "Command executed successfully with no console output.";
+        } catch (error) {
+          let errOutput = `Command failed with exit code ${error.code ?? "unknown"}
+`;
+          if (error.stdout)
+            errOutput += `STDOUT:
+${error.stdout}
+`;
+          if (error.stderr)
+            errOutput += `STDERR:
+${error.stderr}
+`;
+          if (error.message)
+            errOutput += `Error message: ${error.message}
+`;
+          return errOutput;
+        }
+      }
+    });
+    this.tools.set("read_file", {
+      definition: {
+        name: "read_file",
+        description: "Reads file content from the workspace with optional startLine and maxLines for context economy.",
+        parameters: {
+          type: "object",
+          properties: {
+            filePath: {
+              type: "string",
+              description: "Relative or absolute path to the file to read"
+            },
+            startLine: {
+              type: "number",
+              description: "Optional 1-based start line number"
+            },
+            maxLines: {
+              type: "number",
+              description: "Optional maximum lines to read (prevents dumping large logs or tables)"
+            }
+          },
+          required: ["filePath"]
+        }
+      },
+      execute: async (args) => {
+        const fullPath = this.resolvePath(args.filePath);
+        const start = Math.max(1, args.startLine || 1);
+        const max = Math.max(1, args.maxLines || 2e3);
+        const fileStream = fsSync.createReadStream(fullPath, { encoding: "utf-8" });
+        const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+        const selected = [];
+        let lineIdx = 0;
+        let totalLines = 0;
+        for await (const line of rl) {
+          lineIdx++;
+          totalLines = lineIdx;
+          if (lineIdx >= start && selected.length < max) {
+            selected.push(`${lineIdx}: ${line}`);
+          }
+        }
+        const endLine = selected.length > 0 ? start + selected.length - 1 : start;
+        return `File: ${args.filePath} (Lines ${start}-${endLine} of ${totalLines}):
+${selected.join("\n")}`;
+      }
+    });
+    this.tools.set("write_file", {
+      definition: {
+        name: "write_file",
+        description: "Creates or overwrites a file in the workspace with new content.",
+        parameters: {
+          type: "object",
+          properties: {
+            filePath: {
+              type: "string",
+              description: "Relative path to the file to write"
+            },
+            content: {
+              type: "string",
+              description: "Complete text content to write into the file"
+            }
+          },
+          required: ["filePath", "content"]
+        }
+      },
+      execute: async (args) => {
+        this.assertNotProtected(args.filePath);
+        const fullPath = this.resolvePath(args.filePath);
+        await fs6.mkdir(path6.dirname(fullPath), { recursive: true });
+        await fs6.writeFile(fullPath, args.content, "utf-8");
+        return `Successfully wrote ${args.content.length} characters to ${args.filePath}`;
+      }
+    });
+    this.tools.set("replace_file_content", {
+      definition: {
+        name: "replace_file_content",
+        description: "Replaces an exact target substring with replacement content in an existing file. Note: For analysis scripts and files under 150 lines, prefer 'write_file' to overwrite the complete file cleanly and avoid whitespace mismatch errors.",
+        parameters: {
+          type: "object",
+          properties: {
+            filePath: {
+              type: "string",
+              description: "Relative path to the file to edit"
+            },
+            targetContent: {
+              type: "string",
+              description: "Exact substring to find and replace"
+            },
+            replacementContent: {
+              type: "string",
+              description: "New content to replace the target substring with"
+            }
+          },
+          required: ["filePath", "targetContent", "replacementContent"]
+        }
+      },
+      execute: async (args) => {
+        this.assertNotProtected(args.filePath);
+        const fullPath = this.resolvePath(args.filePath);
+        const content = await fs6.readFile(fullPath, "utf-8");
+        if (!content.includes(args.targetContent)) {
+          throw new Error(`Target content was not found in ${args.filePath}. Ensure exact whitespace and line match.`);
+        }
+        const updated = content.replace(args.targetContent, () => args.replacementContent);
+        await fs6.writeFile(fullPath, updated, "utf-8");
+        return `Successfully replaced content in ${args.filePath}`;
+      }
+    });
+    this.tools.set("list_directory", {
+      definition: {
+        name: "list_directory",
+        description: "Lists files and folders inside a given workspace directory.",
+        parameters: {
+          type: "object",
+          properties: {
+            dirPath: {
+              type: "string",
+              description: "Relative path to directory to inspect (e.g. 'data', 'logs', 'code')"
+            }
+          },
+          required: ["dirPath"]
+        }
+      },
+      execute: async (args) => {
+        const fullPath = this.resolvePath(args.dirPath || ".");
+        const entries = await fs6.readdir(fullPath, { withFileTypes: true });
+        const list = entries.map((e) => `${e.isDirectory() ? "[DIR]" : "[FILE]"} ${e.name}`).join("\n");
+        return `Directory '${args.dirPath}':
+${list || "(empty)"}`;
+      }
+    });
+    this.tools.set("check_checkpoint_gate", {
+      definition: {
+        name: "check_checkpoint_gate",
+        description: "Checks whether required checkpoint files exist, are non-empty, and returns their file size.",
+        parameters: {
+          type: "object",
+          properties: {
+            requiredFiles: {
+              type: "array",
+              description: "Array of relative paths to files that must exist (e.g. ['logs/01_data_quality.log', 'data/tidyproteomics_data.rds'])",
+              items: { type: "string" }
+            }
+          },
+          required: ["requiredFiles"]
+        }
+      },
+      execute: async (args) => {
+        const results = [];
+        let allPassed = true;
+        for (const file of args.requiredFiles) {
+          const fullPath = this.resolvePath(file);
+          if (file.includes("*")) {
+            const dir = path6.dirname(fullPath);
+            const basePattern = path6.basename(file);
+            try {
+              const entries = await fs6.readdir(dir);
+              const regexStr = "^" + basePattern.replace(/[-/\\^$+?.()|[\]{}]/g, "\\$&").replace(/\\\*/g, ".*") + "$";
+              const regex = new RegExp(regexStr);
+              const matched = entries.filter((e) => regex.test(e));
+              if (matched.length > 0) {
+                let anyValid = false;
+                for (const m of matched) {
+                  const s = await fs6.stat(path6.join(dir, m));
+                  if (s.size > 0) {
+                    anyValid = true;
+                    results.push(`PASS: ${path6.join(path6.dirname(file), m)} (size: ${s.size} bytes)`);
+                  }
+                }
+                if (!anyValid) {
+                  results.push(`FAIL: ${file} matched files but all had 0 bytes`);
+                  allPassed = false;
+                }
+              } else {
+                results.push(`FAIL: ${file} matched 0 files in directory`);
+                allPassed = false;
+              }
+            } catch {
+              results.push(`FAIL: Directory for ${file} does not exist`);
+              allPassed = false;
+            }
+          } else {
+            try {
+              const stat4 = await fs6.stat(fullPath);
+              if (stat4.size > 0) {
+                results.push(`PASS: ${file} (size: ${stat4.size} bytes)`);
+              } else {
+                results.push(`FAIL: ${file} exists but has 0 bytes`);
+                allPassed = false;
+              }
+            } catch {
+              results.push(`FAIL: ${file} does not exist`);
+              allPassed = false;
+            }
+          }
+        }
+        return `Checkpoint Gate Status: ${allPassed ? "ALL CHECKPOINTS PASSED" : "GATE FAILED"}
+${results.join("\n")}`;
+      }
+    });
+    this.tools.set("complete_phase", {
+      definition: {
+        name: "complete_phase",
+        description: "Signals that the current phase's objectives, code execution, and quality gates have completed successfully.",
+        parameters: {
+          type: "object",
+          properties: {
+            phaseName: {
+              type: "string",
+              description: "The name or filename of the completed phase"
+            },
+            summary: {
+              type: "string",
+              description: "Structured summary of findings, verified outputs, and gate status to update notes.md"
+            }
+          },
+          required: ["phaseName", "summary"]
+        }
+      },
+      execute: async (args) => {
+        return `PHASE_COMPLETED: ${args.phaseName}
 Summary:
-${e.summary}`}),this.tools.set("fail_phase",{definition:{name:"fail_phase",description:"Halts execution and marks the current phase as failed when an immutable specification gate, mandatory prerequisite, or unrecoverable error occurs. Use this to exit the phase loop immediately and provide actionable insights for the user to resolve before rerunning.",parameters:{type:"object",properties:{phaseName:{type:"string",description:"The name or filename of the phase (e.g. '00_INSTALL', '01_INSPECT')"},reason:{type:"string",description:"Concise summary of why the phase failed or was halted (e.g. 'Pre-flight Gate Failed: docs/experiment.md contains unconfigured placeholders')"},actionableInsights:{type:"string",description:"Specific, actionable instructions for the researcher explaining what to edit, configure, or verify to resolve the blocker before rerunning the phase."}},required:["phaseName","reason","actionableInsights"]}},execute:async e=>`PHASE_HALTED_FAILED: ${e.phaseName}
-Reason: ${e.reason}
+${args.summary}`;
+      }
+    });
+    this.tools.set("fail_phase", {
+      definition: {
+        name: "fail_phase",
+        description: "Halts execution and marks the current phase as failed when an immutable specification gate, mandatory prerequisite, or unrecoverable error occurs. Use this to exit the phase loop immediately and provide actionable insights for the user to resolve before rerunning.",
+        parameters: {
+          type: "object",
+          properties: {
+            phaseName: {
+              type: "string",
+              description: "The name or filename of the phase (e.g. '00_INSTALL', '01_INSPECT')"
+            },
+            reason: {
+              type: "string",
+              description: "Concise summary of why the phase failed or was halted (e.g. 'Pre-flight Gate Failed: docs/experiment.md contains unconfigured placeholders')"
+            },
+            actionableInsights: {
+              type: "string",
+              description: "Specific, actionable instructions for the researcher explaining what to edit, configure, or verify to resolve the blocker before rerunning the phase."
+            }
+          },
+          required: ["phaseName", "reason", "actionableInsights"]
+        }
+      },
+      execute: async (args) => {
+        return `PHASE_HALTED_FAILED: ${args.phaseName}
+Reason: ${args.reason}
 Actionable Insights:
-${e.actionableInsights}`})}};var M=N(require("path")),j=N(require("fs")),xe=require("child_process");var re=class{constructor(e,t,s,i,o){this.literatureService=e;this.client=t;this.extensionPath=s;this.onProgress=i;this.onLog=o}isRunning=!1;shouldAbort=!1;getIsRunning(){return this.isRunning}abort(){this.shouldAbort=!0}ts(){return new Date().toTimeString().split(" ")[0]}async runIngestion(e){if(this.isRunning)throw new Error("An ingestion process is already running.");let t=this.literatureService.getViewState(),s=t.queue;if(s.length===0)throw new Error("No files in the ingestion queue. Select a literature folder first.");let i=this.literatureService.getWorkspaceRoot();if(!i)throw new Error("No active workspace directory set.");let o=t.literatureDir||t.corporaDir||U(i),n=M.join(o,M.basename(e));if(!j.existsSync(n))throw new Error(`Literature database does not exist: ${e}`);this.isRunning=!0,this.shouldAbort=!1;let r=0,a=0;this.onLog(`[${this.ts()}] Literature: Starting batch ingestion of ${s.length} files into ${M.basename(e)}`);try{for(let p=0;p<s.length;p++){if(this.shouldAbort){this.onLog(`[${this.ts()}] Literature: Ingestion aborted by user.`);break}let l=s[p];if(l.stage!=="indexed")try{await this.processItem(l,n,p+1,s.length),r++}catch(d){a++,l.stage="failed",l.message=d.message||String(d),this.literatureService.updateQueueItem(l.id,{stage:"failed",message:l.message}),this.onProgress({item:l,stage:"failed",message:l.message,processedCount:p+1,totalCount:s.length}),this.onLog(`[${this.ts()}] Literature: \u274C Failed to ingest ${l.fileName}: ${l.message}`)}}}finally{this.isRunning=!1,this.shouldAbort=!1,this.literatureService.syncWorkspaceScripts()}if(this.onLog(`[${this.ts()}] Literature: Ingestion batch complete: ${r} indexed, ${a} failed.`),r>0)try{this.onLog(`[${this.ts()}] Literature: Updating database accounting report (docs/literature_database.md)...`),await this.literatureService.generateReport(M.basename(e)),this.onLog(`[${this.ts()}] Literature: \u2713 Updated docs/literature_database.md`)}catch(p){this.onLog(`[${this.ts()}] Literature: Notice: could not auto-update report: ${p.message}`)}return{success:a===0,processed:r,errors:a}}async processItem(e,t,s,i){let o=(f,S)=>{e.stage=f,e.message=S,this.literatureService.updateQueueItem(e.id,{stage:f,message:S}),this.onProgress({item:e,stage:f,message:S,processedCount:s,totalCount:i})};o("parsing_pdf","Extracting text and tables..."),this.onLog(`[${this.ts()}] Literature: [${s}/${i}] Parsing ${e.fileName}...`);let n=this.findScript("extract_text_or_table.R"),r=this.literatureService.resolveRscript(),a=await this.execRJson(r,n,[e.absPath,"25"]);if(!a.ok)throw new Error(a.error||"Failed to extract text from file.");o("llm_extraction","LLM structured extraction..."),this.onLog(`[${this.ts()}] Literature: [${s}/${i}] Extracting assertions from ${e.fileName}...`);let p=`doi_${M.basename(e.fileName,M.extname(e.fileName))}`,l=null;if(a.kind==="pdf"?l=await this.llmExtractFromPdfText(e.fileName,a.text):l=await this.llmExtractFromTable(e.fileName,a.columns,a.rows),!l||!l.study)throw new Error("LLM failed to return structured extraction payload.");l.db_path=t,l.study&&l.study.study_id?p=l.study.study_id:l.study.study_id=p,l.study.filename=e.fileName,o("normalization","Normalizing symbols and orthologs..."),this.onLog(`[${this.ts()}] Literature: [${s}/${i}] Normalizing symbols via R (limma/babelgene)...`);let d;try{d=this.findScript("normalize_and_insert_literature.R")}catch{d=this.findScript("normalize_and_insert_corpus.R")}let c=this.literatureService.getWorkspaceRoot(),g=U(c);j.mkdirSync(g,{recursive:!0});let m=M.join(g,`_tmp_ingest_${Date.now()}.json`);try{j.writeFileSync(m,JSON.stringify(l,null,2),"utf-8");let f=await this.execRJson(r,d,[m,t]);if(!f.ok)throw new Error(f.error||"Normalization and insertion failed in R.");(f.assertions_inserted||0)===0?(o("indexed","Indexed 0 assertions (no explicit protein relationships found)"),this.onLog(`[${this.ts()}] Literature: Warning: 0 assertions extracted from ${e.fileName}. Check if document contains explicit protein interactions or is a conceptual overview.`)):(o("indexed",`Indexed ${f.assertions_inserted} assertions (${f.symbols_normalized||0} normalized)`),this.onLog(`[${this.ts()}] Literature: \u2713 [${s}/${i}] Indexed ${e.fileName}: ${f.assertions_inserted} assertions into DuckDB.`))}finally{try{j.existsSync(m)&&j.unlinkSync(m)}catch{}}}async llmExtractFromPdfText(e,t){let s=`You are an expert molecular biologist, biochemist, and biocuration specialist.
+${args.actionableInsights}`;
+      }
+    });
+  }
+};
+
+// src/literature/IngestionRunner.ts
+var path7 = __toESM(require("path"));
+var fs7 = __toESM(require("fs"));
+var import_child_process3 = require("child_process");
+var IngestionRunner = class {
+  constructor(literatureService, client, extensionPath, onProgress, onLog) {
+    this.literatureService = literatureService;
+    this.client = client;
+    this.extensionPath = extensionPath;
+    this.onProgress = onProgress;
+    this.onLog = onLog;
+  }
+  isRunning = false;
+  shouldAbort = false;
+  getIsRunning() {
+    return this.isRunning;
+  }
+  abort() {
+    this.shouldAbort = true;
+  }
+  ts() {
+    return (/* @__PURE__ */ new Date()).toTimeString().split(" ")[0];
+  }
+  async runIngestion(dbFileName) {
+    if (this.isRunning) {
+      throw new Error("An ingestion process is already running.");
+    }
+    const viewState = this.literatureService.getViewState();
+    const queue = viewState.queue;
+    if (queue.length === 0) {
+      throw new Error("No files in the ingestion queue. Select a literature folder first.");
+    }
+    const wsRoot = this.literatureService.getWorkspaceRoot();
+    if (!wsRoot) {
+      throw new Error("No active workspace directory set.");
+    }
+    const targetDir = viewState.literatureDir || viewState.corporaDir || getLiteratureDir(wsRoot);
+    const dbPath = path7.join(targetDir, path7.basename(dbFileName));
+    if (!fs7.existsSync(dbPath)) {
+      throw new Error(`Literature database does not exist: ${dbFileName}`);
+    }
+    this.isRunning = true;
+    this.shouldAbort = false;
+    let processed = 0;
+    let errors = 0;
+    this.onLog(`[${this.ts()}] Literature: Starting batch ingestion of ${queue.length} files into ${path7.basename(dbFileName)}`);
+    try {
+      for (let i = 0; i < queue.length; i++) {
+        if (this.shouldAbort) {
+          this.onLog(`[${this.ts()}] Literature: Ingestion aborted by user.`);
+          break;
+        }
+        const item = queue[i];
+        if (item.stage === "indexed") {
+          continue;
+        }
+        try {
+          await this.processItem(item, dbPath, i + 1, queue.length);
+          processed++;
+        } catch (err) {
+          errors++;
+          item.stage = "failed";
+          item.message = err.message || String(err);
+          this.literatureService.updateQueueItem(item.id, { stage: "failed", message: item.message });
+          this.onProgress({
+            item,
+            stage: "failed",
+            message: item.message,
+            processedCount: i + 1,
+            totalCount: queue.length
+          });
+          this.onLog(`[${this.ts()}] Literature: \u274C Failed to ingest ${item.fileName}: ${item.message}`);
+        }
+      }
+    } finally {
+      this.isRunning = false;
+      this.shouldAbort = false;
+      this.literatureService.syncWorkspaceScripts();
+    }
+    this.onLog(`[${this.ts()}] Literature: Ingestion batch complete: ${processed} indexed, ${errors} failed.`);
+    if (processed > 0) {
+      try {
+        this.onLog(`[${this.ts()}] Literature: Updating database accounting report (docs/literature_database.md)...`);
+        await this.literatureService.generateReport(path7.basename(dbFileName));
+        this.onLog(`[${this.ts()}] Literature: \u2713 Updated docs/literature_database.md`);
+      } catch (repErr) {
+        this.onLog(`[${this.ts()}] Literature: Notice: could not auto-update report: ${repErr.message}`);
+      }
+    }
+    return { success: errors === 0, processed, errors };
+  }
+  async processItem(item, dbPath, currentIndex, totalCount) {
+    const notify = (stage, message) => {
+      item.stage = stage;
+      item.message = message;
+      this.literatureService.updateQueueItem(item.id, { stage, message });
+      this.onProgress({
+        item,
+        stage,
+        message,
+        processedCount: currentIndex,
+        totalCount
+      });
+    };
+    notify("parsing_pdf", "Extracting text and tables...");
+    this.onLog(`[${this.ts()}] Literature: [${currentIndex}/${totalCount}] Parsing ${item.fileName}...`);
+    const extractScript = this.findScript("extract_text_or_table.R");
+    const rscript = this.literatureService.resolveRscript();
+    const extractPayload = await this.execRJson(rscript, extractScript, [item.absPath, "25"]);
+    if (!extractPayload.ok) {
+      throw new Error(extractPayload.error || "Failed to extract text from file.");
+    }
+    notify("llm_extraction", "LLM structured extraction...");
+    this.onLog(`[${this.ts()}] Literature: [${currentIndex}/${totalCount}] Extracting assertions from ${item.fileName}...`);
+    let studyId = `doi_${path7.basename(item.fileName, path7.extname(item.fileName))}`;
+    let extractedPayload = null;
+    if (extractPayload.kind === "pdf") {
+      extractedPayload = await this.llmExtractFromPdfText(item.fileName, extractPayload.text);
+    } else {
+      extractedPayload = await this.llmExtractFromTable(item.fileName, extractPayload.columns, extractPayload.rows);
+    }
+    if (!extractedPayload || !extractedPayload.study) {
+      throw new Error("LLM failed to return structured extraction payload.");
+    }
+    extractedPayload.db_path = dbPath;
+    if (extractedPayload.study && extractedPayload.study.study_id) {
+      studyId = extractedPayload.study.study_id;
+    } else {
+      extractedPayload.study.study_id = studyId;
+    }
+    extractedPayload.study.filename = item.fileName;
+    notify("normalization", "Normalizing symbols and orthologs...");
+    this.onLog(`[${this.ts()}] Literature: [${currentIndex}/${totalCount}] Normalizing symbols via R (limma/babelgene)...`);
+    let normScript;
+    try {
+      normScript = this.findScript("normalize_and_insert_literature.R");
+    } catch {
+      normScript = this.findScript("normalize_and_insert_corpus.R");
+    }
+    const wsRoot = this.literatureService.getWorkspaceRoot();
+    const litDir = getLiteratureDir(wsRoot);
+    fs7.mkdirSync(litDir, { recursive: true });
+    const tmpJson = path7.join(litDir, `_tmp_ingest_${Date.now()}.json`);
+    try {
+      fs7.writeFileSync(tmpJson, JSON.stringify(extractedPayload, null, 2), "utf-8");
+      const normRes = await this.execRJson(rscript, normScript, [tmpJson, dbPath]);
+      if (!normRes.ok) {
+        throw new Error(normRes.error || "Normalization and insertion failed in R.");
+      }
+      if ((normRes.assertions_inserted || 0) === 0) {
+        notify("indexed", "Indexed 0 assertions (no explicit protein relationships found)");
+        this.onLog(
+          `[${this.ts()}] Literature: Warning: 0 assertions extracted from ${item.fileName}. Check if document contains explicit protein interactions or is a conceptual overview.`
+        );
+      } else {
+        notify(
+          "indexed",
+          `Indexed ${normRes.assertions_inserted} assertions (${normRes.symbols_normalized || 0} normalized)`
+        );
+        this.onLog(
+          `[${this.ts()}] Literature: \u2713 [${currentIndex}/${totalCount}] Indexed ${item.fileName}: ${normRes.assertions_inserted} assertions into DuckDB.`
+        );
+      }
+    } finally {
+      try {
+        if (fs7.existsSync(tmpJson))
+          fs7.unlinkSync(tmpJson);
+      } catch {
+      }
+    }
+  }
+  async llmExtractFromPdfText(fileName, rawText) {
+    const systemPrompt = `You are an expert molecular biologist, biochemist, and biocuration specialist.
 Your task is to extract structured scientific facts from literature text for ingestion into a Perturbation-Centric Knowledge Graph.
 
 CRITICAL INSTRUCTIONS:
@@ -215,18 +3611,1117 @@ OUTPUT SCHEMA (Must be raw valid JSON matching this exact structure):
   ]
 }
 
-Return ONLY the raw JSON object. Do not include markdown code fences or conversational text.`,i=`Paper Filename: ${e}
+Return ONLY the raw JSON object. Do not include markdown code fences or conversational text.`;
+    const userMessage = `Paper Filename: ${fileName}
 
 Text Content:
-${t.slice(0,5e4)}
+${rawText.slice(0, 5e4)}
 
-Extract all studies, contexts, and molecular assertions.`,o=await this.client.chat({system:s,messages:[{role:"user",content:i}],tools:[]});return this.cleanAndParseJson(o.content)}async llmExtractFromTable(e,t,s){let i=`You are a biocuration specialist. Convert a supplementary proteomics/genomics table into structured assertions.
-Return ONLY valid JSON with { "study": {...}, "experimental_contexts": [...], "molecular_assertions": [...] }.`,o=`Table Filename: ${e}
-Columns: ${t.join(", ")}
+Extract all studies, contexts, and molecular assertions.`;
+    const response = await this.client.chat({
+      system: systemPrompt,
+      messages: [{ role: "user", content: userMessage }],
+      tools: []
+    });
+    return this.cleanAndParseJson(response.content);
+  }
+  async llmExtractFromTable(fileName, columns, rows) {
+    const systemPrompt = `You are a biocuration specialist. Convert a supplementary proteomics/genomics table into structured assertions.
+Return ONLY valid JSON with { "study": {...}, "experimental_contexts": [...], "molecular_assertions": [...] }.`;
+    const userMessage = `Table Filename: ${fileName}
+Columns: ${columns.join(", ")}
 Top Data Rows (JSON):
-${JSON.stringify(s.slice(0,40),null,2)}
+${JSON.stringify(rows.slice(0, 40), null, 2)}
 
-Extract the study, context, and all molecular assertions with raw_entity_name and relationship_type.`,n=await this.client.chat({system:i,messages:[{role:"user",content:o}],tools:[]});return this.cleanAndParseJson(n.content)}cleanAndParseJson(e){let t=(e||"").trim();t.startsWith("```json")?t=t.slice(7):t.startsWith("```")&&(t=t.slice(3)),t.endsWith("```")&&(t=t.slice(0,-3)),t=t.trim();let s=t.indexOf("{"),i=t.lastIndexOf("}");return s!==-1&&i!==-1&&(t=t.substring(s,i+1)),JSON.parse(t)}findScript(e){let s=[M.join(this.extensionPath,"templates","shared","tools","literature",e),M.join(this.extensionPath,"extension","templates","shared","tools","literature",e),M.join(__dirname,"..","templates","shared","tools","literature",e),M.join(__dirname,"..","..","templates","shared","tools","literature",e),M.join(this.extensionPath,"templates","shared","tools","corpus",e),M.join(this.extensionPath,"extension","templates","shared","tools","corpus",e),M.join(__dirname,"..","templates","shared","tools","corpus",e),M.join(__dirname,"..","..","templates","shared","tools","corpus",e)].find(i=>j.existsSync(i));if(s)return s;throw new Error(`Literature script '${e}' not found in extension templates.`)}execRJson(e,t,s){return new Promise(i=>{(0,xe.execFile)(e,[t,...s],{timeout:9e4,maxBuffer:15*1024*1024},(o,n,r)=>{let p=String(n||"").split(/\r?\n/).find(d=>d.startsWith("@@LITERATURE_JSON@@")||d.startsWith("@@CORPUS_JSON@@"));if(p)try{let d=p.startsWith("@@LITERATURE_JSON@@")?"@@LITERATURE_JSON@@":"@@CORPUS_JSON@@";i(JSON.parse(p.slice(d.length)));return}catch(d){i({ok:!1,error:`JSON parse error: ${d.message}`,stderr:r});return}let l=String(r||o?.message||"").trim();i({ok:!1,error:l||"R process finished without output.",stderr:r})})})}};var Y=class{constructor(e,t){this._extensionUri=e;this.context=t;this.workspaceRoot=this.getActiveWorkspaceRoot(),this.literatureService=new ee(this.workspaceRoot,this._extensionUri.fsPath,()=>u.workspace.getConfiguration("tidyproteomicsagent").get("rscriptPath")),this.corpusService=this.literatureService;let s=u.workspace.getConfiguration("tidyproteomicsagent"),i=s.get("baseUrl")||t.globalState.get("tidyproteomicsagent.baseUrl")||"",o=s.get("provider")||t.globalState.get("tidyproteomicsagent.provider")||"anthropic",n=s.get("model")||t.globalState.get("tidyproteomicsagent.model")||"claude-3-7-sonnet-20250219",r=s.get("maxTokens")||t.globalState.get("tidyproteomicsagent.maxTokens")||32768,a=s.get("timeoutSeconds")||t.globalState.get("tidyproteomicsagent.timeoutSeconds")||600,p=s.get("apiKey")||t.globalState.get("tidyproteomicsagent.apiKey")||"",l={provider:o,model:n,apiKey:p,baseUrl:i,maxTokens:r,timeoutSeconds:a};this.client=new ne(l),t.secrets.get("tidyproteomicsagent.apiKey").then(d=>{d&&(this.client.updateConfig({apiKey:d}),this.syncActiveModelSummary().catch(()=>{}),this.refreshState().catch(()=>{}))},d=>{console.warn("[SidebarViewProvider] Could not load API key from secrets:",d)}),this.tools=new ae(this.workspaceRoot),this.orchestrator=new oe(this.workspaceRoot,this.client,this.tools,d=>this.sendStateUpdate(d),(d,c)=>this.sendLog(d,c),this.getExtensionVersion()),this.ingestionRunner=new re(this.literatureService,this.client,this._extensionUri.fsPath,d=>{this.sendLiteratureProgress(d),this.sendLiteratureState()},(d,c)=>this.sendLog(d,c)),this.syncActiveModelSummary().catch(()=>{}),t.subscriptions.push(u.workspace.onDidChangeConfiguration(async d=>{if(d.affectsConfiguration("tidyproteomicsagent")){let c=u.workspace.getConfiguration("tidyproteomicsagent"),g=c.get("provider");this.client.updateConfig({...g?{provider:g}:{},model:c.get("model"),baseUrl:c.get("baseUrl"),maxTokens:c.get("maxTokens"),timeoutSeconds:c.get("timeoutSeconds")}),await this.syncActiveModelSummary(),this.refreshState().catch(()=>{})}}))}static viewType="tidyproteomicsagent.sidebarView";_view;orchestrator;client;tools;literatureService;corpusService;ingestionRunner;workspaceRoot;customWorkspaceRoot;onFolderChangedCallback;getExtensionVersion(){try{if(this.context.extension?.packageJSON?.version)return this.context.extension.packageJSON.version;let e=b.join(this._extensionUri.fsPath,"package.json");if(w.existsSync(e)){let t=JSON.parse(w.readFileSync(e,"utf-8"));if(t.version)return t.version}}catch{}return"0.1.0"}async syncActiveModelSummary(){if(this.workspaceRoot)try{let e=this.getExtensionVersion();this.orchestrator&&this.orchestrator.setExtensionVersion(e),await Q(this.workspaceRoot,this.client.getConfig(),e)}catch(e){console.error("[SidebarViewProvider] Error syncing active model summary:",e)}}setCustomWorkspaceRoot(e){this.customWorkspaceRoot=e,this.workspaceRoot=e,this.literatureService.setWorkspaceRoot(e)}getActiveWorkspaceRoot(){if(this.customWorkspaceRoot&&w.existsSync(this.customWorkspaceRoot))return this.customWorkspaceRoot;let e=u.workspace.workspaceFolders;if(e&&e.length>0){let s=u.window.activeTextEditor?.document;if(s&&s.uri.scheme==="file"){let o=u.workspace.getWorkspaceFolder(s.uri);if(o){let n=o.uri.fsPath;if(n.endsWith("/extension")||n.endsWith("\\extension")){let r=b.dirname(n);if(w.existsSync(b.join(r,"agent"))||w.existsSync(b.join(r,"prompts"))||w.existsSync(b.join(r,"analysis")))return r}return n}}let i=e[0].uri.fsPath;if(i.endsWith("/extension")||i.endsWith("\\extension")){let o=b.dirname(i);if(w.existsSync(b.join(o,"agent"))||w.existsSync(b.join(o,"prompts"))||w.existsSync(b.join(o,"analysis")))return o}return i}let t=u.window.activeTextEditor?.document;if(t&&t.uri.scheme==="file"){let s=b.dirname(t.uri.fsPath);if(w.existsSync(b.join(s,"agent"))||w.existsSync(b.join(s,"prompts"))||w.existsSync(b.join(s,"analysis")))return s;let i=b.dirname(s);return w.existsSync(b.join(i,"agent"))||w.existsSync(b.join(i,"prompts"))||w.existsSync(b.join(i,"analysis"))?i:s}return""}isScanning=!1;pendingScan=!1;async onWorkspaceChanged(){try{if(this.orchestrator?.getIsRunning())return;this.customWorkspaceRoot=void 0;let e=this.getActiveWorkspaceRoot(),t=e!==this.workspaceRoot;this.workspaceRoot=e,this.tools.setWorkspaceRoot(this.workspaceRoot),this.literatureService.setWorkspaceRoot(this.workspaceRoot),this.orchestrator&&(t?await this.orchestrator.setWorkingDirectory(this.workspaceRoot):await this.refreshPhases()),await this.syncActiveModelSummary()}catch(e){console.error("[SidebarViewProvider] Error in onWorkspaceChanged:",e)}}async refreshPhases(){if(!(this.isScanning||this.orchestrator?.getIsRunning())){this.isScanning=!0;try{if(this.orchestrator){await this.orchestrator.rescanPhases();let e=await this.orchestrator.getState();this.sendStateUpdate(e)}}catch(e){console.error("[SidebarViewProvider] Error in refreshPhases:",e)}finally{this.isScanning=!1,this.pendingScan&&!this.orchestrator?.getIsRunning()&&(this.pendingScan=!1,this.refreshPhases().catch(()=>{}))}}}async refreshState(){try{if(this.orchestrator){let e=await this.orchestrator.getState();this.sendStateUpdate(e)}}catch(e){console.error("[SidebarViewProvider] Error in refreshState:",e)}}async forceReload(){if(!(this.isScanning||this.orchestrator?.getIsRunning()))try{this.orchestrator&&await this.orchestrator.forceReloadFromDisk()}catch(e){console.error("[SidebarViewProvider] Error in forceReload:",e)}}async resetAllState(){if(!(this.isScanning||this.orchestrator?.getIsRunning()))try{await this.syncActiveModelSummary(),this.orchestrator&&await this.orchestrator.resetAllState()}catch(e){console.error("[SidebarViewProvider] Error in resetAllState:",e)}}resolveWebviewView(e,t,s){this._view=e,e.webview.options={enableScripts:!0,localResourceRoots:[this._extensionUri]},e.webview.html=this._getHtmlForWebview(e.webview),setTimeout(()=>{this.syncActiveModelSummary().catch(()=>{}),this.refreshPhases().catch(()=>{})},150),e.onDidChangeVisibility(()=>{e.visible&&(this.orchestrator?.getIsRunning()?this.refreshState().catch(()=>{}):this.refreshPhases().catch(()=>{}))}),e.webview.onDidReceiveMessage(async i=>{try{switch(i.type){case"saveConfig":{let o=Number(i.maxTokens)||32768,n=Number(i.timeoutSeconds)||600;this.client.updateConfig({provider:i.provider,model:i.model,apiKey:i.apiKey,baseUrl:i.baseUrl,maxTokens:o,timeoutSeconds:n}),i.apiKey?await this.context.secrets.store("tidyproteomicsagent.apiKey",i.apiKey):i.apiKey===""&&await this.context.secrets.delete("tidyproteomicsagent.apiKey");try{let a=u.workspace.getConfiguration("tidyproteomicsagent");await a.update("provider",i.provider,u.ConfigurationTarget.Global),await a.update("model",i.model,u.ConfigurationTarget.Global),await a.update("baseUrl",i.baseUrl,u.ConfigurationTarget.Global),await a.update("maxTokens",o,u.ConfigurationTarget.Global),await a.update("timeoutSeconds",n,u.ConfigurationTarget.Global)}catch{}await this.context.globalState.update("tidyproteomicsagent.provider",i.provider),await this.context.globalState.update("tidyproteomicsagent.model",i.model),await this.context.globalState.update("tidyproteomicsagent.baseUrl",i.baseUrl),await this.context.globalState.update("tidyproteomicsagent.maxTokens",o),await this.context.globalState.update("tidyproteomicsagent.timeoutSeconds",n),await this.syncActiveModelSummary(),i.silent||u.window.showInformationMessage("TidyProteomicsAgent: Configuration saved!");let r=await this.orchestrator?.getState();r&&this.sendStateUpdate(r);break}case"startPipeline":{if(!this.workspaceRoot){u.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");return}let o=this.client.getConfig();if(o.provider!=="ollama"&&!o.apiKey){u.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key first.");return}await this.syncActiveModelSummary(),this.orchestrator?.runFullPipeline().catch(n=>{u.window.showErrorMessage(`TidyProteomicsAgent: Pipeline error - ${n.message}`)});break}case"runPhase":{if(!this.workspaceRoot){u.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");return}let o=this.client.getConfig();if(o.provider!=="ollama"&&!o.apiKey){u.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key first.");return}await this.syncActiveModelSummary(),this.orchestrator?.runSinglePhase(i.phaseId).catch(n=>{u.window.showErrorMessage(`TidyProteomicsAgent: Phase execution error - ${n.message}`)});break}case"togglePhase":{this.orchestrator?.togglePhase(i.phaseId,i.enabled);break}case"stopPipeline":{this.orchestrator?.stop();break}case"forceReload":{await this.forceReload();break}case"resetState":{await this.resetAllState();break}case"openFile":{if(!this.workspaceRoot){u.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");return}let o=i.relPath||"",n=b.isAbsolute(o)?o:b.join(this.workspaceRoot,o);try{w.existsSync(n)||(w.mkdirSync(b.dirname(n),{recursive:!0}),w.writeFileSync(n,"","utf-8"));let r=await u.workspace.openTextDocument(n),a;if(i.line&&i.line>0){let l=Math.min(i.line-1,r.lineCount-1);a=new u.Range(l,0,l,0)}else if(i.searchText){let d=r.getText().indexOf(i.searchText);if(d!==-1){let c=r.positionAt(d);a=new u.Range(c,c)}}let p=await u.window.showTextDocument(r,a?{selection:a}:void 0);a&&p.revealRange(a,u.TextEditorRevealType.InCenter)}catch(r){u.window.showErrorMessage(`TidyProteomicsAgent: Could not open ${o}: ${r.message}`)}break}case"authorizeConfoundingAndRerun":{if(!this.workspaceRoot)return;let o=b.join(this.workspaceRoot,"docs","experiment.md");try{if(w.existsSync(o)){let r=await w.promises.readFile(o,"utf-8"),a=!1;r.includes("Proceed With Potential Batch Confounding**: FALSE")?(r=r.replace("Proceed With Potential Batch Confounding**: FALSE","Proceed With Potential Batch Confounding**: TRUE"),a=!0):r.includes("Authorize Unadjusted Exploratory Comparison**: FALSE")&&(r=r.replace("Authorize Unadjusted Exploratory Comparison**: FALSE","Authorize Unadjusted Exploratory Comparison**: TRUE"),a=!0),a&&(await w.promises.writeFile(o,r,"utf-8"),u.window.showInformationMessage("TidyProteomicsAgent: Batch confounding authorized in docs/experiment.md. Rerunning phase..."))}let n=i.phaseId;n&&this.orchestrator&&(await this.syncActiveModelSummary(),this.orchestrator.runSinglePhase(n).catch(r=>{u.window.showErrorMessage(`TidyProteomicsAgent: Phase execution error - ${r.message}`)}))}catch(n){u.window.showErrorMessage(`TidyProteomicsAgent: Could not update docs/experiment.md: ${n.message}`)}break}case"openPhase":{if(!this.workspaceRoot){u.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");return}let o=i.fileName||"",n=o.includes("/")||o.includes("\\")?b.join(this.workspaceRoot,o):b.join(this.workspaceRoot,"analysis",o);try{let r=await u.workspace.openTextDocument(n);await u.window.showTextDocument(r)}catch(r){u.window.showErrorMessage(`TidyProteomicsAgent: Could not open ${o}: ${r.message}`)}break}case"copyPath":{this.workspaceRoot&&(await u.env.clipboard.writeText(this.workspaceRoot),u.window.showInformationMessage("TidyProteomicsAgent: Workspace path copied to clipboard!"));break}case"revealInOS":{this.workspaceRoot&&await u.commands.executeCommand("revealFileInOS",u.Uri.file(this.workspaceRoot));break}case"selectDirectory":{let o=await u.window.showOpenDialog({canSelectFiles:!1,canSelectFolders:!0,canSelectMany:!1,openLabel:"Select Analysis Folder"});if(o&&o.length>0){let n=o[0].fsPath;this.customWorkspaceRoot=n,this.workspaceRoot=n,this.tools.setWorkspaceRoot(this.workspaceRoot),this.literatureService.setWorkspaceRoot(this.workspaceRoot),this.orchestrator&&await this.orchestrator.setWorkingDirectory(this.workspaceRoot),await this.refreshPhases(),await this.syncActiveModelSummary(),this.onFolderChangedCallback&&this.onFolderChangedCallback(this.workspaceRoot),u.window.showInformationMessage(`TidyProteomicsAgent: Active directory set to ${this.workspaceRoot}`)}break}case"rescanWorkspace":{await this.onWorkspaceChanged(),u.window.showInformationMessage("TidyProteomicsAgent: Rescanned workspace folders and phases.");break}case"createMissingFolders":{if(!this.workspaceRoot){u.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");return}let o=["analysis","agent","code","data",b.join("data","raw"),"docs","logs","tools"];for(let n of o){let r=b.join(this.workspaceRoot,n);w.existsSync(r)||w.mkdirSync(r,{recursive:!0})}await this.refreshPhases(),u.window.showInformationMessage("TidyProteomicsAgent: Standard project folders initialized!");break}case"initWorkspace":{await this.initWorkspace(i.pipelineId||"differential_expression");break}case"promptInitWorkspace":{await this.promptInitWorkspace();break}case"requestState":{await this.refreshState(),this.sendCorpusState();break}case"literatureGetState":case"corpusGetState":{this.sendLiteratureState();break}case"literatureSelect":case"corpusSelect":{try{this.syncLiteratureWorkspace(),this.literatureService.setActiveLiterature(i.fileName),this.sendLiteratureState(),await this.refreshState()}catch(o){u.window.showErrorMessage(`TidyProteomicsAgent: ${o.message}`)}break}case"literatureCreate":case"corpusCreate":{try{this.syncLiteratureWorkspace();let o=await this.literatureService.createDatabase(i.name);u.window.showInformationMessage(`TidyProteomicsAgent: Created literature database '${o.fileName}'`),this.sendLiteratureState(),await this.refreshState()}catch(o){u.window.showErrorMessage(`TidyProteomicsAgent: ${o.message}`)}break}case"literatureToggleSynthesis":case"corpusToggleSynthesis":{this.syncLiteratureWorkspace(),this.literatureService.setUseInSynthesis(!!i.enabled),this.sendLiteratureState(),await this.refreshState();break}case"literatureStats":case"corpusStats":{this.syncLiteratureWorkspace();let o=await this.literatureService.getStats(i.fileName);if(this._view&&this._view.webview){let n=o.stats||o.data?.stats||o.data?.totals;this._view.webview.postMessage({type:"literatureStats",result:o,stats:n}),this._view.webview.postMessage({type:"corpusStats",result:o,stats:n})}break}case"literatureSearch":case"corpusSearch":{let o=await this.literatureService.search(i.query,i.limit||50,i.fileName);if(this._view&&this._view.webview){let n=o.results||o.data?.results||o.data?.rows||[];this._view.webview.postMessage({type:"literatureSearchResult",result:o,results:n}),this._view.webview.postMessage({type:"corpusSearchResult",result:o,results:n})}break}case"literaturePickFolder":case"corpusPickFolder":{let o=await u.window.showOpenDialog({canSelectFiles:!1,canSelectFolders:!0,canSelectMany:!1,openLabel:"Select Literature Folder"});if(o&&o.length>0){let n=o[0].fsPath;try{this.literatureService.scanIngestFolder(n),this.sendLiteratureState(),u.window.showInformationMessage(`TidyProteomicsAgent: Found ${this.literatureService.getViewState().queue.length} document(s) for ingestion queue.`)}catch(r){u.window.showErrorMessage(`TidyProteomicsAgent: ${r.message}`)}}break}case"literatureClearQueue":case"corpusClearQueue":{this.literatureService.clearQueue(),this.sendLiteratureState();break}case"literatureStartIngest":case"corpusStartIngest":{let o=this.client.getConfig();if(o.provider!=="ollama"&&!o.apiKey){u.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key in the Provider tab before running literature extraction.");return}let n=i.fileName||this.literatureService.getConfig().activeLiterature||this.literatureService.getConfig().activeCorpus;if(!n){u.window.showErrorMessage("TidyProteomicsAgent: Please select or create an active literature database first.");return}this.sendLiteratureState(),this.ingestionRunner.runIngestion(n).then(async r=>{this.sendLiteratureState();let a=await this.literatureService.getStats(n);if(this._view&&this._view.webview){let p=a.stats||a.data?.stats||a.data?.totals;this._view.webview.postMessage({type:"literatureStats",result:a,stats:p}),this._view.webview.postMessage({type:"corpusStats",result:a,stats:p})}r.success?u.window.showInformationMessage(`TidyProteomicsAgent: Indexed ${r.processed} document(s) into ${n}!`):u.window.showWarningMessage(`TidyProteomicsAgent: Ingestion finished with ${r.errors} error(s). See log for details.`)}).catch(r=>{u.window.showErrorMessage(`TidyProteomicsAgent: Ingestion error - ${r.message}`),this.sendLiteratureState()});break}case"literatureAbortIngest":case"corpusAbortIngest":{this.ingestionRunner.abort(),u.window.showInformationMessage("TidyProteomicsAgent: Aborting ingestion...");break}case"literatureGenerateReport":{let o=i.fileName||this.literatureService.getConfig().activeLiterature||this.literatureService.getConfig().activeCorpus;if(!o){u.window.showErrorMessage("TidyProteomicsAgent: Please select or create an active literature database first.");return}try{u.window.showInformationMessage(`TidyProteomicsAgent: Generating accounting report for ${o}...`);let n=await this.literatureService.generateReport(o);if(n.ok){u.window.showInformationMessage("TidyProteomicsAgent: Generated docs/literature_database.md");let r=b.join(this.workspaceRoot||"","docs","literature_database.md");if(w.existsSync(r)){let a=await u.workspace.openTextDocument(r);await u.window.showTextDocument(a,{preview:!1})}}else u.window.showErrorMessage(`TidyProteomicsAgent: Failed to generate report: ${n.error}`)}catch(n){u.window.showErrorMessage(`TidyProteomicsAgent: Report generation error - ${n.message}`)}break}case"literatureOpenReport":{let o=b.join(this.workspaceRoot||"","docs","literature_database.md");if(w.existsSync(o)){let n=await u.workspace.openTextDocument(o);await u.window.showTextDocument(n,{preview:!1})}else{let n=this.literatureService.getConfig().activeLiterature||this.literatureService.getConfig().activeCorpus;if(n&&(await this.literatureService.generateReport(n)).ok&&w.existsSync(o)){let a=await u.workspace.openTextDocument(o);await u.window.showTextDocument(a,{preview:!1});return}u.window.showWarningMessage("TidyProteomicsAgent: docs/literature_database.md does not exist yet. Click 'Regenerate' first.")}break}}}catch(o){u.window.showErrorMessage(`TidyProteomicsAgent Error: ${o.message}`)}})}async promptInitWorkspace(){if(!this.workspaceRoot){let s=await u.window.showOpenDialog({canSelectFiles:!1,canSelectFolders:!0,canSelectMany:!1,openLabel:"Select Analysis Folder to Initialize"});if(s&&s.length>0)this.workspaceRoot=s[0].fsPath,this.customWorkspaceRoot=this.workspaceRoot,this.tools.setWorkspaceRoot(this.workspaceRoot),this.literatureService.setWorkspaceRoot(this.workspaceRoot),this.orchestrator&&await this.orchestrator.setWorkingDirectory(this.workspaceRoot),this.onFolderChangedCallback&&this.onFolderChangedCallback(this.workspaceRoot),await this.syncActiveModelSummary();else return}let e=[{label:"$(symbol-structure) Differential Expression Pipeline",description:"Full 11-phase workflow (Install, Inspect, Normalize, Impute, Expression, Enrichment, Observations, Knowledge, WebSearch, Literature, Synthesis)",id:"differential_expression"},{label:"$(graph) Quality Control & Exploration Pipeline",description:"2-phase rapid QC and exploratory data analysis",id:"quality_control_only"}],t=await u.window.showQuickPick(e,{placeHolder:"Select a pipeline template to initialize this workspace"});t&&await this.initWorkspace(t.id)}async initWorkspace(e="differential_expression"){if(!this.workspaceRoot){let t=await u.window.showOpenDialog({canSelectFiles:!1,canSelectFolders:!0,canSelectMany:!1,openLabel:"Select Analysis Folder to Initialize"});if(t&&t.length>0)this.workspaceRoot=t[0].fsPath,this.customWorkspaceRoot=this.workspaceRoot,this.tools.setWorkspaceRoot(this.workspaceRoot),this.literatureService.setWorkspaceRoot(this.workspaceRoot),this.orchestrator&&await this.orchestrator.setWorkingDirectory(this.workspaceRoot),this.onFolderChangedCallback&&this.onFolderChangedCallback(this.workspaceRoot),await this.syncActiveModelSummary();else return u.window.showErrorMessage("TidyProteomicsAgent: Please open or select a workspace folder first."),!1}try{let s=[b.join(this._extensionUri.fsPath,"templates"),b.join(this._extensionUri.fsPath,"extension","templates"),b.join(this.context.extensionPath,"templates"),b.join(this.context.extensionPath,"extension","templates"),b.join(__dirname,"..","templates"),b.join(__dirname,"..","..","templates"),b.join(__dirname,"templates"),b.join(this.workspaceRoot,"extension","templates"),b.join(this.workspaceRoot,"templates")].find(d=>w.existsSync(d));if(!s)return u.window.showErrorMessage("TidyProteomicsAgent: Template directory not found in extension or workspace."),!1;let i=["analysis","agent","code","data",b.join("data","raw"),"docs","logs","tools"];for(let d of i){let c=b.join(this.workspaceRoot,d);w.existsSync(c)||w.mkdirSync(c,{recursive:!0})}let o=(d,c,g=!1)=>{w.existsSync(d)&&(g||!w.existsSync(c))&&(w.mkdirSync(b.dirname(c),{recursive:!0}),w.copyFileSync(d,c))},n=b.join(s,"shared");if(w.existsSync(n)){o(b.join(n,"code","00_install.R"),b.join(this.workspaceRoot,"code","00_install.R"),!0),o(b.join(n,"tools","lint_tidyproteomics.R"),b.join(this.workspaceRoot,"tools","lint_tidyproteomics.R"),!0),o(b.join(n,"agent","PROTOCOL.md"),b.join(this.workspaceRoot,"agent","PROTOCOL.md"),!0),o(b.join(n,"agent","SKILL.md"),b.join(this.workspaceRoot,"agent","SKILL.md"),!0),o(b.join(n,"docs","experiment.md"),b.join(this.workspaceRoot,"docs","experiment.md"),!1),o(b.join(n,"docs","notes.md"),b.join(this.workspaceRoot,"docs","notes.md"),!1),o(b.join(n,"docs","concept.md"),b.join(this.workspaceRoot,"docs","concept.md"),!1),o(b.join(n,".gitignore"),b.join(this.workspaceRoot,".gitignore"),!1),o(b.join(n,"logs",".gitkeep"),b.join(this.workspaceRoot,"logs",".gitkeep"),!1),o(b.join(n,"data","raw",".gitkeep"),b.join(this.workspaceRoot,"data","raw",".gitkeep"),!1);let d=b.join(n,"tools","literature");if(w.existsSync(d)){let g=w.readdirSync(d).filter(m=>m.endsWith(".R"));for(let m of g)o(b.join(d,m),b.join(this.workspaceRoot,"tools","literature",m),!0)}let c=b.join(this.workspaceRoot,"literature");w.existsSync(c)||w.mkdirSync(c,{recursive:!0})}let r=b.join(s,"pipelines",e);if(w.existsSync(r)||(r=b.join(s,"pipelines","differential_expression")),w.existsSync(r)){let d=w.readdirSync(r).filter(c=>c.endsWith(".md"));for(let c of d)o(b.join(r,c),b.join(this.workspaceRoot,"analysis",c),!0)}else u.window.showWarningMessage(`TidyProteomicsAgent: Pipeline templates not found in ${s}/pipelines.`);await this.syncActiveModelSummary(),await this.refreshPhases();let a=await this.orchestrator?.getState();a&&this.sendStateUpdate(a);let p=e==="quality_control_only"?"Quality Control & Exploration":"Standard Differential Expression";u.window.showInformationMessage(`TidyProteomicsAgent: Workspace initialized with ${p} pipeline!`);let l=b.join(this.workspaceRoot,"docs","experiment.md");if(w.existsSync(l))try{let d=await u.workspace.openTextDocument(l);await u.window.showTextDocument(d)}catch{}return!0}catch(t){return u.window.showErrorMessage(`TidyProteomicsAgent: Failed to initialize workspace - ${t.message}`),!1}}startPipeline(){if(!this.workspaceRoot){u.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");return}if(this.orchestrator&&this.orchestrator.getPhases().length===0){u.window.showInformationMessage("TidyProteomicsAgent: No analysis tasks found to execute. Please initialize an analysis pipeline first.");return}this.syncActiveModelSummary().catch(()=>{}),this.orchestrator?.runFullPipeline().catch(e=>{u.window.showErrorMessage(`TidyProteomicsAgent: Pipeline error - ${e.message}`)})}async runSelectedPhase(){if(!this.workspaceRoot){u.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");return}let e=this.client.getConfig();if(e.provider!=="ollama"&&!e.apiKey){u.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key first.");return}if(await this.syncActiveModelSummary(),!this.orchestrator)return;let t=this.orchestrator.getPhases();if(t.length===0){u.window.showInformationMessage("TidyProteomicsAgent: No phases found to run.");return}let s=t.find(n=>n.status==="running")||t.find(n=>n.status==="pending"&&n.enabled!==!1)||t[0],i=t.map(n=>({label:n.title,description:`(${n.fileName}) - ${n.status.toUpperCase()}`,phaseId:n.id,picked:n.id===s?.id})),o=await u.window.showQuickPick(i,{placeHolder:"Select phase to run in isolation"});o&&this.orchestrator.runSinglePhase(o.phaseId).catch(n=>{u.window.showErrorMessage(`TidyProteomicsAgent: Error running phase - ${n.message}`)})}sendStateUpdate(e){if(this._view&&this._view.webview)try{let t=this._view.webview.postMessage({type:"stateUpdate",state:e});t&&typeof t.then=="function"&&t.then(void 0,s=>{console.warn("[SidebarViewProvider] Failed to post stateUpdate:",s)})}catch(t){console.warn("[SidebarViewProvider] Exception posting stateUpdate:",t)}}syncLiteratureWorkspace(){let e=this.getActiveWorkspaceRoot();return e&&e!==this.workspaceRoot?(this.workspaceRoot=e,this.tools.setWorkspaceRoot(e),this.literatureService.setWorkspaceRoot(e)):e&&this.literatureService.setWorkspaceRoot(e),this.workspaceRoot}sendLiteratureState(){if(this._view&&this._view.webview)try{this.syncLiteratureWorkspace();let e=this.literatureService.getViewState(this.ingestionRunner.getIsRunning()?"ingesting":void 0),t=this._view.webview.postMessage({type:"literatureState",state:e});t&&typeof t.then=="function"&&t.then(void 0,i=>{console.warn("[SidebarViewProvider] Failed to post literatureState:",i)});let s=this._view.webview.postMessage({type:"corpusState",state:e});s&&typeof s.then=="function"&&s.then(void 0,i=>{console.warn("[SidebarViewProvider] Failed to post corpusState:",i)})}catch(e){console.warn("[SidebarViewProvider] Exception posting literatureState:",e)}}sendCorpusState(){this.sendLiteratureState()}sendLiteratureProgress(e){if(this._view&&this._view.webview)try{this._view.webview.postMessage({type:"literatureProgress",event:e}),this._view.webview.postMessage({type:"corpusProgress",event:e})}catch(t){console.warn("[SidebarViewProvider] Exception posting literatureProgress:",t)}}sendCorpusProgress(e){this.sendLiteratureProgress(e)}sendLog(e,t=!1){if(this._view&&this._view.webview)try{let s=this._view.webview.postMessage({type:"log",text:e,updateLast:t});s&&typeof s.then=="function"&&s.then(void 0,i=>{console.warn("[SidebarViewProvider] Failed to post log:",i)})}catch(s){console.warn("[SidebarViewProvider] Exception posting log:",s)}}escapeAttr(e){return String(e||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/'/g,"&#39;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}_cachedIcons;_loadIcons(){let e={},t=b.join(this._extensionUri.fsPath,"media");try{if(w.existsSync(t)){let s=w.readdirSync(t);for(let i of s)if(i.endsWith(".svg")){let o=i.replace(".svg",""),n=w.readFileSync(b.join(t,i),"utf-8");n=n.replace(/<\?xml[^>]*\?>/g,"").trim(),n=n.replace(/\s(width|height)="[^"]*"/g,""),o==="robot"?n=n.replace("<svg ",`<svg class="svg-icon svg-icon-${o}" `):n=n.replace("<svg ",`<svg class="svg-icon svg-icon-${o}" fill="currentColor" `),e[o]=n}}}catch(s){console.error("[SidebarViewProvider] Error loading SVG icons:",s)}return e}_getIcons(){return this._cachedIcons||(this._cachedIcons=this._loadIcons()),this._cachedIcons}_getHtmlForWebview(e){let t=this.client.getConfig(),s=this._getIcons();return`<!DOCTYPE html>
+Extract the study, context, and all molecular assertions with raw_entity_name and relationship_type.`;
+    const response = await this.client.chat({
+      system: systemPrompt,
+      messages: [{ role: "user", content: userMessage }],
+      tools: []
+    });
+    return this.cleanAndParseJson(response.content);
+  }
+  cleanAndParseJson(content) {
+    let clean = (content || "").trim();
+    if (clean.startsWith("```json"))
+      clean = clean.slice(7);
+    else if (clean.startsWith("```"))
+      clean = clean.slice(3);
+    if (clean.endsWith("```"))
+      clean = clean.slice(0, -3);
+    clean = clean.trim();
+    const firstBrace = clean.indexOf("{");
+    const lastBrace = clean.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace !== -1) {
+      clean = clean.substring(firstBrace, lastBrace + 1);
+    }
+    return JSON.parse(clean);
+  }
+  findScript(scriptName) {
+    const candidates = [
+      path7.join(this.extensionPath, "templates", "shared", "tools", "literature", scriptName),
+      path7.join(this.extensionPath, "extension", "templates", "shared", "tools", "literature", scriptName),
+      path7.join(__dirname, "..", "templates", "shared", "tools", "literature", scriptName),
+      path7.join(__dirname, "..", "..", "templates", "shared", "tools", "literature", scriptName),
+      // Legacy fallbacks
+      path7.join(this.extensionPath, "templates", "shared", "tools", "corpus", scriptName),
+      path7.join(this.extensionPath, "extension", "templates", "shared", "tools", "corpus", scriptName),
+      path7.join(__dirname, "..", "templates", "shared", "tools", "corpus", scriptName),
+      path7.join(__dirname, "..", "..", "templates", "shared", "tools", "corpus", scriptName)
+    ];
+    const hit = candidates.find((c) => fs7.existsSync(c));
+    if (hit)
+      return hit;
+    throw new Error(`Literature script '${scriptName}' not found in extension templates.`);
+  }
+  execRJson(rscript, scriptPath, args) {
+    return new Promise((resolve2) => {
+      (0, import_child_process3.execFile)(
+        rscript,
+        [scriptPath, ...args],
+        { timeout: 9e4, maxBuffer: 15 * 1024 * 1024 },
+        (error, stdout, stderr) => {
+          const lines = String(stdout || "").split(/\r?\n/);
+          const line = lines.find((l) => l.startsWith("@@LITERATURE_JSON@@") || l.startsWith("@@CORPUS_JSON@@"));
+          if (line) {
+            try {
+              const marker = line.startsWith("@@LITERATURE_JSON@@") ? "@@LITERATURE_JSON@@" : "@@CORPUS_JSON@@";
+              resolve2(JSON.parse(line.slice(marker.length)));
+              return;
+            } catch (err) {
+              resolve2({ ok: false, error: `JSON parse error: ${err.message}`, stderr });
+              return;
+            }
+          }
+          const msg = String(stderr || error?.message || "").trim();
+          resolve2({ ok: false, error: msg || "R process finished without output.", stderr });
+        }
+      );
+    });
+  }
+};
+
+// src/ui/SidebarViewProvider.ts
+var SidebarViewProvider = class {
+  constructor(_extensionUri, context) {
+    this._extensionUri = _extensionUri;
+    this.context = context;
+    this.workspaceRoot = this.getActiveWorkspaceRoot();
+    this.literatureService = new LiteratureService(
+      this.workspaceRoot,
+      this._extensionUri.fsPath,
+      () => vscode.workspace.getConfiguration("tidyproteomicsagent").get("rscriptPath")
+    );
+    this.corpusService = this.literatureService;
+    const wsConfig = vscode.workspace.getConfiguration("tidyproteomicsagent");
+    const savedBaseUrl = wsConfig.get("baseUrl") || context.globalState.get("tidyproteomicsagent.baseUrl") || "";
+    const savedProvider = wsConfig.get("provider") || context.globalState.get("tidyproteomicsagent.provider") || "anthropic";
+    const savedModel = wsConfig.get("model") || context.globalState.get("tidyproteomicsagent.model") || "claude-3-7-sonnet-20250219";
+    const savedMaxTokens = wsConfig.get("maxTokens") || context.globalState.get("tidyproteomicsagent.maxTokens") || 32768;
+    const savedTimeoutSeconds = wsConfig.get("timeoutSeconds") || context.globalState.get("tidyproteomicsagent.timeoutSeconds") || 600;
+    const fallbackApiKey = wsConfig.get("apiKey") || context.globalState.get("tidyproteomicsagent.apiKey") || "";
+    const config = {
+      provider: savedProvider,
+      model: savedModel,
+      apiKey: fallbackApiKey,
+      baseUrl: savedBaseUrl,
+      maxTokens: savedMaxTokens,
+      timeoutSeconds: savedTimeoutSeconds
+    };
+    this.client = new ProviderClient(config);
+    context.secrets.get("tidyproteomicsagent.apiKey").then(
+      (secretKey) => {
+        if (secretKey) {
+          this.client.updateConfig({ apiKey: secretKey });
+          this.syncActiveModelSummary().catch(() => {
+          });
+          this.refreshState().catch(() => {
+          });
+        }
+      },
+      (err) => {
+        console.warn("[SidebarViewProvider] Could not load API key from secrets:", err);
+      }
+    );
+    this.tools = new ToolRegistry(this.workspaceRoot);
+    this.orchestrator = new PipelineOrchestrator(
+      this.workspaceRoot,
+      this.client,
+      this.tools,
+      (state) => this.sendStateUpdate(state),
+      (log, updateLast) => this.sendLog(log, updateLast),
+      this.getExtensionVersion()
+    );
+    this.ingestionRunner = new IngestionRunner(
+      this.literatureService,
+      this.client,
+      this._extensionUri.fsPath,
+      (ev) => {
+        this.sendLiteratureProgress(ev);
+        this.sendLiteratureState();
+      },
+      (log, updateLast) => this.sendLog(log, updateLast)
+    );
+    this.syncActiveModelSummary().catch(() => {
+    });
+    context.subscriptions.push(
+      vscode.workspace.onDidChangeConfiguration(async (e) => {
+        if (e.affectsConfiguration("tidyproteomicsagent")) {
+          const cfg = vscode.workspace.getConfiguration("tidyproteomicsagent");
+          const updatedProv = cfg.get("provider");
+          this.client.updateConfig({
+            ...updatedProv ? { provider: updatedProv } : {},
+            model: cfg.get("model"),
+            baseUrl: cfg.get("baseUrl"),
+            maxTokens: cfg.get("maxTokens"),
+            timeoutSeconds: cfg.get("timeoutSeconds")
+          });
+          await this.syncActiveModelSummary();
+          this.refreshState().catch(() => {
+          });
+        }
+      })
+    );
+  }
+  static viewType = "tidyproteomicsagent.sidebarView";
+  _view;
+  orchestrator;
+  client;
+  tools;
+  literatureService;
+  corpusService;
+  ingestionRunner;
+  workspaceRoot;
+  customWorkspaceRoot;
+  onFolderChangedCallback;
+  getExtensionVersion() {
+    try {
+      if (this.context.extension?.packageJSON?.version) {
+        return this.context.extension.packageJSON.version;
+      }
+      const pkgPath = path8.join(this._extensionUri.fsPath, "package.json");
+      if (fs8.existsSync(pkgPath)) {
+        const pkg = JSON.parse(fs8.readFileSync(pkgPath, "utf-8"));
+        if (pkg.version)
+          return pkg.version;
+      }
+    } catch (_) {
+    }
+    return "0.1.0";
+  }
+  async syncActiveModelSummary() {
+    if (!this.workspaceRoot)
+      return;
+    try {
+      const version = this.getExtensionVersion();
+      if (this.orchestrator) {
+        this.orchestrator.setExtensionVersion(version);
+      }
+      await writeActiveModelSummaryFile(this.workspaceRoot, this.client.getConfig(), version);
+    } catch (err) {
+      console.error("[SidebarViewProvider] Error syncing active model summary:", err);
+    }
+  }
+  setCustomWorkspaceRoot(folderPath) {
+    this.customWorkspaceRoot = folderPath;
+    this.workspaceRoot = folderPath;
+    this.literatureService.setWorkspaceRoot(folderPath);
+  }
+  getActiveWorkspaceRoot() {
+    if (this.customWorkspaceRoot && fs8.existsSync(this.customWorkspaceRoot)) {
+      return this.customWorkspaceRoot;
+    }
+    const folders = vscode.workspace.workspaceFolders;
+    if (folders && folders.length > 0) {
+      const activeDoc2 = vscode.window.activeTextEditor?.document;
+      if (activeDoc2 && activeDoc2.uri.scheme === "file") {
+        const matchingFolder = vscode.workspace.getWorkspaceFolder(activeDoc2.uri);
+        if (matchingFolder) {
+          const fsPath2 = matchingFolder.uri.fsPath;
+          if (fsPath2.endsWith("/extension") || fsPath2.endsWith("\\extension")) {
+            const parent = path8.dirname(fsPath2);
+            if (fs8.existsSync(path8.join(parent, "agent")) || fs8.existsSync(path8.join(parent, "prompts")) || fs8.existsSync(path8.join(parent, "analysis"))) {
+              return parent;
+            }
+          }
+          return fsPath2;
+        }
+      }
+      const fsPath = folders[0].uri.fsPath;
+      if (fsPath.endsWith("/extension") || fsPath.endsWith("\\extension")) {
+        const parent = path8.dirname(fsPath);
+        if (fs8.existsSync(path8.join(parent, "agent")) || fs8.existsSync(path8.join(parent, "prompts")) || fs8.existsSync(path8.join(parent, "analysis"))) {
+          return parent;
+        }
+      }
+      return fsPath;
+    }
+    const activeDoc = vscode.window.activeTextEditor?.document;
+    if (activeDoc && activeDoc.uri.scheme === "file") {
+      const docDir = path8.dirname(activeDoc.uri.fsPath);
+      if (fs8.existsSync(path8.join(docDir, "agent")) || fs8.existsSync(path8.join(docDir, "prompts")) || fs8.existsSync(path8.join(docDir, "analysis"))) {
+        return docDir;
+      }
+      const parentDir = path8.dirname(docDir);
+      if (fs8.existsSync(path8.join(parentDir, "agent")) || fs8.existsSync(path8.join(parentDir, "prompts")) || fs8.existsSync(path8.join(parentDir, "analysis"))) {
+        return parentDir;
+      }
+      return docDir;
+    }
+    return "";
+  }
+  isScanning = false;
+  pendingScan = false;
+  async onWorkspaceChanged() {
+    try {
+      if (this.orchestrator?.getIsRunning()) {
+        return;
+      }
+      this.customWorkspaceRoot = void 0;
+      const newRoot = this.getActiveWorkspaceRoot();
+      const changed = newRoot !== this.workspaceRoot;
+      this.workspaceRoot = newRoot;
+      this.tools.setWorkspaceRoot(this.workspaceRoot);
+      this.literatureService.setWorkspaceRoot(this.workspaceRoot);
+      if (this.orchestrator) {
+        if (changed) {
+          await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
+        } else {
+          await this.refreshPhases();
+        }
+      }
+      await this.syncActiveModelSummary();
+    } catch (err) {
+      console.error("[SidebarViewProvider] Error in onWorkspaceChanged:", err);
+    }
+  }
+  async refreshPhases() {
+    if (this.isScanning || this.orchestrator?.getIsRunning()) {
+      return;
+    }
+    this.isScanning = true;
+    try {
+      if (this.orchestrator) {
+        await this.orchestrator.rescanPhases();
+        const state = await this.orchestrator.getState();
+        this.sendStateUpdate(state);
+      }
+    } catch (err) {
+      console.error("[SidebarViewProvider] Error in refreshPhases:", err);
+    } finally {
+      this.isScanning = false;
+      if (this.pendingScan && !this.orchestrator?.getIsRunning()) {
+        this.pendingScan = false;
+        this.refreshPhases().catch(() => {
+        });
+      }
+    }
+  }
+  async refreshState() {
+    try {
+      if (this.orchestrator) {
+        const state = await this.orchestrator.getState();
+        this.sendStateUpdate(state);
+      }
+    } catch (err) {
+      console.error("[SidebarViewProvider] Error in refreshState:", err);
+    }
+  }
+  async forceReload() {
+    if (this.isScanning || this.orchestrator?.getIsRunning()) {
+      return;
+    }
+    try {
+      if (this.orchestrator) {
+        await this.orchestrator.forceReloadFromDisk();
+      }
+    } catch (err) {
+      console.error("[SidebarViewProvider] Error in forceReload:", err);
+    }
+  }
+  async resetAllState() {
+    if (this.isScanning || this.orchestrator?.getIsRunning()) {
+      return;
+    }
+    try {
+      await this.syncActiveModelSummary();
+      if (this.orchestrator) {
+        await this.orchestrator.resetAllState();
+      }
+    } catch (err) {
+      console.error("[SidebarViewProvider] Error in resetAllState:", err);
+    }
+  }
+  resolveWebviewView(webviewView, _context, _token) {
+    this._view = webviewView;
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [this._extensionUri]
+    };
+    webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+    setTimeout(() => {
+      this.syncActiveModelSummary().catch(() => {
+      });
+      this.refreshPhases().catch(() => {
+      });
+    }, 150);
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        if (!this.orchestrator?.getIsRunning()) {
+          this.refreshPhases().catch(() => {
+          });
+        } else {
+          this.refreshState().catch(() => {
+          });
+        }
+      }
+    });
+    webviewView.webview.onDidReceiveMessage(async (data) => {
+      try {
+        switch (data.type) {
+          case "saveConfig": {
+            const maxTokens = Number(data.maxTokens) || 32768;
+            const timeoutSeconds = Number(data.timeoutSeconds) || 600;
+            this.client.updateConfig({
+              provider: data.provider,
+              model: data.model,
+              apiKey: data.apiKey,
+              baseUrl: data.baseUrl,
+              maxTokens,
+              timeoutSeconds
+            });
+            if (data.apiKey) {
+              await this.context.secrets.store("tidyproteomicsagent.apiKey", data.apiKey);
+            } else if (data.apiKey === "") {
+              await this.context.secrets.delete("tidyproteomicsagent.apiKey");
+            }
+            try {
+              const wsConfig = vscode.workspace.getConfiguration("tidyproteomicsagent");
+              await wsConfig.update("provider", data.provider, vscode.ConfigurationTarget.Global);
+              await wsConfig.update("model", data.model, vscode.ConfigurationTarget.Global);
+              await wsConfig.update("baseUrl", data.baseUrl, vscode.ConfigurationTarget.Global);
+              await wsConfig.update("maxTokens", maxTokens, vscode.ConfigurationTarget.Global);
+              await wsConfig.update("timeoutSeconds", timeoutSeconds, vscode.ConfigurationTarget.Global);
+            } catch (_) {
+            }
+            await this.context.globalState.update("tidyproteomicsagent.provider", data.provider);
+            await this.context.globalState.update("tidyproteomicsagent.model", data.model);
+            await this.context.globalState.update("tidyproteomicsagent.baseUrl", data.baseUrl);
+            await this.context.globalState.update("tidyproteomicsagent.maxTokens", maxTokens);
+            await this.context.globalState.update("tidyproteomicsagent.timeoutSeconds", timeoutSeconds);
+            await this.syncActiveModelSummary();
+            if (!data.silent) {
+              vscode.window.showInformationMessage("TidyProteomicsAgent: Configuration saved!");
+            }
+            const state = await this.orchestrator?.getState();
+            if (state)
+              this.sendStateUpdate(state);
+            break;
+          }
+          case "startPipeline": {
+            if (!this.workspaceRoot) {
+              vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+              return;
+            }
+            const cfg = this.client.getConfig();
+            if (cfg.provider !== "ollama" && !cfg.apiKey) {
+              vscode.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key first.");
+              return;
+            }
+            await this.syncActiveModelSummary();
+            this.orchestrator?.runFullPipeline().catch((err) => {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: Pipeline error - ${err.message}`);
+            });
+            break;
+          }
+          case "runPhase": {
+            if (!this.workspaceRoot) {
+              vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+              return;
+            }
+            const cfg = this.client.getConfig();
+            if (cfg.provider !== "ollama" && !cfg.apiKey) {
+              vscode.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key first.");
+              return;
+            }
+            await this.syncActiveModelSummary();
+            this.orchestrator?.runSinglePhase(data.phaseId).catch((err) => {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: Phase execution error - ${err.message}`);
+            });
+            break;
+          }
+          case "togglePhase": {
+            this.orchestrator?.togglePhase(data.phaseId, data.enabled);
+            break;
+          }
+          case "stopPipeline": {
+            this.orchestrator?.stop();
+            break;
+          }
+          case "forceReload": {
+            await this.forceReload();
+            break;
+          }
+          case "resetState": {
+            await this.resetAllState();
+            break;
+          }
+          case "openFile": {
+            if (!this.workspaceRoot) {
+              vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+              return;
+            }
+            const targetRelPath = data.relPath || "";
+            const targetPath = path8.isAbsolute(targetRelPath) ? targetRelPath : path8.join(this.workspaceRoot, targetRelPath);
+            try {
+              if (!fs8.existsSync(targetPath)) {
+                fs8.mkdirSync(path8.dirname(targetPath), { recursive: true });
+                fs8.writeFileSync(targetPath, "", "utf-8");
+              }
+              const doc = await vscode.workspace.openTextDocument(targetPath);
+              let selection;
+              if (data.line && data.line > 0) {
+                const lineNum = Math.min(data.line - 1, doc.lineCount - 1);
+                selection = new vscode.Range(lineNum, 0, lineNum, 0);
+              } else if (data.searchText) {
+                const text = doc.getText();
+                const idx = text.indexOf(data.searchText);
+                if (idx !== -1) {
+                  const pos = doc.positionAt(idx);
+                  selection = new vscode.Range(pos, pos);
+                }
+              }
+              const editor = await vscode.window.showTextDocument(doc, selection ? { selection } : void 0);
+              if (selection) {
+                editor.revealRange(selection, vscode.TextEditorRevealType.InCenter);
+              }
+            } catch (err) {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: Could not open ${targetRelPath}: ${err.message}`);
+            }
+            break;
+          }
+          case "authorizeConfoundingAndRerun": {
+            if (!this.workspaceRoot)
+              return;
+            const expPath = path8.join(this.workspaceRoot, "docs", "experiment.md");
+            try {
+              if (fs8.existsSync(expPath)) {
+                let content = await fs8.promises.readFile(expPath, "utf-8");
+                let updated = false;
+                if (content.includes("Proceed With Potential Batch Confounding**: FALSE")) {
+                  content = content.replace(
+                    "Proceed With Potential Batch Confounding**: FALSE",
+                    "Proceed With Potential Batch Confounding**: TRUE"
+                  );
+                  updated = true;
+                } else if (content.includes("Authorize Unadjusted Exploratory Comparison**: FALSE")) {
+                  content = content.replace(
+                    "Authorize Unadjusted Exploratory Comparison**: FALSE",
+                    "Authorize Unadjusted Exploratory Comparison**: TRUE"
+                  );
+                  updated = true;
+                }
+                if (updated) {
+                  await fs8.promises.writeFile(expPath, content, "utf-8");
+                  vscode.window.showInformationMessage("TidyProteomicsAgent: Batch confounding authorized in docs/experiment.md. Rerunning phase...");
+                }
+              }
+              const phaseId = data.phaseId;
+              if (phaseId && this.orchestrator) {
+                await this.syncActiveModelSummary();
+                this.orchestrator.runSinglePhase(phaseId).catch((err) => {
+                  vscode.window.showErrorMessage(`TidyProteomicsAgent: Phase execution error - ${err.message}`);
+                });
+              }
+            } catch (err) {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: Could not update docs/experiment.md: ${err.message}`);
+            }
+            break;
+          }
+          case "openPhase": {
+            if (!this.workspaceRoot) {
+              vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+              return;
+            }
+            const fileName = data.fileName || "";
+            const targetPath = fileName.includes("/") || fileName.includes("\\") ? path8.join(this.workspaceRoot, fileName) : path8.join(this.workspaceRoot, "analysis", fileName);
+            try {
+              const doc = await vscode.workspace.openTextDocument(targetPath);
+              await vscode.window.showTextDocument(doc);
+            } catch (err) {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: Could not open ${fileName}: ${err.message}`);
+            }
+            break;
+          }
+          case "copyPath": {
+            if (this.workspaceRoot) {
+              await vscode.env.clipboard.writeText(this.workspaceRoot);
+              vscode.window.showInformationMessage("TidyProteomicsAgent: Workspace path copied to clipboard!");
+            }
+            break;
+          }
+          case "revealInOS": {
+            if (this.workspaceRoot) {
+              await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(this.workspaceRoot));
+            }
+            break;
+          }
+          case "selectDirectory": {
+            const chosen = await vscode.window.showOpenDialog({
+              canSelectFiles: false,
+              canSelectFolders: true,
+              canSelectMany: false,
+              openLabel: "Select Analysis Folder"
+            });
+            if (chosen && chosen.length > 0) {
+              const selectedPath = chosen[0].fsPath;
+              this.customWorkspaceRoot = selectedPath;
+              this.workspaceRoot = selectedPath;
+              this.tools.setWorkspaceRoot(this.workspaceRoot);
+              this.literatureService.setWorkspaceRoot(this.workspaceRoot);
+              if (this.orchestrator) {
+                await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
+              }
+              await this.refreshPhases();
+              await this.syncActiveModelSummary();
+              if (this.onFolderChangedCallback) {
+                this.onFolderChangedCallback(this.workspaceRoot);
+              }
+              vscode.window.showInformationMessage(`TidyProteomicsAgent: Active directory set to ${this.workspaceRoot}`);
+            }
+            break;
+          }
+          case "rescanWorkspace": {
+            await this.onWorkspaceChanged();
+            vscode.window.showInformationMessage("TidyProteomicsAgent: Rescanned workspace folders and phases.");
+            break;
+          }
+          case "createMissingFolders": {
+            if (!this.workspaceRoot) {
+              vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+              return;
+            }
+            const standardDirs = ["analysis", "agent", "code", "data", path8.join("data", "raw"), "docs", "logs", "tools"];
+            for (const d of standardDirs) {
+              const fullDir = path8.join(this.workspaceRoot, d);
+              if (!fs8.existsSync(fullDir)) {
+                fs8.mkdirSync(fullDir, { recursive: true });
+              }
+            }
+            await this.refreshPhases();
+            vscode.window.showInformationMessage("TidyProteomicsAgent: Standard project folders initialized!");
+            break;
+          }
+          case "initWorkspace": {
+            await this.initWorkspace(data.pipelineId || "differential_expression");
+            break;
+          }
+          case "promptInitWorkspace": {
+            await this.promptInitWorkspace();
+            break;
+          }
+          case "requestState": {
+            await this.refreshState();
+            this.sendCorpusState();
+            break;
+          }
+          case "literatureGetState":
+          case "corpusGetState": {
+            this.sendLiteratureState();
+            break;
+          }
+          case "literatureSelect":
+          case "corpusSelect": {
+            try {
+              this.syncLiteratureWorkspace();
+              this.literatureService.setActiveLiterature(data.fileName);
+              this.sendLiteratureState();
+              await this.refreshState();
+            } catch (err) {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: ${err.message}`);
+            }
+            break;
+          }
+          case "literatureCreate":
+          case "corpusCreate": {
+            try {
+              this.syncLiteratureWorkspace();
+              const created = await this.literatureService.createDatabase(data.name);
+              vscode.window.showInformationMessage(`TidyProteomicsAgent: Created literature database '${created.fileName}'`);
+              this.sendLiteratureState();
+              await this.refreshState();
+            } catch (err) {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: ${err.message}`);
+            }
+            break;
+          }
+          case "literatureToggleSynthesis":
+          case "corpusToggleSynthesis": {
+            this.syncLiteratureWorkspace();
+            this.literatureService.setUseInSynthesis(!!data.enabled);
+            this.sendLiteratureState();
+            await this.refreshState();
+            break;
+          }
+          case "literatureStats":
+          case "corpusStats": {
+            this.syncLiteratureWorkspace();
+            const statsRes = await this.literatureService.getStats(data.fileName);
+            if (this._view && this._view.webview) {
+              const stats = statsRes.stats || statsRes.data?.stats || statsRes.data?.totals;
+              this._view.webview.postMessage({ type: "literatureStats", result: statsRes, stats });
+              this._view.webview.postMessage({ type: "corpusStats", result: statsRes, stats });
+            }
+            break;
+          }
+          case "literatureSearch":
+          case "corpusSearch": {
+            const searchRes = await this.literatureService.search(data.query, data.limit || 50, data.fileName);
+            if (this._view && this._view.webview) {
+              const results = searchRes.results || searchRes.data?.results || searchRes.data?.rows || [];
+              this._view.webview.postMessage({ type: "literatureSearchResult", result: searchRes, results });
+              this._view.webview.postMessage({ type: "corpusSearchResult", result: searchRes, results });
+            }
+            break;
+          }
+          case "literaturePickFolder":
+          case "corpusPickFolder": {
+            const chosen = await vscode.window.showOpenDialog({
+              canSelectFiles: false,
+              canSelectFolders: true,
+              canSelectMany: false,
+              openLabel: "Select Literature Folder"
+            });
+            if (chosen && chosen.length > 0) {
+              const folderPath = chosen[0].fsPath;
+              try {
+                this.literatureService.scanIngestFolder(folderPath);
+                this.sendLiteratureState();
+                vscode.window.showInformationMessage(`TidyProteomicsAgent: Found ${this.literatureService.getViewState().queue.length} document(s) for ingestion queue.`);
+              } catch (err) {
+                vscode.window.showErrorMessage(`TidyProteomicsAgent: ${err.message}`);
+              }
+            }
+            break;
+          }
+          case "literatureClearQueue":
+          case "corpusClearQueue": {
+            this.literatureService.clearQueue();
+            this.sendLiteratureState();
+            break;
+          }
+          case "literatureStartIngest":
+          case "corpusStartIngest": {
+            const cfg = this.client.getConfig();
+            if (cfg.provider !== "ollama" && !cfg.apiKey) {
+              vscode.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key in the Provider tab before running literature extraction.");
+              return;
+            }
+            const activeDb = data.fileName || this.literatureService.getConfig().activeLiterature || this.literatureService.getConfig().activeCorpus;
+            if (!activeDb) {
+              vscode.window.showErrorMessage("TidyProteomicsAgent: Please select or create an active literature database first.");
+              return;
+            }
+            this.sendLiteratureState();
+            this.ingestionRunner.runIngestion(activeDb).then(async (res) => {
+              this.sendLiteratureState();
+              const statsRes = await this.literatureService.getStats(activeDb);
+              if (this._view && this._view.webview) {
+                const stats = statsRes.stats || statsRes.data?.stats || statsRes.data?.totals;
+                this._view.webview.postMessage({ type: "literatureStats", result: statsRes, stats });
+                this._view.webview.postMessage({ type: "corpusStats", result: statsRes, stats });
+              }
+              if (res.success) {
+                vscode.window.showInformationMessage(`TidyProteomicsAgent: Indexed ${res.processed} document(s) into ${activeDb}!`);
+              } else {
+                vscode.window.showWarningMessage(`TidyProteomicsAgent: Ingestion finished with ${res.errors} error(s). See log for details.`);
+              }
+            }).catch((err) => {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: Ingestion error - ${err.message}`);
+              this.sendLiteratureState();
+            });
+            break;
+          }
+          case "literatureAbortIngest":
+          case "corpusAbortIngest": {
+            this.ingestionRunner.abort();
+            vscode.window.showInformationMessage("TidyProteomicsAgent: Aborting ingestion...");
+            break;
+          }
+          case "literatureGenerateReport": {
+            const activeDb = data.fileName || this.literatureService.getConfig().activeLiterature || this.literatureService.getConfig().activeCorpus;
+            if (!activeDb) {
+              vscode.window.showErrorMessage("TidyProteomicsAgent: Please select or create an active literature database first.");
+              return;
+            }
+            try {
+              vscode.window.showInformationMessage(`TidyProteomicsAgent: Generating accounting report for ${activeDb}...`);
+              const res = await this.literatureService.generateReport(activeDb);
+              if (res.ok) {
+                vscode.window.showInformationMessage("TidyProteomicsAgent: Generated docs/literature_database.md");
+                const docPath = path8.join(this.workspaceRoot || "", "docs", "literature_database.md");
+                if (fs8.existsSync(docPath)) {
+                  const doc = await vscode.workspace.openTextDocument(docPath);
+                  await vscode.window.showTextDocument(doc, { preview: false });
+                }
+              } else {
+                vscode.window.showErrorMessage(`TidyProteomicsAgent: Failed to generate report: ${res.error}`);
+              }
+            } catch (err) {
+              vscode.window.showErrorMessage(`TidyProteomicsAgent: Report generation error - ${err.message}`);
+            }
+            break;
+          }
+          case "literatureOpenReport": {
+            const docPath = path8.join(this.workspaceRoot || "", "docs", "literature_database.md");
+            if (fs8.existsSync(docPath)) {
+              const doc = await vscode.workspace.openTextDocument(docPath);
+              await vscode.window.showTextDocument(doc, { preview: false });
+            } else {
+              const activeDb = this.literatureService.getConfig().activeLiterature || this.literatureService.getConfig().activeCorpus;
+              if (activeDb) {
+                const res = await this.literatureService.generateReport(activeDb);
+                if (res.ok && fs8.existsSync(docPath)) {
+                  const doc = await vscode.workspace.openTextDocument(docPath);
+                  await vscode.window.showTextDocument(doc, { preview: false });
+                  return;
+                }
+              }
+              vscode.window.showWarningMessage("TidyProteomicsAgent: docs/literature_database.md does not exist yet. Click 'Regenerate' first.");
+            }
+            break;
+          }
+        }
+      } catch (e) {
+        vscode.window.showErrorMessage(`TidyProteomicsAgent Error: ${e.message}`);
+      }
+    });
+  }
+  async promptInitWorkspace() {
+    if (!this.workspaceRoot) {
+      const chosen2 = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        openLabel: "Select Analysis Folder to Initialize"
+      });
+      if (chosen2 && chosen2.length > 0) {
+        this.workspaceRoot = chosen2[0].fsPath;
+        this.customWorkspaceRoot = this.workspaceRoot;
+        this.tools.setWorkspaceRoot(this.workspaceRoot);
+        this.literatureService.setWorkspaceRoot(this.workspaceRoot);
+        if (this.orchestrator) {
+          await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
+        }
+        if (this.onFolderChangedCallback) {
+          this.onFolderChangedCallback(this.workspaceRoot);
+        }
+        await this.syncActiveModelSummary();
+      } else {
+        return;
+      }
+    }
+    const items = [
+      {
+        label: "$(symbol-structure) Differential Expression Pipeline",
+        description: "Full 11-phase workflow (Install, Inspect, Normalize, Impute, Expression, Enrichment, Observations, Knowledge, WebSearch, Literature, Synthesis)",
+        id: "differential_expression"
+      },
+      {
+        label: "$(graph) Quality Control & Exploration Pipeline",
+        description: "2-phase rapid QC and exploratory data analysis",
+        id: "quality_control_only"
+      }
+    ];
+    const chosen = await vscode.window.showQuickPick(items, {
+      placeHolder: "Select a pipeline template to initialize this workspace"
+    });
+    if (chosen) {
+      await this.initWorkspace(chosen.id);
+    }
+  }
+  async initWorkspace(pipelineId = "differential_expression") {
+    if (!this.workspaceRoot) {
+      const chosen = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        openLabel: "Select Analysis Folder to Initialize"
+      });
+      if (chosen && chosen.length > 0) {
+        this.workspaceRoot = chosen[0].fsPath;
+        this.customWorkspaceRoot = this.workspaceRoot;
+        this.tools.setWorkspaceRoot(this.workspaceRoot);
+        this.literatureService.setWorkspaceRoot(this.workspaceRoot);
+        if (this.orchestrator) {
+          await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
+        }
+        if (this.onFolderChangedCallback) {
+          this.onFolderChangedCallback(this.workspaceRoot);
+        }
+        await this.syncActiveModelSummary();
+      } else {
+        vscode.window.showErrorMessage("TidyProteomicsAgent: Please open or select a workspace folder first.");
+        return false;
+      }
+    }
+    try {
+      const candidatePaths = [
+        path8.join(this._extensionUri.fsPath, "templates"),
+        path8.join(this._extensionUri.fsPath, "extension", "templates"),
+        path8.join(this.context.extensionPath, "templates"),
+        path8.join(this.context.extensionPath, "extension", "templates"),
+        path8.join(__dirname, "..", "templates"),
+        path8.join(__dirname, "..", "..", "templates"),
+        path8.join(__dirname, "templates"),
+        path8.join(this.workspaceRoot, "extension", "templates"),
+        path8.join(this.workspaceRoot, "templates")
+      ];
+      const templateBase = candidatePaths.find((p) => fs8.existsSync(p));
+      if (!templateBase) {
+        vscode.window.showErrorMessage(
+          "TidyProteomicsAgent: Template directory not found in extension or workspace."
+        );
+        return false;
+      }
+      const standardDirs = ["analysis", "agent", "code", "data", path8.join("data", "raw"), "docs", "logs", "tools"];
+      for (const d of standardDirs) {
+        const fullDir = path8.join(this.workspaceRoot, d);
+        if (!fs8.existsSync(fullDir)) {
+          fs8.mkdirSync(fullDir, { recursive: true });
+        }
+      }
+      const copyFileSafe = (src, dest, overwrite = false) => {
+        if (fs8.existsSync(src)) {
+          if (overwrite || !fs8.existsSync(dest)) {
+            fs8.mkdirSync(path8.dirname(dest), { recursive: true });
+            fs8.copyFileSync(src, dest);
+          }
+        }
+      };
+      const sharedDir = path8.join(templateBase, "shared");
+      if (fs8.existsSync(sharedDir)) {
+        copyFileSafe(path8.join(sharedDir, "code", "00_install.R"), path8.join(this.workspaceRoot, "code", "00_install.R"), true);
+        copyFileSafe(path8.join(sharedDir, "tools", "lint_tidyproteomics.R"), path8.join(this.workspaceRoot, "tools", "lint_tidyproteomics.R"), true);
+        copyFileSafe(path8.join(sharedDir, "agent", "PROTOCOL.md"), path8.join(this.workspaceRoot, "agent", "PROTOCOL.md"), true);
+        copyFileSafe(path8.join(sharedDir, "agent", "SKILL.md"), path8.join(this.workspaceRoot, "agent", "SKILL.md"), true);
+        copyFileSafe(path8.join(sharedDir, "docs", "experiment.md"), path8.join(this.workspaceRoot, "docs", "experiment.md"), false);
+        copyFileSafe(path8.join(sharedDir, "docs", "notes.md"), path8.join(this.workspaceRoot, "docs", "notes.md"), false);
+        copyFileSafe(path8.join(sharedDir, "docs", "concept.md"), path8.join(this.workspaceRoot, "docs", "concept.md"), false);
+        copyFileSafe(path8.join(sharedDir, ".gitignore"), path8.join(this.workspaceRoot, ".gitignore"), false);
+        copyFileSafe(path8.join(sharedDir, "logs", ".gitkeep"), path8.join(this.workspaceRoot, "logs", ".gitkeep"), false);
+        copyFileSafe(path8.join(sharedDir, "data", "raw", ".gitkeep"), path8.join(this.workspaceRoot, "data", "raw", ".gitkeep"), false);
+        const literatureToolsDir = path8.join(sharedDir, "tools", "literature");
+        if (fs8.existsSync(literatureToolsDir)) {
+          const lFiles = fs8.readdirSync(literatureToolsDir).filter((f) => f.endsWith(".R"));
+          for (const lf of lFiles) {
+            copyFileSafe(path8.join(literatureToolsDir, lf), path8.join(this.workspaceRoot, "tools", "literature", lf), true);
+          }
+        }
+        const literatureDir = path8.join(this.workspaceRoot, "literature");
+        if (!fs8.existsSync(literatureDir)) {
+          fs8.mkdirSync(literatureDir, { recursive: true });
+        }
+      }
+      let pipelineDir = path8.join(templateBase, "pipelines", pipelineId);
+      if (!fs8.existsSync(pipelineDir)) {
+        pipelineDir = path8.join(templateBase, "pipelines", "differential_expression");
+      }
+      if (fs8.existsSync(pipelineDir)) {
+        const pFiles = fs8.readdirSync(pipelineDir).filter((f) => f.endsWith(".md"));
+        for (const pf of pFiles) {
+          copyFileSafe(path8.join(pipelineDir, pf), path8.join(this.workspaceRoot, "analysis", pf), true);
+        }
+      } else {
+        vscode.window.showWarningMessage(`TidyProteomicsAgent: Pipeline templates not found in ${templateBase}/pipelines.`);
+      }
+      await this.syncActiveModelSummary();
+      await this.refreshPhases();
+      const state = await this.orchestrator?.getState();
+      if (state)
+        this.sendStateUpdate(state);
+      const pipelineDisplayName = pipelineId === "quality_control_only" ? "Quality Control & Exploration" : "Standard Differential Expression";
+      vscode.window.showInformationMessage(`TidyProteomicsAgent: Workspace initialized with ${pipelineDisplayName} pipeline!`);
+      const targetFocusFile = path8.join(this.workspaceRoot, "docs", "experiment.md");
+      if (fs8.existsSync(targetFocusFile)) {
+        try {
+          const doc = await vscode.workspace.openTextDocument(targetFocusFile);
+          await vscode.window.showTextDocument(doc);
+        } catch (_) {
+        }
+      }
+      return true;
+    } catch (err) {
+      vscode.window.showErrorMessage(`TidyProteomicsAgent: Failed to initialize workspace - ${err.message}`);
+      return false;
+    }
+  }
+  startPipeline() {
+    if (!this.workspaceRoot) {
+      vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+      return;
+    }
+    if (this.orchestrator && this.orchestrator.getPhases().length === 0) {
+      vscode.window.showInformationMessage("TidyProteomicsAgent: No analysis tasks found to execute. Please initialize an analysis pipeline first.");
+      return;
+    }
+    this.syncActiveModelSummary().catch(() => {
+    });
+    this.orchestrator?.runFullPipeline().catch((err) => {
+      vscode.window.showErrorMessage(`TidyProteomicsAgent: Pipeline error - ${err.message}`);
+    });
+  }
+  async runSelectedPhase() {
+    if (!this.workspaceRoot) {
+      vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+      return;
+    }
+    const cfg = this.client.getConfig();
+    if (cfg.provider !== "ollama" && !cfg.apiKey) {
+      vscode.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key first.");
+      return;
+    }
+    await this.syncActiveModelSummary();
+    if (!this.orchestrator)
+      return;
+    const phases = this.orchestrator.getPhases();
+    if (phases.length === 0) {
+      vscode.window.showInformationMessage("TidyProteomicsAgent: No phases found to run.");
+      return;
+    }
+    const current = phases.find((p) => p.status === "running") || phases.find((p) => p.status === "pending" && p.enabled !== false) || phases[0];
+    const items = phases.map((p) => ({
+      label: p.title,
+      description: `(${p.fileName}) - ${p.status.toUpperCase()}`,
+      phaseId: p.id,
+      picked: p.id === current?.id
+    }));
+    const chosen = await vscode.window.showQuickPick(items, {
+      placeHolder: "Select phase to run in isolation"
+    });
+    if (chosen) {
+      this.orchestrator.runSinglePhase(chosen.phaseId).catch((err) => {
+        vscode.window.showErrorMessage(`TidyProteomicsAgent: Error running phase - ${err.message}`);
+      });
+    }
+  }
+  sendStateUpdate(state) {
+    if (this._view && this._view.webview) {
+      try {
+        const p = this._view.webview.postMessage({ type: "stateUpdate", state });
+        if (p && typeof p.then === "function") {
+          p.then(void 0, (err) => {
+            console.warn("[SidebarViewProvider] Failed to post stateUpdate:", err);
+          });
+        }
+      } catch (err) {
+        console.warn("[SidebarViewProvider] Exception posting stateUpdate:", err);
+      }
+    }
+  }
+  syncLiteratureWorkspace() {
+    const root = this.getActiveWorkspaceRoot();
+    if (root && root !== this.workspaceRoot) {
+      this.workspaceRoot = root;
+      this.tools.setWorkspaceRoot(root);
+      this.literatureService.setWorkspaceRoot(root);
+    } else if (root) {
+      this.literatureService.setWorkspaceRoot(root);
+    }
+    return this.workspaceRoot;
+  }
+  sendLiteratureState() {
+    if (this._view && this._view.webview) {
+      try {
+        this.syncLiteratureWorkspace();
+        const state = this.literatureService.getViewState(this.ingestionRunner.getIsRunning() ? "ingesting" : void 0);
+        const p1 = this._view.webview.postMessage({ type: "literatureState", state });
+        if (p1 && typeof p1.then === "function") {
+          p1.then(void 0, (err) => {
+            console.warn("[SidebarViewProvider] Failed to post literatureState:", err);
+          });
+        }
+        const p2 = this._view.webview.postMessage({ type: "corpusState", state });
+        if (p2 && typeof p2.then === "function") {
+          p2.then(void 0, (err) => {
+            console.warn("[SidebarViewProvider] Failed to post corpusState:", err);
+          });
+        }
+      } catch (err) {
+        console.warn("[SidebarViewProvider] Exception posting literatureState:", err);
+      }
+    }
+  }
+  sendCorpusState() {
+    this.sendLiteratureState();
+  }
+  sendLiteratureProgress(event) {
+    if (this._view && this._view.webview) {
+      try {
+        this._view.webview.postMessage({ type: "literatureProgress", event });
+        this._view.webview.postMessage({ type: "corpusProgress", event });
+      } catch (err) {
+        console.warn("[SidebarViewProvider] Exception posting literatureProgress:", err);
+      }
+    }
+  }
+  sendCorpusProgress(event) {
+    this.sendLiteratureProgress(event);
+  }
+  sendLog(text, updateLast = false) {
+    if (this._view && this._view.webview) {
+      try {
+        const p = this._view.webview.postMessage({ type: "log", text, updateLast });
+        if (p && typeof p.then === "function") {
+          p.then(void 0, (err) => {
+            console.warn("[SidebarViewProvider] Failed to post log:", err);
+          });
+        }
+      } catch (err) {
+        console.warn("[SidebarViewProvider] Exception posting log:", err);
+      }
+    }
+  }
+  escapeAttr(str) {
+    return String(str || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/'/g, "&#39;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  _cachedIcons;
+  _loadIcons() {
+    const icons = {};
+    const mediaDir = path8.join(this._extensionUri.fsPath, "media");
+    try {
+      if (fs8.existsSync(mediaDir)) {
+        const files = fs8.readdirSync(mediaDir);
+        for (const file of files) {
+          if (file.endsWith(".svg")) {
+            const key = file.replace(".svg", "");
+            let content = fs8.readFileSync(path8.join(mediaDir, file), "utf-8");
+            content = content.replace(/<\?xml[^>]*\?>/g, "").trim();
+            content = content.replace(/\s(width|height)="[^"]*"/g, "");
+            if (key === "robot") {
+              content = content.replace("<svg ", `<svg class="svg-icon svg-icon-${key}" `);
+            } else {
+              content = content.replace("<svg ", `<svg class="svg-icon svg-icon-${key}" fill="currentColor" `);
+            }
+            icons[key] = content;
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[SidebarViewProvider] Error loading SVG icons:", err);
+    }
+    return icons;
+  }
+  _getIcons() {
+    if (!this._cachedIcons) {
+      this._cachedIcons = this._loadIcons();
+    }
+    return this._cachedIcons;
+  }
+  _getHtmlForWebview(_webview) {
+    const config = this.client.getConfig();
+    const icons = this._getIcons();
+    return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -831,10 +5326,54 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
       cursor: pointer;
       color: var(--fg);
       letter-spacing: 0.2px;
+      min-width: 0;
+      flex: 0 1 auto;
     }
     .task-name:hover {
       color: var(--primary);
       text-decoration: underline;
+    }
+    .task-action-icons {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      flex-shrink: 0;
+      margin-left: 2px;
+    }
+    button.task-action-icon-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--muted);
+      border-radius: 3px;
+      padding: 0;
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s ease;
+      line-height: 1;
+      opacity: 0.65;
+      flex-shrink: 0;
+      box-sizing: border-box;
+    }
+    button.task-action-icon-btn.has-run {
+      opacity: 0.95;
+      color: var(--vscode-foreground, #d4d4d4);
+    }
+    button.task-action-icon-btn:hover {
+      background: rgba(59, 130, 246, 0.15);
+      border-color: rgba(59, 130, 246, 0.35);
+      color: var(--vscode-foreground, var(--fg));
+      opacity: 1;
+    }
+    button.task-action-icon-btn .svg-icon {
+      width: 11px;
+      height: 11px;
+      vertical-align: middle;
+      margin: 0;
+      pointer-events: none;
     }
     .task-right {
       display: flex;
@@ -1103,11 +5642,11 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
   <!-- Header Bar -->
   <div class="header">
     <div class="header-left">
-      <h2>${s.robot||""} TidyProteomicsAgent</h2>
+      <h2>${icons["robot"] || ""} TidyProteomicsAgent</h2>
       <span class="badge badge-completed" id="pipelineHeaderBadge">IDLE</span>
     </div>
     <div class="ws-chip" id="wsChip" title="Click to view Active Directory">
-      <span>${s["folder-open"]||""}</span>
+      <span>${icons["folder-open"] || ""}</span>
       <span id="wsChipName">Project</span>
     </div>
   </div>
@@ -1115,26 +5654,26 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
   <!-- Segmented Tab Navigation -->
   <div class="tab-bar">
     <button type="button" class="tab-btn active" data-tab="pipeline" onclick="window.switchTab && window.switchTab('pipeline')" title="Pipeline execution, phases & live feed">
-      <span class="tab-icon">${s["rocket-lunch"]||""}</span>
+      <span class="tab-icon">${icons["rocket-lunch"] || ""}</span>
       <span class="tab-label">Pipeline</span>
       <span class="tab-indicator" id="pipelineIndicator"></span>
     </button>
     <button type="button" class="tab-btn" data-tab="blackboard" onclick="window.switchTab && window.switchTab('blackboard')" title="Memory notes, protocol & chat log">
-      <span class="tab-icon">${s.ftp||""}</span>
+      <span class="tab-icon">${icons["ftp"] || ""}</span>
       <span class="tab-label">Memory</span>
     </button>
     <button type="button" class="tab-btn" data-tab="provider" onclick="window.switchTab && window.switchTab('provider')" title="LLM Provider, model & API key">
-      <span class="tab-icon">${s.cube||""}</span>
+      <span class="tab-icon">${icons["cube"] || ""}</span>
       <span class="tab-label">Provider</span>
       <span class="tab-indicator" id="providerIndicator"></span>
     </button>
     <button type="button" class="tab-btn" data-tab="directory" onclick="window.switchTab && window.switchTab('directory')" title="Active directory & workspace folder status">
-      <span class="tab-icon">${s["folder-open"]||""}</span>
+      <span class="tab-icon">${icons["folder-open"] || ""}</span>
       <span class="tab-label">Directory</span>
       <span class="tab-indicator" id="dirIndicator"></span>
     </button>
     <button type="button" class="tab-btn" data-tab="literature" onclick="window.switchTab && window.switchTab('literature')" title="Literature Database & Ingestion">
-      <span class="tab-icon">${s.database||""}</span>
+      <span class="tab-icon">${icons["database"] || ""}</span>
       <span class="tab-label">Literature</span>
       <span class="tab-indicator" id="literatureIndicator"></span>
     </button>
@@ -1156,7 +5695,7 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
     <div id="initPipelineSection" style="display:none;">
       <div style="background:var(--vscode-sideBar-background); border:1px solid var(--vscode-widget-border, #333); border-radius:6px; padding:12px; margin:4px 0;">
         <div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
-          <span style="font-size:15px; display:inline-flex; align-items:center;">${s["rocket-lunch"]||""}</span>
+          <span style="font-size:15px; display:inline-flex; align-items:center;">${icons["rocket-lunch"] || ""}</span>
           <div style="font-weight:600; font-size:12px; color:var(--vscode-foreground);">Initialize Analysis Pipeline</div>
         </div>
         <div style="font-size:11px; color:var(--muted); line-height:1.4; margin-bottom:10px;">
@@ -1174,7 +5713,7 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
           <i>Includes environment readiness, QC inspection, normalization benchmarking, imputation, differential expression, pathway enrichment, primary observations, internal knowledge, web search, literature database interrogation, and final manuscript synthesis report.</i>
         </div>
         <button type="button" id="initWorkspaceBtn" data-action="initWorkspace" class="btn-primary" style="width:100%; padding:7px 10px; font-size:11px; font-weight:600; display:flex; align-items:center; justify-content:center; gap:6px; cursor:pointer;">
-          <span>${s.sparkles||""}</span> Initialize Working Directory
+          <span>${icons["sparkles"] || ""}</span> Initialize Working Directory
         </button>
       </div>
     </div>
@@ -1184,14 +5723,14 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
       <!-- Pipeline Execution Controls -->
       <div class="section">
         <div style="display:flex; gap:4px; margin-bottom:8px;">
-          <button id="startPipelineBtn" style="width:100%;">${s.play||""} Run Analysis Pipeline</button>
-          <button id="stopBtn" class="btn-stop" style="display:none; width:100%;">${s.stop||""} Stop Pipeline</button>
+          <button id="startPipelineBtn" style="width:100%;">${icons["play"] || ""} Run Analysis Pipeline</button>
+          <button id="stopBtn" class="btn-stop" style="display:none; width:100%;">${icons["stop"] || ""} Stop Pipeline</button>
         </div>
 
         <div class="section-header">
           <div style="display:flex; align-items:center; gap:6px;">
-            <h3>${s["rocket-lunch"]||""} Analysis Tasks</h3>
-            <button type="button" id="refreshTasksBtn" class="btn-icon" title="Reload tasks and sync progress from disk">${s.refresh||"\u21BB"}</button>
+            <h3>${icons["rocket-lunch"] || ""} Analysis Tasks</h3>
+            <button type="button" id="refreshTasksBtn" class="btn-icon" title="Reload tasks and sync progress from disk">${icons["refresh"] || "\u21BB"}</button>
           </div>
           <span style="font-size:9px; color:var(--muted);" id="phaseCountLabel">0 Tasks</span>
         </div>
@@ -1206,13 +5745,13 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
       <!-- Tokens -->
       <div class="section">
         <div class="section-header">
-          <h3>${s.coins||""} Tokens</h3>
+          <h3>${icons["coins"] || ""} Tokens</h3>
         </div>
         <table class="tokens-table">
           <thead>
             <tr>
               <th>Prompt</th>
-              <th>Cached ${s.sparkles||""}</th>
+              <th>Cached ${icons["sparkles"] || ""}</th>
               <th>Response</th>
               <th>Total</th>
             </tr>
@@ -1231,9 +5770,9 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
       <!-- Live Sub-Loop Terminal Feed -->
       <div class="section terminal-section">
         <div class="section-header">
-          <h3>${s.terminal||""} Sub-Loop Live Feed</h3>
+          <h3>${icons["terminal"] || ""} Sub-Loop Live Feed</h3>
           <div style="display:flex; gap:4px;">
-            <button class="btn-sm" id="viewChatLogBtn" title="Open master logs/pipeline.md in VS Code">${s.list||""} Pipeline Log</button>
+            <button class="btn-sm" id="viewChatLogBtn" title="Open master logs/pipeline.md in VS Code">${icons["list"] || ""} Pipeline Log</button>
             <button class="btn-sm" id="clearLogBtn">Clear</button>
           </div>
         </div>
@@ -1247,7 +5786,7 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
     <!-- Persistent Global Context -->
     <div class="section">
       <div class="section-header">
-        <h3>${s.globe||""} Global Context</h3>
+        <h3>${icons["globe"] || ""} Global Context</h3>
         <span class="badge badge-cached">Cached Prefix</span>
       </div>
       <div class="section-desc">System instructions read at the start of every phase and cached in LLM memory.</div>
@@ -1259,7 +5798,7 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
     <!-- Shared Memory -->
     <div class="section">
       <div class="section-header">
-        <h3>${s.ftp||""} Shared Memory</h3>
+        <h3>${icons["ftp"] || ""} Shared Memory</h3>
         <span class="badge badge-completed">Disk State</span>
       </div>
       <div class="section-desc">Cross-phase state on disk. Sub-loops update this scratchpad after each run.</div>
@@ -1271,7 +5810,7 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
     <!-- Logs -->
     <div class="section">
       <div class="section-header">
-        <h3>${s["list-check"]||""} Logs</h3>
+        <h3>${icons["list-check"] || ""} Logs</h3>
       </div>
       <div class="section-desc">Lean audit trail capturing assistant thoughts, tool executions, and tokens.</div>
       <div id="logsContainer">
@@ -1281,7 +5820,7 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
 
     <!-- Architecture Callout -->
     <div class="callout">
-      <b>${s.info||""} TidyProteomicsAgent Architecture:</b><br>
+      <b>${icons["info"] || ""} TidyProteomicsAgent Architecture:</b><br>
       \u2022 <b>Global Context</b> (<code>agent/</code>) is cached across phases to slash token costs.<br>
       \u2022 <b>Ephemeral Sub-Loops</b> run in isolation for each phase, preventing context bloat.<br>
       \u2022 <b>Shared Memory</b> (<code>docs/notes.md</code>) passes findings between phases.
@@ -1292,30 +5831,30 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
   <div class="tab-pane" id="pane-provider">
     <div class="section">
       <div class="section-header">
-        <h3>${s.cube||""} Provider Configuration</h3>
+        <h3>${icons["cube"] || ""} Provider Configuration</h3>
         <button class="btn-sm" id="saveConfigBtn">Save Settings</button>
       </div>
 
       <div class="form-group">
         <label>Provider</label>
         <select id="providerSelect">
-          <option value="anthropic" ${t.provider==="anthropic"?"selected":""}>Anthropic (Prompt Caching)</option>
-          <option value="openrouter" ${t.provider==="openrouter"?"selected":""}>OpenRouter (Unified Gateway)</option>
-          <option value="ollama" ${t.provider==="ollama"?"selected":""}>Remote Hosted Ollama</option>
-          <option value="gemini" ${t.provider==="gemini"?"selected":""}>Google Gemini</option>
-          <option value="openai" ${t.provider==="openai"?"selected":""}>OpenAI</option>
+          <option value="anthropic" ${config.provider === "anthropic" ? "selected" : ""}>Anthropic (Prompt Caching)</option>
+          <option value="openrouter" ${config.provider === "openrouter" ? "selected" : ""}>OpenRouter (Unified Gateway)</option>
+          <option value="ollama" ${config.provider === "ollama" ? "selected" : ""}>Remote Hosted Ollama</option>
+          <option value="gemini" ${config.provider === "gemini" ? "selected" : ""}>Google Gemini</option>
+          <option value="openai" ${config.provider === "openai" ? "selected" : ""}>OpenAI</option>
         </select>
       </div>
 
       <div class="form-group" id="baseUrlGroup">
         <label id="baseUrlLabel">Base URL / Endpoint</label>
-        <input type="text" id="baseUrlInput" value="${this.escapeAttr(t.baseUrl||"")}" placeholder="http://remote-host:11434/v1" />
+        <input type="text" id="baseUrlInput" value="${this.escapeAttr(config.baseUrl || "")}" placeholder="http://remote-host:11434/v1" />
         <span id="baseUrlHint" style="font-size:9px; color:var(--muted); display:block; margin-top:2px;"></span>
       </div>
 
       <div class="form-group">
         <label id="modelLabel">Model ID</label>
-        <input type="text" id="modelInput" value="${this.escapeAttr(t.model||"")}" placeholder="claude-3-7-sonnet-20250219" />
+        <input type="text" id="modelInput" value="${this.escapeAttr(config.model || "")}" placeholder="claude-3-7-sonnet-20250219" />
       </div>
 
       <div class="form-group">
@@ -1323,7 +5862,7 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
           <label id="apiKeyLabel">API Key</label>
           <span id="toggleKeyVisibility" style="font-size:9px; color:var(--primary); cursor:pointer;">Show</span>
         </div>
-        <input type="password" id="apiKeyInput" value="${this.escapeAttr(t.apiKey||"")}" placeholder="sk-..." />
+        <input type="password" id="apiKeyInput" value="${this.escapeAttr(config.apiKey || "")}" placeholder="sk-..." />
       </div>
 
       <div class="form-group">
@@ -1332,12 +5871,12 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
           <span style="font-size:9px; color:var(--muted);">Default: 32,768</span>
         </div>
         <select id="maxTokensSelect">
-          <option value="4096" ${t.maxTokens===4096?"selected":""}>4,096 (Standard / Minimal)</option>
-          <option value="8192" ${t.maxTokens===8192?"selected":""}>8,192</option>
-          <option value="16384" ${t.maxTokens===16384?"selected":""}>16,384 (Recommended for Reports)</option>
-          <option value="32768" ${t.maxTokens===32768||!t.maxTokens?"selected":""}>32,768 (Full Manuscripts / Long Synthesis)</option>
-          <option value="65536" ${t.maxTokens===65536?"selected":""}>65,536</option>
-          <option value="128000" ${t.maxTokens===128e3?"selected":""}>128,000 (OpenRouter Frontier / Luna Max)</option>
+          <option value="4096" ${config.maxTokens === 4096 ? "selected" : ""}>4,096 (Standard / Minimal)</option>
+          <option value="8192" ${config.maxTokens === 8192 ? "selected" : ""}>8,192</option>
+          <option value="16384" ${config.maxTokens === 16384 ? "selected" : ""}>16,384 (Recommended for Reports)</option>
+          <option value="32768" ${config.maxTokens === 32768 || !config.maxTokens ? "selected" : ""}>32,768 (Full Manuscripts / Long Synthesis)</option>
+          <option value="65536" ${config.maxTokens === 65536 ? "selected" : ""}>65,536</option>
+          <option value="128000" ${config.maxTokens === 128e3 ? "selected" : ""}>128,000 (OpenRouter Frontier / Luna Max)</option>
         </select>
         <span style="font-size:9px; color:var(--muted); display:block; margin-top:2px;">Prevents tool call JSON truncation during long file generation (e.g. docs/scientific_report.md).</span>
       </div>
@@ -1348,11 +5887,11 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
           <span style="font-size:9px; color:var(--muted);">Default: 600s (10m)</span>
         </div>
         <select id="timeoutSecondsSelect">
-          <option value="180" ${t.timeoutSeconds===180?"selected":""}>180s (3m - Fast Cloud Models)</option>
-          <option value="300" ${t.timeoutSeconds===300?"selected":""}>300s (5m - Standard)</option>
-          <option value="600" ${t.timeoutSeconds===600||!t.timeoutSeconds?"selected":""}>600s (10m - Recommended for Large / Local Models)</option>
-          <option value="900" ${t.timeoutSeconds===900?"selected":""}>900s (15m - Extended Reasoning / Heavy Synthesis)</option>
-          <option value="1200" ${t.timeoutSeconds===1200?"selected":""}>1,200s (20m - Ultra Long / Slow Local Inference)</option>
+          <option value="180" ${config.timeoutSeconds === 180 ? "selected" : ""}>180s (3m - Fast Cloud Models)</option>
+          <option value="300" ${config.timeoutSeconds === 300 ? "selected" : ""}>300s (5m - Standard)</option>
+          <option value="600" ${config.timeoutSeconds === 600 || !config.timeoutSeconds ? "selected" : ""}>600s (10m - Recommended for Large / Local Models)</option>
+          <option value="900" ${config.timeoutSeconds === 900 ? "selected" : ""}>900s (15m - Extended Reasoning / Heavy Synthesis)</option>
+          <option value="1200" ${config.timeoutSeconds === 1200 ? "selected" : ""}>1,200s (20m - Ultra Long / Slow Local Inference)</option>
         </select>
         <span style="font-size:9px; color:var(--muted); display:block; margin-top:2px;">Prevents timeout abortions during complex phases or slow local inference (e.g. 70B models).</span>
       </div>
@@ -1365,33 +5904,33 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
     <!-- Active Provider Summary Card -->
     <div class="section">
       <div class="section-header">
-        <h3>${s.stats||""} Active Model Summary</h3>
+        <h3>${icons["stats"] || ""} Active Model Summary</h3>
         <button class="icon-btn" data-action="openFile" data-path="docs/llm.md" title="Open docs/llm.md" style="font-size:10px; padding:2px 6px;">docs/llm.md \u2197</button>
       </div>
       <div style="display:flex; flex-direction:column; gap:4px; font-size:11px;">
         <div style="display:flex; justify-content:space-between;">
           <span style="color:var(--muted);">Provider:</span>
-          <b id="summaryProvider">${(t.provider||"anthropic").toUpperCase()}</b>
+          <b id="summaryProvider">${(config.provider || "anthropic").toUpperCase()}</b>
         </div>
         <div style="display:flex; justify-content:space-between;">
           <span style="color:var(--muted);">Model:</span>
-          <b id="summaryModel" style="font-family:monospace;">${t.model}</b>
+          <b id="summaryModel" style="font-family:monospace;">${config.model}</b>
         </div>
         <div style="display:flex; justify-content:space-between;">
           <span style="color:var(--muted);">Prompt Caching:</span>
-          <span id="summaryCaching" class="badge badge-cached">Active ${s.sparkles||""}</span>
+          <span id="summaryCaching" class="badge badge-cached">Active ${icons["sparkles"] || ""}</span>
         </div>
         <div style="display:flex; justify-content:space-between;">
           <span style="color:var(--muted);">Max Output Tokens:</span>
-          <b id="summaryMaxTokens" style="font-family:monospace;">${(t.maxTokens||32768).toLocaleString()}</b>
+          <b id="summaryMaxTokens" style="font-family:monospace;">${(config.maxTokens || 32768).toLocaleString()}</b>
         </div>
         <div style="display:flex; justify-content:space-between;">
           <span style="color:var(--muted);">Request Timeout:</span>
-          <b id="summaryTimeout" style="font-family:monospace;">${t.timeoutSeconds||600}s</b>
+          <b id="summaryTimeout" style="font-family:monospace;">${config.timeoutSeconds || 600}s</b>
         </div>
         <div style="display:flex; justify-content:space-between;">
           <span style="color:var(--muted);">Key Status:</span>
-          <span id="summaryKeyStatus" class="badge ${t.apiKey?"badge-completed":"badge-failed"}">${t.apiKey?"Configured":"Missing"}</span>
+          <span id="summaryKeyStatus" class="badge ${config.apiKey ? "badge-completed" : "badge-failed"}">${config.apiKey ? "Configured" : "Missing"}</span>
         </div>
       </div>
     </div>
@@ -1402,7 +5941,7 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
     <!-- Active Workspace Card -->
     <div class="section">
       <div class="section-header">
-        <h3>${s["folder-open"]||""} Active VS Code Workspace</h3>
+        <h3>${icons["folder-open"] || ""} Active VS Code Workspace</h3>
       </div>
       <div class="section-desc">TidyProteomicsAgent automatically operates within the folder currently opened in VS Code.</div>
 
@@ -1412,16 +5951,16 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
       </div>
 
       <div style="display:flex; gap:6px;">
-        <button type="button" class="btn-secondary btn-sm" id="copyPathBtn" style="flex:1;">${s.list||""} Copy Path</button>
-        <button type="button" class="btn-secondary btn-sm" id="revealOSBtn" style="flex:1;">${s["folder-open"]||""} Reveal in OS</button>
-        <button type="button" class="btn-secondary btn-sm" id="chooseDirBtn" style="flex:1;">${s["folder-open"]||""} Choose Folder...</button>
+        <button type="button" class="btn-secondary btn-sm" id="copyPathBtn" style="flex:1;">${icons["list"] || ""} Copy Path</button>
+        <button type="button" class="btn-secondary btn-sm" id="revealOSBtn" style="flex:1;">${icons["folder-open"] || ""} Reveal in OS</button>
+        <button type="button" class="btn-secondary btn-sm" id="chooseDirBtn" style="flex:1;">${icons["folder-open"] || ""} Choose Folder...</button>
       </div>
     </div>
 
     <!-- Project Structure Health Check -->
     <div class="section">
       <div class="section-header">
-        <h3>${s.database||""} Project Structure Health</h3>
+        <h3>${icons["database"] || ""} Project Structure Health</h3>
       </div>
       <div class="section-desc">Standard directories required for autonomous pipelines:</div>
 
@@ -1430,21 +5969,21 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
       </div>
 
       <div style="display:flex; gap:6px; margin-top:8px;">
-        <button type="button" class="btn-secondary btn-sm" id="rescanDirBtn" style="flex:1;">${s.refresh||""} Rescan</button>
-        <button type="button" class="btn-sm" id="createFoldersBtn" style="flex:1;">${s["folder-open"]||""} Create Folders</button>
+        <button type="button" class="btn-secondary btn-sm" id="rescanDirBtn" style="flex:1;">${icons["refresh"] || ""} Rescan</button>
+        <button type="button" class="btn-sm" id="createFoldersBtn" style="flex:1;">${icons["folder-open"] || ""} Create Folders</button>
       </div>
       <div style="margin-top:6px;">
-        <button type="button" class="btn-primary btn-sm" id="initPipelineQuickBtn" style="width:100%; padding:6px; font-weight:600;">${s.sparkles||""} Initialize Pipeline Scaffolding...</button>
+        <button type="button" class="btn-primary btn-sm" id="initPipelineQuickBtn" style="width:100%; padding:6px; font-weight:600;">${icons["sparkles"] || ""} Initialize Pipeline Scaffolding...</button>
       </div>
     </div>
 
     <!-- Guidance Note on Changing Workspace -->
     <div class="callout" style="line-height:1.5;">
-      <b>${s.info||""} How to Change Analysis Folders:</b><br>
-      \u2022 <b>Option 1 (Recommended in-window):</b> Click <b>${s["folder-open"]||""} Choose Folder...</b> above. This switches the active project instantly without restarting the window.<br>
+      <b>${icons["info"] || ""} How to Change Analysis Folders:</b><br>
+      \u2022 <b>Option 1 (Recommended in-window):</b> Click <b>${icons["folder-open"] || ""} Choose Folder...</b> above. This switches the active project instantly without restarting the window.<br>
       \u2022 <b>Option 2:</b> In VS Code, use <b>File &gt; Add Folder to Workspace...</b> to mount your dataset folder into the Explorer.<br>
       <div style="margin-top:6px; padding:6px; background:rgba(239, 68, 68, 0.1); border-left:3px solid var(--error); border-radius:3px; font-size:10px; color:#fca5a5;">
-        <b>${s.alert||""} Debug Window Note:</b> When debugging this extension (F5), do <b>not</b> use <i>File &gt; Open Folder...</i> because VS Code restarts the window and terminates the debug session. Use <b>Choose Folder...</b> or <b>Add Folder to Workspace...</b> instead.
+        <b>${icons["alert"] || ""} Debug Window Note:</b> When debugging this extension (F5), do <b>not</b> use <i>File &gt; Open Folder...</i> because VS Code restarts the window and terminates the debug session. Use <b>Choose Folder...</b> or <b>Add Folder to Workspace...</b> instead.
       </div>
     </div>
   </div>
@@ -1455,7 +5994,7 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
     <div class="section">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
         <h3 style="margin:0; font-size:11px; font-weight:600; display:flex; align-items:center; gap:5px;">
-          ${s.database||""} Literature Knowledge Database
+          ${icons["database"] || ""} Literature Knowledge Database
         </h3>
         <span class="badge badge-idle" id="literatureActiveBadge">NO DATABASE</span>
       </div>
@@ -1470,7 +6009,7 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
       <!-- New Literature Input -->
       <div style="display:flex; gap:6px; margin-bottom:8px;">
         <input type="text" id="newLiteratureInput" placeholder="New database name (e.g. p97_vcp)..." style="flex:1; padding:4px 8px; font-size:11px; background:var(--vscode-input-background, #252526); color:var(--vscode-input-foreground, #cccccc); border:1px solid var(--vscode-input-border, #3c3c3c); border-radius:4px; outline:none;" />
-        <button type="button" class="btn-sm" id="createLiteratureBtn" style="white-space:nowrap;">${s.sparkles||""} Create</button>
+        <button type="button" class="btn-sm" id="createLiteratureBtn" style="white-space:nowrap;">${icons["sparkles"] || ""} Create</button>
       </div>
 
       <!-- Toggle: Use in Synthesis Pipeline -->
@@ -1490,10 +6029,10 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
     <div class="section">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
         <h3 style="margin:0; font-size:11px; font-weight:600; display:flex; align-items:center; gap:5px;">
-          ${s.stats||""} Literature Metrics
+          ${icons["stats"] || ""} Literature Metrics
         </h3>
         <button type="button" id="refreshLiteratureStatsBtn" class="btn-icon" title="Refresh metrics from DuckDB" style="padding:2px 4px; font-size:10px;">
-          ${s.refresh||"\u21BB"}
+          ${icons["refresh"] || "\u21BB"}
         </button>
       </div>
 
@@ -1526,10 +6065,10 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
 
       <div style="display:flex; gap:6px; margin-top:8px;">
         <button type="button" class="btn-sm btn-secondary" id="openLiteratureReportBtn" style="flex:1; display:flex; align-items:center; justify-content:center; gap:5px;" title="Open docs/literature_database.md in VS Code">
-          ${s.summary||""} Open Report
+          ${icons["summary"] || ""} Open Report
         </button>
         <button type="button" class="btn-sm btn-secondary" id="regenerateLiteratureReportBtn" style="flex:1; display:flex; align-items:center; justify-content:center; gap:5px;" title="Regenerate docs/literature_database.md from active DuckDB">
-          ${s.refresh||"\u21BB"} Regenerate
+          ${icons["refresh"] || "\u21BB"} Regenerate
         </button>
       </div>
     </div>
@@ -1538,7 +6077,7 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
     <div class="section">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
         <h3 style="margin:0; font-size:11px; font-weight:600; display:flex; align-items:center; gap:5px;">
-          ${s.summary||""} Assertion Search
+          ${icons["summary"] || ""} Assertion Search
         </h3>
       </div>
       <div style="display:flex; gap:6px; margin-bottom:6px;">
@@ -1554,14 +6093,14 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
     <div class="section queue-section">
       <div class="section-header">
         <h3 style="margin:0; font-size:11px; font-weight:600; display:flex; align-items:center; gap:5px;">
-          ${s.layers||""} Ingestion Queue
+          ${icons["layers"] || ""} Ingestion Queue
         </h3>
         <span class="badge badge-idle" id="ingestQueueBadge">0 FILES</span>
       </div>
 
       <div style="display:flex; gap:6px; margin-bottom:8px; flex:0 0 auto;">
         <button type="button" class="btn-secondary btn-sm" id="pickFolderBtn" style="flex:1;">
-          ${s["folder-open"]||""} Select Literature Folder...
+          ${icons["folder-open"] || ""} Select Literature Folder...
         </button>
         <button type="button" class="btn-secondary btn-sm" id="clearQueueBtn" title="Clear pending queue">
           Clear
@@ -1576,10 +6115,10 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
 
       <div style="display:flex; gap:6px; flex:0 0 auto;">
         <button type="button" class="btn-primary btn-sm" id="startIngestBtn" style="flex:1; padding:6px; font-weight:600;">
-          ${s.play||""} Run Ingestion Pipeline
+          ${icons["play"] || ""} Run Ingestion Pipeline
         </button>
         <button type="button" class="btn-stop btn-sm" id="abortIngestBtn" style="display:none; padding:6px; font-weight:600;">
-          ${s.stop||""} Abort
+          ${icons["stop"] || ""} Abort
         </button>
       </div>
     </div>
@@ -1596,7 +6135,7 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
 
     const vscode = acquireVsCodeApi();
     window.vscode = vscode;
-    const ICONS = ${JSON.stringify(s)};
+    const ICONS = ${JSON.stringify(icons)};
 
     // Tab Switching Logic (Defined first so it is available globally immediately)
     function switchTab(tabId) {
@@ -2541,21 +7080,19 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
                 '</div>';
               }
 
-              let logLinksHtml = "";
-              if (rawStatus === "completed" || rawStatus === "failed" || rawStatus === "running") {
-                const phaseDir = safeTaskName.toLowerCase().replace(/[^a-z0-9_]/g, "_");
-                logLinksHtml = '<div class="task-log-links" style="display:flex; gap:8px; margin-top:3px; padding-left:22px; font-size:10px;">' +
-                  '<span data-action="openFile" data-path="logs/' + phaseDir + '/chat.md" class="log-link" title="Open phase chat trace in VS Code" style="cursor:pointer; color:var(--vscode-textLink-foreground, #3794ff);">\u{1F4AC} Chat</span>' +
-                  '<span style="color:var(--muted); opacity:0.6;">\u2022</span>' +
-                  '<span data-action="openFile" data-path="logs/' + phaseDir + '/console.log" class="log-link" title="Open raw console output in VS Code" style="cursor:pointer; color:var(--muted);">\u{1F4DC} Console</span>' +
-                '</div>';
-              }
+              const phaseDir = safeTaskName.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+              const hasRun = rawStatus === "completed" || rawStatus === "failed" || rawStatus === "running";
+              const logBtnClass = hasRun ? "task-action-icon-btn has-run" : "task-action-icon-btn";
+              const chatIconHtml = '<button type="button" class="' + logBtnClass + '" data-action="openFile" data-path="logs/' + phaseDir + '/chat.md" title="Open chat trace (logs/' + phaseDir + '/chat.md)">' + (ICONS["chat"] || ICONS["chate"] || "") + '</button>';
+              const termIconHtml = '<button type="button" class="' + logBtnClass + '" data-action="openFile" data-path="logs/' + phaseDir + '/console.log" title="Open console output (logs/' + phaseDir + '/console.log)">' + (ICONS["terminal"] || "") + '</button>';
+              const iconLinksHtml = '<span class="task-action-icons">' + chatIconHtml + termIconHtml + '</span>';
 
               phaseHtml += '<div class="' + cardClass + '"' + startTimeAttr + '>' +
                 '<div class="task-main-row">' +
                   '<div class="task-left">' +
                     '<input type="checkbox" ' + checked + ' data-phase-id="' + escapeHtml(p.id) + '" title="Include in pipeline" ' + (anyRunning ? "disabled" : "") + ' />' +
                     '<span class="task-name" data-action="openPhase" data-file="' + safeFileName + '" title="Click to edit ' + safeFileName + ' in VS Code">' + safeTaskName + '</span>' +
+                    iconLinksHtml +
                   '</div>' +
                   '<div class="task-right">' +
                     '<button type="button" class="btn-run" data-action="runPhase" data-id="' + escapeHtml(p.id) + '" ' + runDisabled + ' title="' + escapeHtml(runBtnTitle) + '">' + (ICONS["play"] || "") + ' RUN</button>' +
@@ -2564,7 +7101,6 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
                   '</div>' +
                 '</div>' +
                 failInsightHtml +
-                logLinksHtml +
               '</div>';
             }
             phaseContainer.innerHTML = phaseHtml;
@@ -2683,4 +7219,195 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
     }, 200);
   </script>
 </body>
-</html>`}};function Fe(y){console.log("TidyProteomicsAgent extension is now active!");let e=I.window.createOutputChannel("TidyProteomicsAgent");y.subscriptions.push(e);let t=r=>{let a=r?.stack||String(r);typeof a=="string"&&(a.includes("Missing dataLength in event")||a.includes("strict mode functions"))||(e.appendLine(`[UNCAUGHT EXCEPTION] ${a}`),console.error("[TidyProteomicsAgent UNCAUGHT EXCEPTION]",r))},s=r=>{let a=r?.stack||String(r);typeof a=="string"&&(a.includes("Missing dataLength in event")||a.includes("strict mode functions"))||(e.appendLine(`[UNHANDLED REJECTION] ${a}`),console.error("[TidyProteomicsAgent UNHANDLED REJECTION]",r))};process.on("uncaughtException",t),process.on("unhandledRejection",s),y.subscriptions.push({dispose:()=>{process.removeListener("uncaughtException",t),process.removeListener("unhandledRejection",s)}});let i=new Y(y.extensionUri,y);y.subscriptions.push(I.window.registerWebviewViewProvider(Y.viewType,i));let o=[],n=r=>{for(let p of o)try{p.dispose()}catch{}o=[];let a=[];if(r)a.push(I.Uri.file(r));else{let p=I.workspace.workspaceFolders;p&&p.length>0&&a.push(...p)}if(a.length!==0)for(let p of a)try{let l=p.fsPath||p.uri?.fsPath||"";if(!l||!V.existsSync(l))continue;let d=X.join(l,"analysis");if(V.existsSync(d)){let f=I.workspace.createFileSystemWatcher(new I.RelativePattern(I.Uri.file(d),"*.md"));f.onDidCreate(()=>i.refreshPhases().catch(()=>{})),f.onDidChange(()=>i.refreshPhases().catch(()=>{})),f.onDidDelete(()=>i.forceReload().catch(()=>{})),o.push(f)}let c=X.join(l,"agent");if(V.existsSync(c)){let f=I.workspace.createFileSystemWatcher(new I.RelativePattern(I.Uri.file(c),"*.md"));f.onDidCreate(()=>i.refreshPhases().catch(()=>{})),f.onDidChange(()=>i.refreshPhases().catch(()=>{})),f.onDidDelete(()=>i.refreshPhases().catch(()=>{})),o.push(f)}let g=X.join(l,"prompts");if(V.existsSync(g)){let f=I.workspace.createFileSystemWatcher(new I.RelativePattern(I.Uri.file(g),"*.md"));f.onDidCreate(()=>i.refreshPhases().catch(()=>{})),f.onDidChange(()=>i.refreshPhases().catch(()=>{})),f.onDidDelete(()=>i.refreshPhases().catch(()=>{})),o.push(f)}let m=X.join(l,"docs");if(V.existsSync(m)){let f=I.workspace.createFileSystemWatcher(new I.RelativePattern(I.Uri.file(m),"notes.md"));f.onDidCreate(()=>i.forceReload().catch(()=>{})),f.onDidChange(()=>i.forceReload().catch(()=>{})),f.onDidDelete(()=>i.forceReload().catch(()=>{})),o.push(f)}}catch(l){let d=p.fsPath||p.uri?.fsPath||"";console.error("[TidyProteomicsAgent] Failed to initialize file watchers for folder:",d,l)}};i.onFolderChangedCallback=r=>{n(r)},n(),y.subscriptions.push(I.workspace.onDidChangeWorkspaceFolders(()=>{n(),i.onWorkspaceChanged().catch(()=>{})})),y.subscriptions.push({dispose:()=>{for(let r of o)try{r.dispose()}catch{}o=[]}}),y.subscriptions.push(I.commands.registerCommand("tidyproteomicsagent.startPipeline",()=>{i.startPipeline()})),y.subscriptions.push(I.commands.registerCommand("tidyproteomicsagent.runCurrentPhase",()=>{i.runSelectedPhase().catch(r=>{I.window.showErrorMessage(`TidyProteomicsAgent: ${r.message||String(r)}`)})})),y.subscriptions.push(I.commands.registerCommand("tidyproteomicsagent.refreshTasks",()=>{i.forceReload()})),y.subscriptions.push(I.commands.registerCommand("tidyproteomicsagent.resetState",async()=>{await I.window.showWarningMessage("Are you sure you want to reset the pipeline state in docs/notes.md?",{modal:!0},"Yes","Cancel")==="Yes"&&(await i.resetAllState(),I.window.showInformationMessage("TidyProteomicsAgent: Pipeline state reset."))})),y.subscriptions.push(I.commands.registerCommand("tidyproteomicsagent.initWorkspace",async()=>{await i.promptInitWorkspace()}))}function Ue(){}0&&(module.exports={activate,deactivate});
+</html>`;
+  }
+};
+
+// src/extension.ts
+function activate(context) {
+  console.log("TidyProteomicsAgent extension is now active!");
+  const outputChannel = vscode2.window.createOutputChannel("TidyProteomicsAgent");
+  context.subscriptions.push(outputChannel);
+  const uncaughtHandler = (err) => {
+    const msg = err?.stack || String(err);
+    if (typeof msg === "string" && (msg.includes("Missing dataLength in event") || msg.includes("strict mode functions"))) {
+      return;
+    }
+    outputChannel.appendLine(`[UNCAUGHT EXCEPTION] ${msg}`);
+    console.error("[TidyProteomicsAgent UNCAUGHT EXCEPTION]", err);
+  };
+  const rejectionHandler = (reason) => {
+    const msg = reason?.stack || String(reason);
+    if (typeof msg === "string" && (msg.includes("Missing dataLength in event") || msg.includes("strict mode functions"))) {
+      return;
+    }
+    outputChannel.appendLine(`[UNHANDLED REJECTION] ${msg}`);
+    console.error("[TidyProteomicsAgent UNHANDLED REJECTION]", reason);
+  };
+  process.on("uncaughtException", uncaughtHandler);
+  process.on("unhandledRejection", rejectionHandler);
+  context.subscriptions.push({
+    dispose: () => {
+      process.removeListener("uncaughtException", uncaughtHandler);
+      process.removeListener("unhandledRejection", rejectionHandler);
+    }
+  });
+  const sidebarProvider = new SidebarViewProvider(context.extensionUri, context);
+  context.subscriptions.push(
+    vscode2.window.registerWebviewViewProvider(
+      SidebarViewProvider.viewType,
+      sidebarProvider
+    )
+  );
+  let watchers = [];
+  const updateWatchers = (customFolder) => {
+    for (const w of watchers) {
+      try {
+        w.dispose();
+      } catch (_) {
+      }
+    }
+    watchers = [];
+    const targetFolders = [];
+    if (customFolder) {
+      targetFolders.push(vscode2.Uri.file(customFolder));
+    } else {
+      const folders = vscode2.workspace.workspaceFolders;
+      if (folders && folders.length > 0) {
+        targetFolders.push(...folders);
+      }
+    }
+    if (targetFolders.length === 0) {
+      return;
+    }
+    for (const folder of targetFolders) {
+      try {
+        const folderPath = folder.fsPath || folder.uri?.fsPath || "";
+        if (!folderPath || !fs9.existsSync(folderPath)) {
+          continue;
+        }
+        const analysisDir = path9.join(folderPath, "analysis");
+        if (fs9.existsSync(analysisDir)) {
+          const analysisWatcher = vscode2.workspace.createFileSystemWatcher(
+            new vscode2.RelativePattern(vscode2.Uri.file(analysisDir), "*.md")
+          );
+          analysisWatcher.onDidCreate(() => sidebarProvider.refreshPhases().catch(() => {
+          }));
+          analysisWatcher.onDidChange(() => sidebarProvider.refreshPhases().catch(() => {
+          }));
+          analysisWatcher.onDidDelete(() => sidebarProvider.forceReload().catch(() => {
+          }));
+          watchers.push(analysisWatcher);
+        }
+        const agentDir = path9.join(folderPath, "agent");
+        if (fs9.existsSync(agentDir)) {
+          const agentWatcher = vscode2.workspace.createFileSystemWatcher(
+            new vscode2.RelativePattern(vscode2.Uri.file(agentDir), "*.md")
+          );
+          agentWatcher.onDidCreate(() => sidebarProvider.refreshPhases().catch(() => {
+          }));
+          agentWatcher.onDidChange(() => sidebarProvider.refreshPhases().catch(() => {
+          }));
+          agentWatcher.onDidDelete(() => sidebarProvider.refreshPhases().catch(() => {
+          }));
+          watchers.push(agentWatcher);
+        }
+        const promptsDir = path9.join(folderPath, "prompts");
+        if (fs9.existsSync(promptsDir)) {
+          const promptsWatcher = vscode2.workspace.createFileSystemWatcher(
+            new vscode2.RelativePattern(vscode2.Uri.file(promptsDir), "*.md")
+          );
+          promptsWatcher.onDidCreate(() => sidebarProvider.refreshPhases().catch(() => {
+          }));
+          promptsWatcher.onDidChange(() => sidebarProvider.refreshPhases().catch(() => {
+          }));
+          promptsWatcher.onDidDelete(() => sidebarProvider.refreshPhases().catch(() => {
+          }));
+          watchers.push(promptsWatcher);
+        }
+        const docsDir = path9.join(folderPath, "docs");
+        if (fs9.existsSync(docsDir)) {
+          const notesWatcher = vscode2.workspace.createFileSystemWatcher(
+            new vscode2.RelativePattern(vscode2.Uri.file(docsDir), "notes.md")
+          );
+          notesWatcher.onDidCreate(() => sidebarProvider.forceReload().catch(() => {
+          }));
+          notesWatcher.onDidChange(() => sidebarProvider.forceReload().catch(() => {
+          }));
+          notesWatcher.onDidDelete(() => sidebarProvider.forceReload().catch(() => {
+          }));
+          watchers.push(notesWatcher);
+        }
+      } catch (e) {
+        const folderPath = folder.fsPath || folder.uri?.fsPath || "";
+        console.error("[TidyProteomicsAgent] Failed to initialize file watchers for folder:", folderPath, e);
+      }
+    }
+  };
+  sidebarProvider.onFolderChangedCallback = (folderPath) => {
+    updateWatchers(folderPath);
+  };
+  updateWatchers();
+  context.subscriptions.push(
+    vscode2.workspace.onDidChangeWorkspaceFolders(() => {
+      updateWatchers();
+      sidebarProvider.onWorkspaceChanged().catch(() => {
+      });
+    })
+  );
+  context.subscriptions.push({
+    dispose: () => {
+      for (const w of watchers) {
+        try {
+          w.dispose();
+        } catch (_) {
+        }
+      }
+      watchers = [];
+    }
+  });
+  context.subscriptions.push(
+    vscode2.commands.registerCommand("tidyproteomicsagent.startPipeline", () => {
+      sidebarProvider.startPipeline();
+    })
+  );
+  context.subscriptions.push(
+    vscode2.commands.registerCommand("tidyproteomicsagent.runCurrentPhase", () => {
+      sidebarProvider.runSelectedPhase().catch((err) => {
+        vscode2.window.showErrorMessage(`TidyProteomicsAgent: ${err.message || String(err)}`);
+      });
+    })
+  );
+  context.subscriptions.push(
+    vscode2.commands.registerCommand("tidyproteomicsagent.refreshTasks", () => {
+      sidebarProvider.forceReload();
+    })
+  );
+  context.subscriptions.push(
+    vscode2.commands.registerCommand("tidyproteomicsagent.resetState", async () => {
+      const confirm = await vscode2.window.showWarningMessage(
+        "Are you sure you want to reset the pipeline state in docs/notes.md?",
+        { modal: true },
+        "Yes",
+        "Cancel"
+      );
+      if (confirm === "Yes") {
+        await sidebarProvider.resetAllState();
+        vscode2.window.showInformationMessage("TidyProteomicsAgent: Pipeline state reset.");
+      }
+    })
+  );
+  context.subscriptions.push(
+    vscode2.commands.registerCommand("tidyproteomicsagent.initWorkspace", async () => {
+      await sidebarProvider.promptInitWorkspace();
+    })
+  );
+}
+function deactivate() {
+}
+// Annotate the CommonJS export names for ESM import in node:
+0 && (module.exports = {
+  activate,
+  deactivate
+});
+//# sourceMappingURL=extension.js.map
