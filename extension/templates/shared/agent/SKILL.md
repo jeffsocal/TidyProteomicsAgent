@@ -553,8 +553,26 @@ data %>%  plot_expression(knockdown/control,
                   destination = "png")
 ```
 
-#### `plot_compexp(data, ...)`
-Comparative scatter plot contrasting fold changes between two distinct comparisons (e.g., Treatment A vs. Treatment B against common Control).
+#### `plot_compexp(table_a, table_b, log2fc_min = 2, significance_max = 0.05, labels_column = "protein", ...)`
+Comparative scatter plot contrasting log2 fold-changes between two distinct comparisons exported via `export_analysis(data, contrast, .analysis = "expression")` (e.g., Treatment A vs Control and Treatment B vs Control). Points in quadrant intersections represent co-regulated candidates, while off-axis points represent condition-specific responses.
+```r
+tbl_a <- export_analysis(stat_data, "drug_a/control", .analysis = "expression")
+tbl_b <- export_analysis(stat_data, "drug_b/control", .analysis = "expression")
+p <- plot_compexp(tbl_a, tbl_b, log2fc_min = 1, significance_max = 0.05, labels_column = "gene_name")
+tidyproteomics:::plot_save(p, data = NULL, file_name = "compexp_drug_a_vs_drug_b", destination = "png")
+```
+
+#### `plot_heatmap(data, row_names = FALSE, destination = "plot", ...)`
+Generates an unsupervised hierarchical clustering heatmap of quantified protein abundances across all samples and biological replicates. Supports annotation labeling (`row_names = "gene_name"`) and built-in image saving via `destination = "png"`.
+```r
+data %>% plot_heatmap(destination = "png")
+```
+
+#### `plot_venn(data, destination = "plot", ...)` / `plot_euler(data, destination = "plot", ...)`
+Generates Venn or Euler area-proportional diagrams displaying the qualitative overlap of identified proteins or peptides across experimental sample groups prior to imputation, spotlighting qualitative "on/off" binary switches.
+```r
+data %>% plot_venn(destination = "png")
+```
 
 ---
 

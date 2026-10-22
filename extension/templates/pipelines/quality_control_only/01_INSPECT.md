@@ -64,7 +64,18 @@ Construct and execute `code/01_inspect.R`, capturing full execution output to `l
     file.rename(count_plot, file.path("data", count_plot))
   }
   ```
-- [ ] **Checkpoint 1.2**: Verify that replicate counts, quantifiable fractions, replicate CV distributions, and missingness metrics are printed to stdout and recorded in `logs/01_inspect/console.log`.
+- [ ] **Qualitative Binary Switch Detection & Feature Overlap Profiling (`plot_venn` / `plot_euler`)**:
+  Inspect condition-unique presence/absence (proteins detected exclusively in one biological group vs another prior to imputation):
+  ```r
+  # Generate feature overlap visualization across sample groups:
+  invisible(tryCatch(data %>% plot_venn(destination = "png"), error = function(e) {
+    tryCatch(data %>% plot_euler(destination = "png"), error = function(e2) NULL)
+  }))
+  for (f in list.files(pattern = "^plot_.*_(venn|euler)\\.png$")) {
+    file.rename(f, file.path("data", f))
+  }
+  ```
+- [ ] **Checkpoint 1.2**: Verify that replicate counts, quantifiable fractions, replicate CV distributions, missingness metrics, and feature overlap / binary switch profiles are printed to stdout and recorded in `logs/01_inspect/console.log`.
 
 #### Phase 1.3: Annotation & Sample Inventory Enforcement
 - [ ] Extract and inspect sample group designations:
@@ -87,7 +98,7 @@ Construct and execute `code/01_inspect.R`, capturing full execution output to `l
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size.
   3. `sample_names` confirms the exact naming of control and treatment/perturbation conditions.
   4. `annot_terms` outputs all functional category names available in the dataset (e.g., Gene Ontology, Reactome, UniProt keywords).
-  5. Count diagnostic plot (`data/plot_proteins_counts.png` or `data/plot_peptides_counts.png`) exists in `data/` with non-zero file size.
+  5. Count diagnostic plot (`data/plot_proteins_counts.png` or `data/plot_peptides_counts.png`) exists in `data/` with non-zero file size (along with optional `data/plot_*_venn.png` or `data/plot_*_euler.png` if generated).
 
 #### Phase 1.4: Experimental Alignment, Contrast Scaffolding & Hypothesis Verification
 - [ ] **Inspect User Hypothesis & Parameters (`docs/experiment.md` Sections 1 & 2)**:

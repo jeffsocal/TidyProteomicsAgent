@@ -75,19 +75,25 @@ Compose `docs/scientific_report.md` formatted in GitHub-flavored markdown adheri
 5. **Results** (Clear narrative with embedded figures, statistics, and markdown tables):
    - **Data Quality & Cohort Diagnostics**:
      - Evaluation of identification counts across replicates (`![Identification Counts](../data/plot_<analyte>_counts.png)` if available).
+     - Qualitative binary switch and feature overlap profile (`![Feature Overlap](../data/plot_<analyte>_venn.png)` or `![Feature Overlap](../data/plot_<analyte>_euler.png)` if available).
      - Benchmarking of quantitative reproducibility across normalization candidates (`![Variation CV](../data/plot_<analyte>_normalizated_variation.png)` if pipeline-benchmarked).
-     - Unsupervised multivariate clustering demonstrating replicate reproducibility and group separation (`![PCA Score Plot](../data/plot_<analyte>_<norm>_pca_PC1PC2.png)` if available).
+     - Unsupervised multivariate clustering demonstrating replicate reproducibility and group separation (`![PCA Score Plot](../data/plot_<analyte>_<norm>_pca_PC1PC2.png)` and `![Sample Clustering Heatmap](../data/plot_<analyte>_<norm>_heatmap.png)` if available).
    - **Target Verification / Primary Biomarker Metrics**:
      - Rigorous confirmation of target perturbation efficiency (if targeted) or leading master regulator / biomarker hub statistics from `docs/observations.md` (Gene name / Accession, $\log_2\text{FC}$, $p$-value, $q$-value, % change).
+     - Dedicated candidate visual profile for investigated target: `![Target Expression Profile](../data/plot_expression_target_<target>_<contrast>.png)` (if available).
    - **Global Proteome Remodeling & Differential Expression**:
      - Global shift metrics: total quantified features, significantly upregulated, and significantly downregulated features per contrast.
      - Global landscape visualization: `![Volcano Plot](../data/<analyte>_volcano_<contrast>.png)` (if available on disk; otherwise summarize via table).
-     - Formatted markdown tables of Top 10 Upregulated and Top 10 Downregulated Biomarkers (Rank, Identifier / Gene Symbol, Description, $\log_2\text{FC}$, $q$-value, Primary Biological Function).
+     - Formatted markdown tables of Top 10 Upregulated, Top 10 Downregulated, and Top Volcano $\pi$-Score Biomarkers (Rank, Identifier / Gene Symbol, Description, $\log_2\text{FC}$, $q$-value, $\pi$-score, Primary Biological Function).
      - Visual expression profiles of leading candidates: `![Top Upregulated](../data/plot_expression_up_<contrast>.png)` and `![Top Downregulated](../data/plot_expression_down_<contrast>.png)` (if available).
+     - Dedicated visual expression profiles of agent-curated candidate subsets / complexes: `![Curated Candidate Profiles](../data/plot_expression_curated_<contrast>.png)` (if available).
+     - Cross-contrast comparative scatter plot: `![Comparative Expression](../data/plot_compexp_<contrastA>_vs_<contrastB>.png)` (if multi-contrast experiment evaluated).
    - **Functional & Pathway Enrichment Landscape**:
-     - Summary of enriched biological processes, cellular compartments, and molecular pathways.
+     - Summary of enriched biological processes, cellular compartments, and molecular pathways, highlighting leading-edge driver proteins.
      - Visual representation: `![Pathway Enrichment](../data/<analyte>_enrichment_<contrast>.png)` (if available on disk).
-     - Structured markdown table summarizing significant enriched pathways across annotation categories (Domain, Term Name, Direction, Rank Statistic / Score, $q$-value).
+     - Structured markdown table summarizing significant enriched pathways across annotation categories (Domain, Term Name, Direction, Rank Statistic / Score, $q$-value, Leading Driver Proteins).
+   - **Synthesized Biomarker Panel Heatmap**:
+     - Visual representation of the prioritized biological signature across all replicates: `![Synthesis Biomarker Heatmap](../data/plot_<analyte>_synthesis_heatmap.png)` (if generated).
    - **Targeted Hypothesis Inquiries & Sub-Threshold Complex Shifts**:
      - Results of follow-up inquiries conducted across Phases 7, 8, and 9 (from `docs/knowledge.md`, `docs/websearch.md`, and `docs/literature.md`), including coordinate shifts in unthresholded complex members.
 

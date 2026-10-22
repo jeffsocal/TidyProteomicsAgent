@@ -30,10 +30,11 @@ cat("=== OBJECT SUMMARY ===\n")
 print(tp_data)
 
 analyte_name <- tp_data$analyte
-available_terms <- get_annotation_terms(tp_data)
+available_terms <- get_annotation_terms(tp_data, format = "vector")
 
 # 3. Extract differential expression results across all defined contrasts:
-contrast_names <- names(tp_data$analysis)
+completed_analyses <- get_analyses(tp_data)
+contrast_names <- unique(completed_analyses$comparison)
 cat(sprintf("\nAvailable contrasts in object: %s\n", paste(contrast_names, collapse = ", ")))
 
 # Target check (if a specific target gene/protein was specified in docs/experiment.md; otherwise NULL):
@@ -105,8 +106,27 @@ for (c_name in contrast_names) {
   top_down <- sig_down %>% arrange(log2_foldchange) %>% head(10)
   cat(knitr::kable(top_down %>% select(any_of(display_columns)), format = "pipe"), sep = "\n")
 
-  # 4. Extract enrichment results across all analyzed categories for this contrast (if present)
-  enr_tbl <- dplyr::bind_rows(lapply(available_terms, function(t) {
+  # 4. Top robust candidates ranked by volcano pi-score: |log2FC| * -log10(adj_p_value)
+  cat(sprintf("\n=== TOP 10 BALANCED CANDIDATES (VOLCANO PI-SCORE) FOR %s ===\n", contrast_tag))
+  top_pi <- sig_all %>%
+    mutate(pi_score = abs(log2_foldchange) * -log10(pmax(adj_p_value, 1e-10))) %>%
+    arrange(desc(pi_score)) %>%
+    head(10)
+  cat(knitr::kable(top_pi %>% select(any_of(c(display_columns, "pi_score"))), format = "pipe"), sep = "\n")
+
+  # 5. Extract enrichment results across all analyzed categories for this contrast (if present)
+  enriched_terms <- if (nrow(completed_analyses) > 0) {
+    completed_analyses %>%
+      filter(comparison == paste0(treatment_group, "/", control_group), analysis == "enrichment") %>%
+      pull(term)
+  } else {
+    character(0)
+  }
+  if (length(enriched_terms) == 0) {
+    enriched_terms <- available_terms
+  }
+
+  enr_tbl <- dplyr::bind_rows(lapply(enriched_terms, function(t) {
     tryCatch(
       export_analysis(tp_data, paste0(treatment_group, "/", control_group), .analysis = "enrichment", .term = t) %>%
         dplyr::mutate(term = t, .before = 1),
@@ -126,6 +146,12 @@ for (c_name in contrast_names) {
     sig_enr <- enr_tbl %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05) %>% arrange(adj_p_value) %>% head(30)
     cat(knitr::kable(sig_enr %>% select(any_of(c("term", "annotation", "enrichment", "size", "p_value", "adj_p_value"))), format = "pipe"), sep = "\n")
   }
+}
+
+# 6. Multi-Contrast Cross-Comparison (if >= 2 contrasts evaluated)
+if (length(contrast_names) >= 2) {
+  cat("\n=== MULTI-CONTRAST CROSS-COMPARISON SUMMARY ===\n")
+  cat(sprintf("Total contrasts: %d. Comparing shared vs contrast-specific significant features.\n", length(contrast_names)))
 }
 
 # 5. Checkpoints

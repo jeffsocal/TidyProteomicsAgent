@@ -129,7 +129,7 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
 #### Phase 4.3: Automated Export, Volcano Plots & Candidate Expression Profiles
 - **Dynamic Label Selection**:
   ```r
-  label_col <- intersect(c("gene_name", "gene_symbol", "symbol", "protein"), get_annotation_terms(stat_data))[1]
+  label_col <- intersect(c("gene_name", "gene_symbol", "symbol", "protein"), get_annotation_terms(stat_data, format = "vector"))[1]
   if (is.na(label_col)) label_col <- stat_data$identifier
   ```
 - **Volcano Plot & Expression Table Export**:
@@ -139,15 +139,47 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
   ```
   *(Generates `<analyte>_volcano_<contrast>.png` and `table_<analyte>_expression_<contrast>.csv`).*
 
-- **Top Candidate Directional Expression Profiles**:
-  Export individual visual profiles for top upregulated and top downregulated candidates:
+- **Hypothesis-Driven Target & Candidate Expression Profiles**:
+  Export individual visual profiles for target perturbation candidates, top directional candidates, and agent-selected biological subsets of interest:
   ```r
+  # 1. Hypothesis-Driven Target Expression Profile (if specific target specified):
+  target_gene <- "<decided_target_gene_or_NULL>"
+  if (!is.null(target_gene) && nzchar(target_gene) && !grepl("<decided_", target_gene)) {
+    target_data <- tryCatch({
+      imp_data %>%
+        subset(as.name(label_col) %like% target_gene) %>%
+        expression(.pairs = pairs, .method = "limma")
+    }, error = function(e) {
+      tryCatch({
+        imp_data %>%
+          subset(as.name(stat_data$identifier[1]) %like% target_gene) %>%
+          expression(.pairs = pairs, .method = "limma")
+      }, error = function(e2) NULL)
+    })
+
+    if (!is.null(target_data)) {
+      cat(sprintf("Generating dedicated candidate expression profile for investigated target (%s)...\n", target_gene))
+      for (pair in pairs) {
+        c_str <- paste0(pair[1], "-", pair[2])
+        invisible(target_data %>% plot_expression(
+          paste0(pair[1], "/", pair[2]),
+          log2fc_min = 0, significance_max = 1, top_n = 5,
+          regulation = "both", labels_column = label_col, destination = "png"
+        ))
+        t_plot <- list.files(pattern = "^plot_(proteins|peptides)_.*_expression_.*\\.png$")[1]
+        if (!is.na(t_plot) && file.exists(t_plot)) {
+          file.rename(t_plot, file.path("data", sprintf("plot_expression_target_%s_%s.png", target_gene, c_str)))
+        }
+      }
+    }
+  }
+
   for (pair in pairs) {
     treatment_group <- pair[1]
     control_group <- pair[2]
     contrast_str <- paste0(treatment_group, "-", control_group)
 
-    # 1. Top upregulated candidates
+    # 2. Top upregulated candidates
     invisible(stat_data %>% plot_expression(
       paste0(treatment_group, "/", control_group),
       log2fc_min = 0, significance_max = 1, top_n = 10,
@@ -158,7 +190,7 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
       file.rename(up_plot, file.path("data", sprintf("plot_expression_up_%s.png", contrast_str)))
     }
 
-    # 2. Top downregulated candidates
+    # 3. Top downregulated candidates
     invisible(stat_data %>% plot_expression(
       paste0(treatment_group, "/", control_group),
       log2fc_min = 0, significance_max = 1, top_n = 10,
@@ -168,10 +200,58 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
     if (!is.na(down_plot) && file.exists(down_plot)) {
       file.rename(down_plot, file.path("data", sprintf("plot_expression_down_%s.png", contrast_str)))
     }
+
+    # 4. Agentic Discretionary Profiling ("Something Interesting"):
+    # Interrogate export_analysis() to identify 1-3 biologically compelling candidate subsets:
+    #   - Co-regulated multi-protein complexes (e.g. proteasome, ribosome, electron transport chain)
+    #   - Key regulatory protein classes (kinases, transcription factors, receptors, immune checkpoints)
+    #   - High-confidence un-imputed hits (zero imputed values with high unique peptide support)
+    #   - Unexpected biological outliers or discordant markers
+    # Example agent discretionary candidate pattern:
+    # curated_pattern <- "CDK|RB1|E2F"   # Or dynamically extracted from export_analysis()
+    # curated_data <- tryCatch({
+    #   imp_data %>% subset(as.name(label_col) %like% curated_pattern) %>% expression(.pairs = list(pair), .method = "limma")
+    # }, error = function(e) NULL)
+    # if (!is.null(curated_data)) {
+    #   invisible(curated_data %>% plot_expression(paste0(treatment_group, "/", control_group), log2fc_min = 0, significance_max = 1, top_n = 6, regulation = "both", labels_column = label_col, destination = "png"))
+    #   c_plot <- list.files(pattern = "^plot_(proteins|peptides)_.*_expression_.*\\.png$")[1]
+    #   if (!is.na(c_plot) && file.exists(c_plot)) file.rename(c_plot, file.path("data", sprintf("plot_expression_curated_%s.png", contrast_str)))
+    # }
+  }
+
+  # 5. Multi-Contrast Cross-Comparison (plot_compexp):
+  if (length(pairs) >= 2) {
+    cat("Multiple contrasts evaluated. Generating comparative expression scatter plot(s) (plot_compexp)...\n")
+    for (i in 1:(length(pairs) - 1)) {
+      for (j in (i + 1):length(pairs)) {
+        c_a <- paste0(pairs[[i]][1], "/", pairs[[i]][2])
+        c_b <- paste0(pairs[[j]][1], "/", pairs[[j]][2])
+        tag_a <- paste0(pairs[[i]][1], "-", pairs[[i]][2])
+        tag_b <- paste0(pairs[[j]][1], "-", pairs[[j]][2])
+
+        tbl_a <- export_analysis(stat_data, c_a, .analysis = "expression")
+        tbl_b <- export_analysis(stat_data, c_b, .analysis = "expression")
+
+        comp_plot <- plot_compexp(
+          tbl_a, tbl_b,
+          log2fc_min = 1, significance_max = 0.05,
+          labels_column = label_col
+        )
+        tidyproteomics:::plot_save(
+          comp_plot, data = NULL,
+          file_name = sprintf("compexp_%s_vs_%s", tag_a, tag_b),
+          destination = "png"
+        )
+        c_plot <- list.files(pattern = sprintf("^plot_compexp_%s_vs_%s\\.png$", tag_a, tag_b))[1]
+        if (!is.na(c_plot) && file.exists(c_plot)) {
+          file.rename(c_plot, file.path("data", c_plot))
+        }
+      }
+    }
   }
   ```
 
-- **Move Generated Volcano & Table Assets into `data/`**:
+- **Move Generated Plots & Table Assets into `data/`**:
   ```r
   generated_assets <- list.files(pattern = "^(plot_|table_|.*_volcano_|.*_expression_).*(png|csv)$")
   for (f in generated_assets) {
@@ -188,13 +268,16 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
   - Total quantified features (proteins or peptides).
   - Number of significantly dysregulated features ($|\log_2\text{FC}| \ge 1.0, q \le 0.05$), with counts upregulated and downregulated per contrast.
   - Leading biomarker candidates with fold changes and adjusted $p$-values.
+  - Investigated target status (fold-change and significance of target gene/protein if specified).
+  - Any agent-curated candidate subsets plotted and their biological rationale.
+  - Multi-contrast comparative alignment observations (if $\ge 2$ contrasts evaluated).
 
 #### Phase 4.5: Checkpoint Verification & State Recording
 - [ ] **Checkpoint 4.5**:
   1. `logs/04_expression/console.log` (or `logs/04_expression.log`) exists on disk with non-zero file size and no errors.
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size and contains expression results.
   3. Expression tables (`data/table_*_expression_*.csv`) exist on disk with non-zero file size.
-  4. Volcano and candidate expression plots (`data/*_volcano_*.png`, `data/plot_expression_up_*.png`, and `data/plot_expression_down_*.png`) exist on disk with non-zero file sizes.
-  5. `docs/notes.md` contains the differential expression summary.
+  4. Volcano and candidate expression plots (`data/*_volcano_*.png`, `data/plot_expression_*.png`, and any `data/plot_compexp_*.png`) exist on disk with non-zero file sizes.
+  5. `docs/notes.md` contains the differential expression summary, target verification, and candidate profiling rationale.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "04_EXPRESSION", summary = "Differential expression analysis/verification completed. Confirmed statistical calculations, generated volcano and directional candidate expression plots, exported expression tables, and persisted data/tidyproteomics_data.rds.")`
+  - Invoke `complete_phase(phaseName = "04_EXPRESSION", summary = "Differential expression analysis/verification completed. Confirmed statistical calculations, generated volcano, target/candidate expression plots (and comparative plots if multi-contrast), exported expression tables, and persisted data/tidyproteomics_data.rds.")`

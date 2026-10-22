@@ -54,17 +54,22 @@ Construct and execute `code/02_normalize.R`, capturing full execution output to 
     invisible(norm_data %>% plot_variation_cv(destination = "png"))
   }
   invisible(norm_data %>% plot_pca(destination = "png"))
+
+  # Optional / Discretionary unsupervised sample clustering heatmap:
+  # Generates global sample-level clustering across replicates to inspect cohort separation:
+  invisible(tryCatch(norm_data %>% plot_heatmap(destination = "png"), error = function(e) NULL))
   ```
 - Move generated diagnostic plots into `data/`:
   ```r
-  plots <- list.files(pattern = "^plot_.*(variation|pca).*\\.png$")
+  plots <- list.files(pattern = "^plot_.*(variation|pca|heatmap).*\\.png$")
   for (p in plots) {
     file.rename(p, file.path("data", p))
   }
   ```
-- **Variation Audit Check**:
+- **Variation & Clustering Audit Check**:
   - Inspect summary output to confirm that the normalization method successfully minimized quantitative CV across replicates relative to raw abundance (or verified replicate stability for pre-normalized data).
   - Confirm replicate clustering and condition separation in PCA scores.
+  - Interrogate top PCA loadings (identifying key proteins driving separation along PC1 and PC2) and global sample distance trends from the heatmap.
 
 #### Phase 2.4: Object Persistence & Blackboard Recording
 - Persist the normalized dataset to disk:
@@ -74,14 +79,15 @@ Construct and execute `code/02_normalize.R`, capturing full execution output to 
 - Record the following directly into `docs/notes.md`:
   - Normalization method (e.g., `loess`, `limma`, `median`, or verified pre-existing model).
   - Replicate CV statistics demonstrating variance minimization or replicate concordance.
-  - PCA clustering observations (e.g. replicate tightness, PC1/PC2 variance explained).
+  - PCA clustering observations (e.g. replicate tightness, PC1/PC2 variance explained, and leading proteins driving PC separation).
+  - Unsupervised heatmap clustering trends (if generated).
 
 #### Phase 2.5: Checkpoint Verification & State Recording
 - [ ] **Checkpoint 2.5**:
   1. `logs/02_normalize/console.log` (or `logs/02_normalize.log`) exists on disk with non-zero file size.
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size and contains normalized abundance layers.
   3. PCA score plot (`data/plot_*_pca_PC1PC2.png`) exists on disk with non-zero file size.
-  4. If multiple quantitative layers exist, variation plot (`data/plot_*_normalizated_variation.png`) exists on disk.
+  4. If multiple quantitative layers exist, variation plot (`data/plot_*_normalizated_variation.png`) exists on disk (along with optional `data/plot_*_heatmap.png` if generated).
   5. `docs/notes.md` contains the normalization benchmark or verification summary.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "02_NORMALIZE", summary = "Normalization benchmarking/verification completed. Confirmed normalized abundance state, verified replicate clustering on PCA, generated diagnostic plots, and persisted data/tidyproteomics_data.rds.")`
+  - Invoke `complete_phase(phaseName = "02_NORMALIZE", summary = "Normalization benchmarking/verification completed. Confirmed normalized abundance state, verified replicate clustering on PCA (and sample heatmap if generated), generated diagnostic plots, and persisted data/tidyproteomics_data.rds.")`
