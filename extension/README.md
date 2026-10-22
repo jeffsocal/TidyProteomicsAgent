@@ -10,7 +10,7 @@ Unlike standard conversational agents (e.g. Cline) that accumulate all file insp
 
 1. **Persistent Global Frame (Cached Prefix)**:
    - System Directives & Quality Gates (`agent/PROTOCOL.md`)
-   - Full Skill / API Conventions (`agent/SKILL.md` ~63 KB)
+   - Modular Skill / API Conventions (`agent/TIDYPROTEOMICS_*.md` loaded on-demand per phase)
    - Marked with provider-level **Prompt Caching** (e.g. Anthropic Ephemeral Caching or Gemini Context Caching) for fast, low-cost execution.
 
 2. **Shared Blackboard (Persistent Disk State)**:

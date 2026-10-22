@@ -7,6 +7,7 @@ export interface ContextBundle {
   phasePrompt: string;
   blackboardState: string;
   staticPrefixForCache: string;
+  loadedSkillFiles?: string[];
 }
 
 export class ContextBuilder {
@@ -31,6 +32,59 @@ export class ContextBuilder {
   }
 
   /**
+   * Resolves the list of skill names required for a phase.
+   * Checks YAML frontmatter in the phase directive first, then applies intelligent phase defaults.
+   */
+  public getSkillsForPhase(phaseFileName: string, phaseContent: string): string[] {
+    // 1. Check for YAML frontmatter with skills list
+    const match = phaseContent.match(/^---\s*[\r\n]+([\s\S]*?)[\r\n]+---/);
+    if (match) {
+      const frontmatter = match[1];
+      const skillsMatch = frontmatter.match(/skills:\s*[\r\n]+((?:\s*-\s*[\w_]+[\r\n]+)+)/);
+      if (skillsMatch) {
+        return skillsMatch[1]
+          .split(/[\r\n]+/)
+          .map((s) => s.replace(/^\s*-\s*/, "").trim())
+          .filter(Boolean);
+      }
+    }
+
+    // 2. Intelligent phase-to-skill mapping
+    const baseName = path.basename(phaseFileName).toUpperCase();
+    if (baseName.includes("INSTALL") || (baseName.includes("SETUP") && !baseName.includes("DATA"))) {
+      return ["TIDYPROTEOMICS_CORE"];
+    }
+    if (baseName.includes("INSPECT") || baseName.includes("DATA_QUALITY")) {
+      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_IMPORT_INSPECT"];
+    }
+    if (baseName.includes("NORMALIZE")) {
+      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_NORMALIZE_IMPUTE"];
+    }
+    if (baseName.includes("IMPUTE")) {
+      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_NORMALIZE_IMPUTE"];
+    }
+    if (baseName.includes("EXPRESSION")) {
+      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_EXPRESSION"];
+    }
+    if (baseName.includes("ENRICHMENT")) {
+      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_ENRICHMENT"];
+    }
+    if (
+      baseName.includes("OBSERVATION") ||
+      baseName.includes("KNOWLEDGE") ||
+      baseName.includes("WEBSEARCH") ||
+      baseName.includes("LITERATURE")
+    ) {
+      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_EXTRACT_QUERY"];
+    }
+    if (baseName.includes("SYNTHESIS")) {
+      return ["TIDYPROTEOMICS_CORE"];
+    }
+
+    return ["TIDYPROTEOMICS_CORE"];
+  }
+
+  /**
    * Builds the isolated context bundle for a specific phase.
    * Persistent elements (rules, skills, variables, instructions) form the static prefix.
    * Dynamic elements (blackboard docs/notes.md, experiment.md) and the phase file form the prompt.
@@ -52,7 +106,38 @@ export class ContextBuilder {
       const instruct = await this.readFileSafe(path.join(agentDir, "INSTRUCT.md"));
       protocol = `${clinerules}\n\n${instruct}`.trim();
     }
-    const skill = await this.readFileSafe(path.join(agentDir, "SKILL.md"));
+
+    // 2. Read phase directive early to extract skill declarations
+    let phasePath = phaseFileName;
+    if (!phaseFileName.includes("/") && !phaseFileName.includes("\\")) {
+      phasePath = path.join(this.analysisDir, phaseFileName);
+    }
+    const phaseContent = await this.readFileSafe(phasePath);
+
+    // 3. Modular skill resolution (TIDYPROTEOMICS_*.md segments)
+    const skillNames = this.getSkillsForPhase(phaseFileName, phaseContent);
+    const loadedSkillFiles: string[] = [];
+    const skillParts: string[] = [];
+
+    for (const sName of skillNames) {
+      const fName = sName.endsWith(".md") ? sName : `${sName}.md`;
+      const content = await this.readFileSafe(path.join(agentDir, fName));
+      if (content) {
+        loadedSkillFiles.push(path.join(agentDir, fName));
+        skillParts.push(content);
+      }
+    }
+
+    if (skillParts.length === 0) {
+      const coreContent = await this.readFileSafe(path.join(agentDir, "TIDYPROTEOMICS_CORE.md"));
+      if (coreContent) {
+        loadedSkillFiles.push(path.join(agentDir, "TIDYPROTEOMICS_CORE.md"));
+        skillParts.push(coreContent);
+      }
+    }
+
+    const skill = skillParts.join("\n\n---\n\n").trim();
+
     const experiment = await this.readFileSafe(path.join("docs", "experiment.md"));
     // Read legacy agent/VARIABLES.md if present, otherwise use docs/experiment.md
     let variables = await this.readFileSafe(path.join(agentDir, "VARIABLES.md"));
@@ -65,7 +150,7 @@ export class ContextBuilder {
       ? `\n\n# CURATED DOMAIN BIOLOGICAL CONTEXT\n${biology}`
       : "";
 
-    // Static prefix - perfectly cacheable across all phases!
+    // Static prefix - perfectly cacheable across all turns in this phase!
     const staticPrefixForCache = `
 # AUTONOMOUS ANALYSIS PROTOCOL & QUALITY GATES
 ${protocol}
@@ -78,7 +163,7 @@ ${biologySection}
 ${skill}
 `.trim();
 
-    // 2. Blackboard / Inter-Phase Shared State
+    // 4. Blackboard / Inter-Phase Shared State
     const notes = await this.readFileSafe(path.join("docs", "notes.md"));
     const llm = await this.readFileSafe(path.join("docs", "llm.md"));
 
@@ -94,13 +179,6 @@ ${llm || "No active model summary found."}
 ${experiment || "No user experiment design provided. Note: Sections 1 & 2 are strictly user-maintained. The agent may append or update Section 3 to scaffold sample grouping, renaming, and contrast suggestions for user confirmation."}
 ${this.buildLiteratureSection()}
 `.trim();
-
-    // 3. Isolated Phase Directive
-    let phasePath = phaseFileName;
-    if (!phaseFileName.includes("/") && !phaseFileName.includes("\\")) {
-      phasePath = path.join(this.analysisDir, phaseFileName);
-    }
-    const phaseContent = await this.readFileSafe(phasePath);
 
     const systemPrompt = staticPrefixForCache;
 
@@ -133,7 +211,8 @@ ${phaseContent}
       systemPrompt,
       phasePrompt,
       blackboardState,
-      staticPrefixForCache
+      staticPrefixForCache,
+      loadedSkillFiles
     };
   }
 

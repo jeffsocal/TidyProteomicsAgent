@@ -56,7 +56,13 @@ export class AgentLoop {
         phaseFileName: this.phaseName,
         model: cfg.model,
         provider: cfg.provider,
-        systemPromptFiles: ["agent/PROTOCOL.md", "docs/experiment.md", "agent/SKILL.md"],
+        systemPromptFiles: [
+          "agent/PROTOCOL.md",
+          "docs/experiment.md",
+          ...(this.context.loadedSkillFiles && this.context.loadedSkillFiles.length > 0
+            ? this.context.loadedSkillFiles
+            : ["agent/TIDYPROTEOMICS_CORE.md"]),
+        ],
         inputPromptFiles: [
           this.phaseName.includes("/") ? this.phaseName : `analysis/${this.phaseName}`,
           "docs/notes.md",

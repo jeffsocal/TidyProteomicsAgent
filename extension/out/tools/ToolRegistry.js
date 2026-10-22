@@ -96,13 +96,10 @@ class ToolRegistry {
         const root = this.workspaceRoot || "";
         const resolved = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(root, filePath);
         const normalizedRel = root ? path.relative(path.resolve(root), resolved).replace(/\\/g, "/") : filePath.replace(/\\/g, "/");
-        const PROTECTED_FILES = [
-            "docs/llm.md",
-            "agent/PROTOCOL.md",
-            "agent/SKILL.md",
-            "agent/VARIABLES.md",
-        ];
-        if (PROTECTED_FILES.some((p) => normalizedRel === p || normalizedRel.endsWith("/" + p))) {
+        const isProtected = ["docs/llm.md", "agent/PROTOCOL.md", "agent/VARIABLES.md"].some((p) => normalizedRel === p || normalizedRel.endsWith("/" + p)) ||
+            normalizedRel.startsWith("agent/TIDYPROTEOMICS_") ||
+            normalizedRel.includes("/agent/TIDYPROTEOMICS_");
+        if (isProtected) {
             throw new Error(`Security Policy Violation: '${filePath}' is a protected user or extension specification file and cannot be modified by the agent. Record runtime logs in 'docs/notes.md' and biological findings across docs/ (observations.md, knowledge.md, websearch.md, literature.md).`);
         }
     }

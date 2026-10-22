@@ -18,7 +18,7 @@ The diagram below illustrates the core execution architecture:
 ┌────────────────────────────────────────────────────────────────────────┐
 │                   PERSISTENT GLOBAL FRAME (Cached)                     │
 │  - System Directives (agent/PROTOCOL.md)                               │
-│  - Skill Knowledge Base (agent/SKILL.md ~63 KB)                        │
+│  - Modular Skill Segments (agent/TIDYPROTEOMICS_*.md)                  │
 │  - Curated Biology Context (agent/BIOLOGY.md - Optional)               │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
@@ -50,7 +50,7 @@ The diagram below illustrates the core execution architecture:
 
 1. **Persistent Global Frame (Cached Prefix)**:
    - System Directives & Protocol Guidelines (`agent/PROTOCOL.md`)
-   - Domain Skill Knowledge Base & API Conventions (`agent/SKILL.md` ~63 KB)
+   - Modular Domain Skill Segments (`agent/TIDYPROTEOMICS_*.md` dynamically loaded per phase)
    - Configured with provider-level **Prompt Caching** (e.g. Anthropic Ephemeral Caching or Gemini Context Caching) for rapid turnarounds and significant token cost reduction (often >80% prompt token cache hits).
 
 2. **Shared Blackboard (Persistent Disk State)**:

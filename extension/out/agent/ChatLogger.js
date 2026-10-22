@@ -160,7 +160,7 @@ class ChatLogger {
         const systemFiles = params.systemPromptFiles || [
             "agent/PROTOCOL.md",
             "docs/experiment.md",
-            "agent/SKILL.md",
+            "agent/TIDYPROTEOMICS_CORE.md",
         ];
         const inputFiles = params.inputPromptFiles || [
             params.phaseFileName.includes("/") ? params.phaseFileName : `analysis/${params.phaseFileName}`,

@@ -1,3 +1,8 @@
+---
+skills:
+  - TIDYPROTEOMICS_CORE
+---
+
 ### Phase 0: System Installation, Environment Readiness & Workspace Gates
 
 Execute workspace validation, enforce research specification gates, and establish the runtime tracking blackboard. You must strictly enforce all checkpoints below before allowing downstream analysis to proceed.

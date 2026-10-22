@@ -1,3 +1,9 @@
+---
+skills:
+  - TIDYPROTEOMICS_CORE
+  - TIDYPROTEOMICS_EXTRACT_QUERY
+---
+
 ### Phase 8: Web Search Corroboration & Second-Layer Conclusions
 
 In this phase, you (the LLM) will use the keyphrases curated in `07_KNOWLEDGE` (`docs/knowledge.md`) to conduct targeted web searches and external literature exploration. You will then ingest:
@@ -8,7 +14,7 @@ In this phase, you (the LLM) will use the keyphrases curated in `07_KNOWLEDGE` (
 to further contextualize the observations and develop the **second layer of conclusions**.
 
 If web search findings reveal new candidate interactors, orthologs, pathway regulators, or disease biomarkers that suggest follow-up questions:
-- Use `agent/SKILL.md` to query the saved dataset (`data/tidyproteomics_data.rds`) directly (e.g. writing `code/08_websearch.R` logged to `logs/08_websearch/console.log`).
+- Use `agent/TIDYPROTEOMICS_EXTRACT_QUERY.md` to query the saved dataset (`data/tidyproteomics_data.rds`) directly (e.g. writing `code/08_websearch.R` logged to `logs/08_websearch/console.log`).
 - Document any **new** data-derived observations in `docs/websearch.md`.
 
 You will also develop a targeted **Literature Search Strategy** (defining candidate seed gene symbols, functional modules, and context filters) to prepare for the DuckDB Literature Knowledge Database interrogation in Phase 09.
@@ -37,13 +43,13 @@ Extract the prioritized keyphrases from `docs/knowledge.md` and execute targeted
 
 ---
 
-#### 3. Interactive Data Queries via `agent/SKILL.md` (Testing New Web-Derived Hypotheses)
+#### 3. Interactive Data Queries via `agent/TIDYPROTEOMICS_EXTRACT_QUERY.md` (Testing New Web-Derived Hypotheses)
 If external web findings suggest candidate interactors, co-complex members, or downstream pathway markers that were not initially examined in Phase 6:
 - Write and execute `code/08_websearch.R` (capturing output to `logs/08_websearch/console.log`):
   ```bash
   mkdir -p logs/08_websearch && Rscript code/08_websearch.R 2>&1 | tee logs/08_websearch/console.log
   ```
-- Use canonical `tidyproteomics` functions per `agent/SKILL.md`:
+- Use canonical `tidyproteomics` functions per `agent/TIDYPROTEOMICS_EXTRACT_QUERY.md`:
   ```r
   library(tidyproteomics)
   library(dplyr)
@@ -61,21 +67,30 @@ If external web findings suggest candidate interactors, co-complex members, or d
 
 ---
 
-#### 4. Developing Second-Layer Biological Conclusions
+#### 4. Developing Second-Layer Biological Conclusions (Evidentiary Tiering)
 Synthesize findings across the primary data (`docs/observations.md`), internal domain knowledge (`docs/knowledge.md`), and web search evidence:
-1. **Corroboration of Primary Remodeling**:
-   - Do external studies support the directionality and magnitude of the observed proteomic changes?
-   - Are the top altered proteins established hallmarks of the perturbation or cellular phenotype?
-2. **Identification of Novel vs. Canonical Responses**:
-   - Differentiate canonical markers (commonly observed across similar perturbation studies) from potential study-specific or novel discoveries.
-3. **Cross-Study & Model Comparison**:
-   - How do the findings compare with published datasets in orthologous models or clinical disease contexts?
+
+1. **Strict Evidentiary Distance Tiering**:
+   When evaluating external studies and literature findings, explicitly classify each reference by its biological and assay proximity to the current experiment:
+   - **Tier 1 (Direct Match):** Same species, same tissue/cell type, same condition (e.g., human lung granuloma tissue proteomics or spatial transcriptomics). Represents direct molecular validation.
+   - **Tier 2 (Surrogate Matrix / Proximal Model):** Human peripheral biofluids (plasma, serum) or in vitro human primary cell models. Must be explicitly labeled as **surrogate context**, not tissue validation.
+   - **Tier 3 (Distal Context):** Animal models (e.g., mouse, rabbit) or transformed cell line screens.
+2. **Handling Non-Replicated Literature Candidates**:
+   - Candidates nominated by external literature or surrogate panels that show no statistically significant change in the empirical dataset ($p > 0.05$ or $|\log_2\text{FC}| < 0.5$) must be classified as **"Non-Replicated / Concordance: NONE"**.
+   - **Prohibition on Speculative Hijacking**: Do NOT construct extensive narrative hypotheses or speculation around non-replicated external genes. State the lack of replication concisely (1–2 sentences) as empirical divergence between the primary tissue pathology and surrogate matrices (e.g., tissue lesions vs. circulating plasma).
+3. **Corroboration of Primary Remodeling**:
+   - Do external studies support the directionality and magnitude of the primary empirical changes?
+   - Focus corroboration on the dataset's actual drivers (Top Upregulated, Top Downregulated, enriched pathways).
+4. **Identification of Novel vs. Canonical Responses**:
+   - Differentiate canonical markers (commonly observed across similar perturbation studies) from potential study-specific or novel tissue discoveries.
+5. **Cross-Study & Model Comparison**:
+   - How do the findings compare with published datasets across Tier 1, 2, and 3 contexts?
 
 ---
 
 #### 5. Developing a Literature Search Strategy for Phase 09
 Formulate a concrete search strategy to interrogate the DuckDB Literature Knowledge Database in Phase 09:
-- **Seed Gene Symbols** (`seed_symbols`): Comma-separated list of 3–8 primary altered genes and verified candidate interactors (e.g. `"VCP,FAF2,DERL1,UFD1"`).
+- **Seed Gene Symbols** (`seed_symbols`): Comma-separated list of 3–8 primary altered genes and verified candidate interactors (e.g. `"VCP,FAF2,DERL1,UFD1"`), anchored in top empirical hits.
 - **Pathway Terms** (`pathway_terms`): Comma-separated functional terms and molecular complexes (e.g. `"ERAD,proteasome,unfolded protein response"`).
 - **Interrogation Targets**: Specific candidate complexes or functional modules hypothesized to show sub-threshold coordinated regulation.
 
@@ -98,16 +113,17 @@ Organize the document strictly into the following structured sections:
    - Summary of keyphrases searched, information sources consulted, and search objectives.
 2. **Follow-Up Data Inquiries & New Observations**:
    - If follow-up data queries were executed via `code/08_websearch.R`, document hypotheses tested, candidate proteins queried, and **new data-derived observations** (with exact $\log_2\text{FC}$ and $p$-values). If no additional queries were required, state that the current dataset was verified.
-3. **Second-Layer Biological Conclusions**:
+3. **Second-Layer Biological Conclusions (with Evidentiary Tiering)**:
    - Synthesized biological interpretation combining primary observations, internal knowledge, and external web findings.
-   - Grounding in published biological mechanisms and multi-omics benchmarks.
+   - Explicit classification of cited studies into **Tier 1 (Direct Match)**, **Tier 2 (Surrogate Context)**, or **Tier 3 (Distal Context)**.
+   - **Accounting for Non-Replicated Literature Candidates**: Summary table or concise audit documenting external candidates that failed to replicate ($p > 0.05$ or $|\log_2\text{FC}| < 0.5$) labeled as **"Non-Replicated / Concordance: NONE"**, without speculative narrative expansion.
 4. **Cross-Study Parallels & Phenotypic Significance**:
    - Comparisons with published perturbation datasets, disease models, or drug response profiles.
    - Distinguishing expected canonical responses from novel, unexpected remodeling.
 5. **Literature Search Strategy for Phase 09**:
    - Defined seed symbols (`seed_symbols`), pathway terms (`pathway_terms`), and prioritized candidate complexes for querying the DuckDB Literature Knowledge Database.
 6. **Documented References**:
-   - Complete bibliography of all external sources referenced: Title, Authors/Venue, Year, and valid URL or DOI/PMID. Never fabricate identifiers.
+   - Complete bibliography of all external sources referenced: Title, Authors/Venue, Year, Evidentiary Tier (Tier 1/2/3), and valid URL or DOI/PMID. Never fabricate identifiers.
 
 ---
 

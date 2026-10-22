@@ -1,3 +1,9 @@
+---
+skills:
+  - TIDYPROTEOMICS_CORE
+  - TIDYPROTEOMICS_NORMALIZE_IMPUTE
+---
+
 ### Phase 2: Contaminant Filtering & Multi-Method Normalization Benchmarking
 
 Construct and execute `code/02_normalize.R`, capturing full execution output to `logs/02_normalize/console.log` (e.g. `mkdir -p logs/02_normalize && Rscript code/02_normalize.R 2>&1 | tee logs/02_normalize/console.log`). You must strictly enforce all checkpoints below.

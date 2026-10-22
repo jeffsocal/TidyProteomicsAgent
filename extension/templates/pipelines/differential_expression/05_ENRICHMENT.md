@@ -1,3 +1,9 @@
+---
+skills:
+  - TIDYPROTEOMICS_CORE
+  - TIDYPROTEOMICS_ENRICHMENT
+---
+
 ### Phase 5: Functional Annotation Assessment & Pathway Enrichment
 
 Construct and execute `code/05_enrichment.R`, capturing full execution output to `logs/05_enrichment/console.log` (e.g. `mkdir -p logs/05_enrichment && Rscript code/05_enrichment.R 2>&1 | tee logs/05_enrichment/console.log`). You must strictly enforce all checkpoints below.
@@ -114,12 +120,209 @@ Construct and execute `code/05_enrichment.R`, capturing full execution output to
     *(Generates `<analyte>_enrichment_<contrast>.png` and `table_<analyte>_enrichment_<contrast>.csv`).*
 
   - **Pathway Leading-Edge Feature Extraction & Dissection**:
-    Connect top functional pathways directly back to their underlying molecular drivers:
+    Connect top functional pathways directly back to their underlying molecular drivers. Iterate through tested `selected_terms` using `rlang::inject()` and `.term = term_name` to prevent NSE failure and resolve Reactome accession IDs to human-readable names:
     ```r
-    for (pair in pairs) {
-      c_str <- paste0(pair[1], "/", pair[2])
-      enr_tbl <- tryCatch(export_analysis(enriched_data, c_str, .analysis = "enrichment"), error = function(e) NULL)
+    resolve_reactome_ids <- function(ids) {
+      if (length(ids) == 0) return(character(0))
+      resolved <- as.character(ids)
+      reactome_idx <- which(grepl("^R-[A-Z]{3}-[0-9]+", resolved))
+      if (length(reactome_idx) == 0) return(resolved)
+      unique_reactome <- unique(resolved[reactome_idx])
+      name_map <- list()
+      tsv_paths <- c("tools/reactome_pathways.tsv", "data/reactome_pathways.tsv", "extension/templates/shared/tools/reactome_pathways.tsv")
+      for (tp in tsv_paths) {
+        if (file.exists(tp)) {
+          tryCatch({
+            df <- read.delim(tp, header = FALSE, stringsAsFactors = FALSE, sep = "\t")
+            if (ncol(df) >= 2) {
+              sub_df <- df[df[[1]] %in% unique_reactome, ]
+              if (nrow(sub_df) > 0) {
+                for (i in seq_len(nrow(sub_df))) name_map[[sub_df[i, 1]]] <- sub_df[i, 2]
+              }
+            }
+          }, error = function(e) NULL)
+          break
+        }
+      }
+      unresolved <- setdiff(unique_reactome, names(name_map))
+      if (length(unresolved) > 0) {
+        for (rid in unresolved) {
+          suppressWarnings(tryCatch({
+            url <- paste0("https://reactome.org/ContentService/data/query/", rid)
+            con <- url(url, open = "r")
+            raw_txt <- readLines(con, warn = FALSE)
+            close(con)
+            if (length(raw_txt) > 0) {
+              parsed <- jsonlite::fromJSON(paste(raw_txt, collapse = "\n"))
+              if (!is.null(parsed$displayName) && nzchar(parsed$displayName)) name_map[[rid]] <- parsed$displayName
+            }
+          }, error = function(e) NULL))
+        }
+      }
+      for (i in reactome_idx) {
+        rid <- resolved[i]
+        if (!is.null(name_map[[rid]]) && nzchar(name_map[[rid]])) resolved[i] <- name_map[[rid]]
+      }
+      resolved
+    }
+
+  - Move generated default enrichment plots and tables into `data/`:
+    ```r
+    enr_assets <- list.files(pattern = "^(plot_|table_|.*_enrichment_).*(png|csv)$")
+    for (f in enr_assets) {
+      file.rename(f, file.path("data", f))
+    }
+    ```
+
+  - **Pathway Leading-Edge Member Protein Extraction & Dissection**:
+    Connect top functional pathways directly back to their underlying molecular drivers. Iterate through tested `selected_terms` using `rlang::inject()` and `.term = term_name` to resolve Reactome accession IDs and map driving member proteins:
+    ```r
+    resolve_reactome_ids <- function(ids) {
+      if (length(ids) == 0) return(character(0))
+      resolved <- as.character(ids)
+      reactome_idx <- which(grepl("^R-[A-Z]{3}-[0-9]+", resolved))
+      if (length(reactome_idx) == 0) return(resolved)
+      unique_reactome <- unique(resolved[reactome_idx])
+      name_map <- list()
+      tsv_paths <- c("tools/reactome_pathways.tsv", "data/reactome_pathways.tsv", "extension/templates/shared/tools/reactome_pathways.tsv")
+      for (tp in tsv_paths) {
+        if (file.exists(tp)) {
+          tryCatch({
+            df <- read.delim(tp, header = FALSE, stringsAsFactors = FALSE, sep = "\t")
+            if (ncol(df) >= 2) {
+              sub_df <- df[df[[1]] %in% unique_reactome, ]
+              if (nrow(sub_df) > 0) {
+                for (i in seq_len(nrow(sub_df))) name_map[[sub_df[i, 1]]] <- sub_df[i, 2]
+              }
+            }
+          }, error = function(e) NULL)
+          break
+        }
+      }
+      unresolved <- setdiff(unique_reactome, names(name_map))
+      if (length(unresolved) > 0) {
+        for (rid in unresolved) {
+          suppressWarnings(tryCatch({
+            url <- paste0("https://reactome.org/ContentService/data/query/", rid)
+            con <- url(url, open = "r")
+            raw_txt <- readLines(con, warn = FALSE)
+            close(con)
+            if (length(raw_txt) > 0) {
+              parsed <- jsonlite::fromJSON(paste(raw_txt, collapse = "\n"))
+              if (!is.null(parsed$displayName) && nzchar(parsed$displayName)) name_map[[rid]] <- parsed$displayName
+            }
+          }, error = function(e) NULL))
+        }
+      }
+      for (i in reactome_idx) {
+        rid <- resolved[i]
+        if (!is.null(name_map[[rid]]) && nzchar(name_map[[rid]])) resolved[i] <- name_map[[rid]]
+      }
+      resolved
+    }
+
+    for (c_str in available_contrasts) {
+      term_tables <- list()
+      for (term_name in selected_terms) {
+        t_tbl <- tryCatch(
+          rlang::inject(tidyproteomics::export_analysis(
+            enriched_data,
+            !!rlang::parse_expr(c_str),
+            .analysis = "enrichment",
+            .term = term_name
+          )) %>% dplyr::mutate(term = term_name, .before = 1),
+          error = function(e) NULL
+        )
+        if (!is.null(t_tbl) && nrow(t_tbl) > 0) {
+          term_tables[[term_name]] <- t_tbl
+        }
+      }
+      enr_tbl <- dplyr::bind_rows(term_tables)
       if (!is.null(enr_tbl) && nrow(enr_tbl) > 0) {
+        orig_annotation <- enr_tbl$annotation
+        if ("annotation" %in% names(enr_tbl)) {
+          enr_tbl <- enr_tbl %>% dplyr::mutate(annotation = resolve_reactome_ids(annotation))
+        }
+
+        # Member Protein Resolution & Leading-Edge Extraction (Optimization 4)
+        exp_tbl <- tryCatch(
+          rlang::inject(tidyproteomics::export_analysis(enriched_data, !!rlang::parse_expr(c_str), .analysis = "expression")),
+          error = function(e) NULL
+        )
+        prot_fc <- if (!is.null(exp_tbl) && "log2_foldchange" %in% names(exp_tbl)) setNames(exp_tbl$log2_foldchange, exp_tbl$protein) else numeric(0)
+        prot_pval <- if (!is.null(exp_tbl) && "adj_p_value" %in% names(exp_tbl)) setNames(exp_tbl$adj_p_value, exp_tbl$protein) else numeric(0)
+
+        gene_annos <- enriched_data$annotations[enriched_data$annotations$term == "gene_name", ]
+        gene_map <- setNames(sub(";.*", "", gene_annos$annotation), gene_annos$protein)
+        get_symbol <- function(prot) {
+          sym <- gene_map[prot]
+          ifelse(!is.na(sym) & nzchar(sym), sym, prot)
+        }
+
+        anno_unnested <- enriched_data$annotations %>%
+          filter(!is.na(annotation), nzchar(annotation)) %>%
+          tidyr::separate_rows(annotation, sep = ";") %>%
+          mutate(annotation = trimws(annotation)) %>%
+          filter(nzchar(annotation)) %>%
+          distinct(term, annotation, protein)
+
+        anno_to_prots <- split(anno_unnested$protein, paste0(anno_unnested$term, "___", anno_unnested$annotation))
+
+        reactome_lut <- list()
+        tsv_paths <- c("tools/reactome_pathways.tsv", "extension/templates/shared/tools/reactome_pathways.tsv")
+        for (tp in tsv_paths) {
+          if (file.exists(tp)) {
+            tryCatch({
+              lut_df <- read.delim(tp, header = FALSE, stringsAsFactors = FALSE)
+              if (ncol(lut_df) >= 2) {
+                for (idx in seq_len(nrow(lut_df))) reactome_lut[[lut_df[idx, 2]]] <- lut_df[idx, 1]
+              }
+            }, error = function(e) NULL)
+            break
+          }
+        }
+
+        member_proteins_vec <- character(nrow(enr_tbl))
+        leading_edge_counts <- integer(nrow(enr_tbl))
+
+        for (k in seq_len(nrow(enr_tbl))) {
+          t_term <- enr_tbl$term[k]
+          t_anno <- enr_tbl$annotation[k]
+          t_orig <- orig_annotation[k]
+          
+          key <- paste0(t_term, "___", t_anno)
+          prots <- anno_to_prots[[key]]
+          if (is.null(prots) || length(prots) == 0) prots <- anno_to_prots[[paste0(t_term, "___", t_orig)]]
+          if ((is.null(prots) || length(prots) == 0) && t_term == "reactome") {
+            rid <- reactome_lut[[t_anno]]
+            if (!is.null(rid)) prots <- anno_to_prots[[paste0(t_term, "___", rid)]]
+          }
+          
+          if (!is.null(prots) && length(prots) > 0) {
+            p_fc <- prot_fc[prots]
+            p_adj <- prot_pval[prots]
+            valid_fc <- ifelse(is.na(p_fc), 0, p_fc)
+            ord <- order(-abs(valid_fc))
+            ordered_prots <- prots[ord]
+            ordered_syms <- sapply(ordered_prots, get_symbol)
+            
+            sig_drivers <- sum(!is.na(p_adj) & p_adj <= 0.05)
+            leading_edge_counts[k] <- sig_drivers
+            top_syms <- head(unique(ordered_syms), 10)
+            member_proteins_vec[k] <- paste(top_syms, collapse = ", ")
+          } else {
+            member_proteins_vec[k] <- NA_character_
+            leading_edge_counts[k] <- 0L
+          }
+        }
+
+        enr_tbl$member_proteins <- member_proteins_vec
+        enr_tbl$leading_edge_count <- leading_edge_counts
+
+        out_csv <- file.path("data", paste0("table_proteins_enrichment_", gsub("/", "-", c_str), ".csv"))
+        readr::write_csv(enr_tbl, out_csv)
+        cat(sprintf("Exported enriched table with member_proteins and leading_edge_count to %s\n", out_csv))
+
         sig_terms <- enr_tbl %>%
           filter(!is.na(adj_p_value), adj_p_value <= 0.05) %>%
           arrange(adj_p_value) %>%
@@ -128,18 +331,12 @@ Construct and execute `code/05_enrichment.R`, capturing full execution output to
         cat(sprintf("\n=== LEADING ENRICHED PATHWAYS (%s) ===\n", c_str))
         for (k in seq_len(nrow(sig_terms))) {
           t_name <- sig_terms$annotation[k]
-          cat(sprintf("Pathway [%s]: %s (Score: %.2f, q = %.2e)\n",
-                      sig_terms$term[k], t_name, sig_terms$score[k], sig_terms$adj_p_value[k]))
+          score_val <- if ("enrichment" %in% names(sig_terms)) sig_terms$enrichment[k] else if ("score" %in% names(sig_terms)) sig_terms$score[k] else NA
+          drivers <- if ("member_proteins" %in% names(sig_terms) && !is.na(sig_terms$member_proteins[k])) sig_terms$member_proteins[k] else "N/A"
+          cat(sprintf("Pathway [%s]: %s (Score: %.2f, q = %.2e) | Drivers: %s\n",
+                      sig_terms$term[k], t_name, score_val, sig_terms$adj_p_value[k], drivers))
         }
       }
-    }
-    ```
-
-  - Move generated enrichment assets into `data/`:
-    ```r
-    enr_assets <- list.files(pattern = "^(plot_|table_|.*_enrichment_).*(png|csv)$")
-    for (f in enr_assets) {
-      file.rename(f, file.path("data", f))
     }
     ```
 - If enrichment was bypassed:
@@ -156,15 +353,15 @@ Construct and execute `code/05_enrichment.R`, capturing full execution output to
   - Analyzed annotation categories (e.g. `gene_ontology_biological_process`, `reactome_pathway`, or note that enrichment was bypassed).
   - Total significant enriched terms ($q \le 0.05$) per category (if analyzed).
   - Leading enriched upregulated and downregulated biological pathways (if analyzed).
-  - Key driving member proteins identified in top functional pathways (if analyzed).
+  - Key driving member proteins and leading-edge counts identified in top functional pathways (if analyzed).
 
 #### Phase 5.5: Checkpoint Verification & State Recording
 - [ ] **Checkpoint 5.5**:
   1. `logs/05_enrichment/console.log` (or `logs/05_enrichment.log`) exists on disk with non-zero file size.
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size.
-  3. If functional terms were analyzed: enrichment tables (`data/table_*_enrichment_*.csv`) and enrichment plots (`data/*_enrichment_*.png`) exist in `data/` with non-zero file sizes. If bypassed, `docs/notes.md` explicitly documents the bypass.
+  3. If functional terms were analyzed: enrichment tables (`data/table_*_enrichment_*.csv`) exist in `data/` with non-zero file size and contain `member_proteins` and `leading_edge_count` columns. Enrichment plots (`data/*_enrichment_*.png`) exist in `data/` with non-zero file sizes. If bypassed, `docs/notes.md` explicitly documents the bypass.
   4. `docs/notes.md` contains the functional enrichment audit and summary (or bypass documentation).
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "05_ENRICHMENT", summary = "Functional annotation assessment and pathway enrichment verification completed. Tested/confirmed targeted categories, exported enrichment tables and plots, and persisted data/tidyproteomics_data.rds.")` (or summary documenting bypass if annotations were unavailable).
+  - Invoke `complete_phase(phaseName = "05_ENRICHMENT", summary = "Functional annotation assessment and pathway enrichment verification completed. Tested/confirmed targeted categories, exported enrichment tables with member proteins and leading-edge counts, generated plots, and persisted data/tidyproteomics_data.rds.")` (or summary documenting bypass if annotations were unavailable).
   - **CRITICAL AUTONOMY MANDATE**: You MUST invoke `complete_phase` to advance the pipeline to Phase 6. Under no circumstances should you halt execution, stop calling tools, or wait for user instructions.
 

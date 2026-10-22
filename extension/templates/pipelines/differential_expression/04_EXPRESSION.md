@@ -1,3 +1,9 @@
+---
+skills:
+  - TIDYPROTEOMICS_CORE
+  - TIDYPROTEOMICS_EXPRESSION
+---
+
 ### Phase 4: Differential Expression Analysis & Candidate Profiling
 
 Construct and execute `code/04_expression.R`, capturing full execution output to `logs/04_expression/console.log` (e.g. `mkdir -p logs/04_expression && Rscript code/04_expression.R 2>&1 | tee logs/04_expression/console.log`). You must strictly enforce all checkpoints below.
@@ -95,7 +101,66 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
        ```
     3. Do NOT proceed to calculate linear models until Section 3 has been confirmed by the user.
 
-#### Phase 4.2: Empirical Bayes Differential Expression & Pass-Through Audit
+#### Phase 4.2: Repeated Measures, Paired Modeling & Empirical Bayes Differential Expression
+- **Repeated Measures, Paired Contrasts & Batch Adjustment Audit**:
+  Inspect `imp_data$experiments` for `subject_id`, `replicate_id`, and `batch` (populated in Phase 1) to eliminate pseudo-replication:
+  ```r
+  cat("\n=== REPEATED MEASURES & PAIRED MODELING AUDIT ===\n")
+  if (!"subject_id" %in% names(imp_data$experiments)) {
+    # Fallback heuristic if not populated in Phase 1:
+    files <- imp_data$experiments$sample_file
+    sub_matches <- regmatches(files, regexec("(Sample|Donor|Patient|Subject)[-_ ]?([0-9]+)([a-zA-Z])?", files, ignore.case = TRUE))
+    imp_data$experiments$subject_id <- sapply(seq_along(files), function(i) {
+      sm <- sub_matches[[i]]
+      if (length(sm) >= 3) paste0(sm[2], sm[3]) else paste0("Subject_", i)
+    })
+  }
+
+  subj_by_cond <- split(imp_data$experiments$sample, imp_data$experiments$subject_id)
+  has_tech_reps <- any(sapply(subj_by_cond, function(x) length(x) > length(unique(x))))
+  paired_subjs <- names(subj_by_cond)[sapply(subj_by_cond, function(x) length(unique(x)) > 1)]
+  has_paired <- length(paired_subjs) > 0
+
+  cat(sprintf("Repeated measures within condition (technical cuts): %s\n", has_tech_reps))
+  cat(sprintf("Paired donors across conditions: %s (%d subjects: %s)\n",
+              has_paired, length(paired_subjs), paste(paired_subjs, collapse = ", ")))
+
+  # 1. Technical Replicate Handling:
+  # If multiple files share the same subject_id within a condition, evaluate consensus correlation via limma::duplicateCorrelation():
+  if (has_tech_reps || has_paired) {
+    cat("Evaluating within-subject correlation via limma::duplicateCorrelation(..., block = subject_id)...\n")
+    tryCatch({
+      data_quant <- imp_data %>% tidyproteomics::extract(imp_data$quantitative_source) %>% 
+        dplyr::select(!dplyr::matches("^origin$")) %>% 
+        tidyproteomics:::transform_log2()
+      
+      data_quant_wide <- data_quant %>% 
+        dplyr::filter(sample %in% c(treatment_group, control_group)) %>% 
+        tidyr::pivot_wider(names_from = c("sample", "replicate"), names_sep = "___", values_from = "abundance_log2")
+      
+      data_lmfit <- data_quant_wide %>% tibble::column_to_rownames("identifier") %>% as.data.frame()
+      col_df <- data.frame(colname = colnames(data_lmfit), stringsAsFactors = FALSE) %>%
+        tidyr::separate(colname, into = c("sample", "replicate"), sep = "___", remove = FALSE) %>%
+        mutate(replicate = as.character(replicate)) %>%
+        left_join(imp_data$experiments %>% mutate(replicate = as.character(replicate)), by = c("sample", "replicate"))
+      
+      design <- model.matrix(~ factor(col_df$sample, levels = c(control_group, treatment_group)))
+      corfit <- limma::duplicateCorrelation(data_lmfit, design, block = col_df$subject_id)
+      cat(sprintf("limma::duplicateCorrelation consensus correlation on subject_id: %.4f\n", corfit$consensus.correlation))
+    }, error = function(e) {
+      cat("Note: duplicateCorrelation audit encountered: ", conditionMessage(e), "\n")
+    })
+  }
+
+  # 2. Paired Contrasts:
+  # If donors are matched across conditions, model.matrix(~ subject_id + condition) should be considered:
+  # design <- model.matrix(~ subject_id + condition)
+
+  # 3. Batch Adjustment:
+  # If bridge samples indicate identifiable batch effects without total confounding, support additive batch terms:
+  # design <- model.matrix(~ batch + condition) # or limma::removeBatchEffect()
+  ```
+
 - Check if differential expression results have already been computed for the designated contrast(s) in upstream operations:
   ```r
   ops <- operations(imp_data)
@@ -105,7 +170,7 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
   for (pair in pairs) {
     contrast_str <- paste0(pair[1], "/", pair[2])
     has_pair <- tryCatch({
-      tbl <- export_analysis(imp_data, contrast_str, .analysis = "expression")
+      tbl <- rlang::inject(export_analysis(imp_data, !!rlang::parse_expr(contrast_str), .analysis = "expression"))
       !is.null(tbl) && nrow(tbl) > 0
     }, error = function(e) FALSE)
     if (!has_pair) {
@@ -123,7 +188,6 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
       expression(.pairs = pairs, .method = "limma")
   }
   ```
-  *(Note for repeated measures / paired-sample cohorts: specify subject origin in metadata and consider `expression(..., .method = "mixed-effects")`).*
 - **Checkpoint 4.2**: Verify that differential expression contrasts are confirmed and recorded in `operations(stat_data)`.
 
 #### Phase 4.3: Automated Export, Volcano Plots & Candidate Expression Profiles
@@ -200,23 +264,6 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
     if (!is.na(down_plot) && file.exists(down_plot)) {
       file.rename(down_plot, file.path("data", sprintf("plot_expression_down_%s.png", contrast_str)))
     }
-
-    # 4. Agentic Discretionary Profiling ("Something Interesting"):
-    # Interrogate export_analysis() to identify 1-3 biologically compelling candidate subsets:
-    #   - Co-regulated multi-protein complexes (e.g. proteasome, ribosome, electron transport chain)
-    #   - Key regulatory protein classes (kinases, transcription factors, receptors, immune checkpoints)
-    #   - High-confidence un-imputed hits (zero imputed values with high unique peptide support)
-    #   - Unexpected biological outliers or discordant markers
-    # Example agent discretionary candidate pattern:
-    # curated_pattern <- "CDK|RB1|E2F"   # Or dynamically extracted from export_analysis()
-    # curated_data <- tryCatch({
-    #   imp_data %>% subset(as.name(label_col) %like% curated_pattern) %>% expression(.pairs = list(pair), .method = "limma")
-    # }, error = function(e) NULL)
-    # if (!is.null(curated_data)) {
-    #   invisible(curated_data %>% plot_expression(paste0(treatment_group, "/", control_group), log2fc_min = 0, significance_max = 1, top_n = 6, regulation = "both", labels_column = label_col, destination = "png"))
-    #   c_plot <- list.files(pattern = "^plot_(proteins|peptides)_.*_expression_.*\\.png$")[1]
-    #   if (!is.na(c_plot) && file.exists(c_plot)) file.rename(c_plot, file.path("data", sprintf("plot_expression_curated_%s.png", contrast_str)))
-    # }
   }
 
   # 5. Multi-Contrast Cross-Comparison (plot_compexp):
@@ -251,13 +298,48 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
   }
   ```
 
-- **Move Generated Plots & Table Assets into `data/`**:
+- **Move Generated Plots & Default Tables into `data/`**:
   ```r
   generated_assets <- list.files(pattern = "^(plot_|table_|.*_volcano_|.*_expression_).*(png|csv)$")
   for (f in generated_assets) {
     file.rename(f, file.path("data", f))
   }
   ```
+
+- **Imputation Proportion Tracking & Detection-Rate Sensitivity Tagging**:
+  Prevent on/off limit-of-detection artifacts from masquerading as continuous biological shifts. Ensure `table_<analyte>_expression_<contrast>.csv` contains per-condition imputation tracking and risk flags:
+  ```r
+  for (pair in pairs) {
+    c_str <- paste0(pair[1], "/", pair[2])
+    c_tag <- paste0(pair[1], "-", pair[2])
+    g1 <- pair[1]
+    g2 <- pair[2]
+    g1_imp <- paste0("imputed_", g1)
+    g2_imp <- paste0("imputed_", g2)
+
+    result <- rlang::inject(export_analysis(stat_data, !!rlang::parse_expr(c_str), .analysis = "expression"))
+    if (!is.null(result) && nrow(result) > 0) {
+      result <- result %>%
+        mutate(
+          imputed_total = if ("imputed" %in% names(.)) imputed else NA_real_,
+          imputation_bias = case_when(
+            pmax(if (g1_imp %in% names(.)) get(g1_imp) else 0,
+                 if (g2_imp %in% names(.)) get(g2_imp) else 0, na.rm = TRUE) > 0.5 ~ "HIGH",
+            pmax(if (g1_imp %in% names(.)) get(g1_imp) else 0,
+                 if (g2_imp %in% names(.)) get(g2_imp) else 0, na.rm = TRUE) >= 0.2 ~ "MODERATE",
+            TRUE ~ "LOW"
+          )
+        )
+
+      csv_path <- file.path("data", sprintf("table_%s_expression_%s.csv", stat_data$analyte, c_tag))
+      readr::write_csv(result, csv_path)
+      cat(sprintf("Updated %s with imputation proportion tracking and imputation_bias flags.\n", csv_path))
+      cat("Imputation risk breakdown:\n")
+      print(table(result$imputation_bias))
+    }
+  }
+  ```
+  *(Visual Tagging: In volcano plots and candidate profiles, candidates tagged with `HIGH` imputation risk should be recognized as detection-rate/missingness driven rather than continuous abundance shifts).*
 
 #### Phase 4.4: Object Persistence & Blackboard Recording
 - Persist the analyzed dataset to disk:
@@ -267,7 +349,9 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
 - Record the following directly into `docs/notes.md`:
   - Total quantified features (proteins or peptides).
   - Number of significantly dysregulated features ($|\log_2\text{FC}| \ge 1.0, q \le 0.05$), with counts upregulated and downregulated per contrast.
-  - Leading biomarker candidates with fold changes and adjusted $p$-values.
+  - Repeated measures and paired structure audit findings (consensus correlation from `duplicateCorrelation`).
+  - Imputation proportion audit (fractions of `HIGH`, `MODERATE`, `LOW` imputation risk features).
+  - Leading biomarker candidates with fold changes, adjusted $p$-values, and imputation flags.
   - Investigated target status (fold-change and significance of target gene/protein if specified).
   - Any agent-curated candidate subsets plotted and their biological rationale.
   - Multi-contrast comparative alignment observations (if $\ge 2$ contrasts evaluated).
@@ -276,8 +360,8 @@ Construct and execute `code/04_expression.R`, capturing full execution output to
 - [ ] **Checkpoint 4.5**:
   1. `logs/04_expression/console.log` (or `logs/04_expression.log`) exists on disk with non-zero file size and no errors.
   2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size and contains expression results.
-  3. Expression tables (`data/table_*_expression_*.csv`) exist on disk with non-zero file size.
+  3. Expression tables (`data/table_*_expression_*.csv`) exist on disk with non-zero file size and contain `imputed_total` and `imputation_bias` columns.
   4. Volcano and candidate expression plots (`data/*_volcano_*.png`, `data/plot_expression_*.png`, and any `data/plot_compexp_*.png`) exist on disk with non-zero file sizes.
-  5. `docs/notes.md` contains the differential expression summary, target verification, and candidate profiling rationale.
+  5. `docs/notes.md` contains the differential expression summary, repeated-measures audit, imputation risk summary, target verification, and candidate profiling rationale.
 - [ ] **Complete Phase**:
   - Invoke `complete_phase(phaseName = "04_EXPRESSION", summary = "Differential expression analysis/verification completed. Confirmed statistical calculations, generated volcano, target/candidate expression plots (and comparative plots if multi-contrast), exported expression tables, and persisted data/tidyproteomics_data.rds.")`

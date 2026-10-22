@@ -20,6 +20,8 @@ suppressPackageStartupMessages({
   if (!requireNamespace("tidyproteomics", quietly = TRUE)) stop("R package 'tidyproteomics' is required.")
   if (!requireNamespace("dplyr", quietly = TRUE)) stop("R package 'dplyr' is required.")
   if (!requireNamespace("jsonlite", quietly = TRUE)) stop("R package 'jsonlite' is required.")
+  library(tidyproteomics)
+  library(dplyr)
 })
 
 JSON_MARKER <- "@@LITERATURE_JSON@@"
@@ -79,6 +81,50 @@ main <- function() {
     fail("No differential expression analysis found in tidyproteomics object. Run expression analysis first.")
   }
 
+  # Pre-fetch gene and description annotations
+  anno_gene <- tryCatch(
+    tidyproteomics::get_annotations(tp_data, term = "gene_name"),
+    error = function(e) NULL
+  )
+  if (!is.null(anno_gene) && nrow(anno_gene) > 0) {
+    if (requireNamespace("tidyr", quietly = TRUE)) {
+      anno_gene <- tidyr::separate_rows(anno_gene, annotation, sep = ";\\s*")
+    }
+    anno_gene <- anno_gene %>%
+      dplyr::filter(!is.na(annotation), nzchar(trimws(annotation))) %>%
+      dplyr::mutate(annotation = trimws(annotation))
+  }
+
+  anno_desc <- tryCatch(
+    tidyproteomics::get_annotations(tp_data, term = "description"),
+    error = function(e) NULL
+  )
+  desc_first <- if (!is.null(anno_desc) && nrow(anno_desc) > 0) {
+    anno_desc %>%
+      dplyr::filter(!is.na(annotation), nzchar(trimws(annotation))) %>%
+      dplyr::group_by(protein) %>%
+      dplyr::summarise(description = dplyr::first(annotation), .groups = "drop")
+  } else NULL
+
+  gene_first <- if (!is.null(anno_gene) && nrow(anno_gene) > 0) {
+    anno_gene %>%
+      dplyr::group_by(protein) %>%
+      dplyr::summarise(
+        all_genes = paste(unique(annotation), collapse = "; "),
+        primary_gene = dplyr::first(annotation),
+        .groups = "drop"
+      )
+  } else NULL
+
+  matched_prots <- if (!is.null(anno_gene) && nrow(anno_gene) > 0) {
+    unique(c(
+      candidate_symbols,
+      anno_gene$protein[toupper(anno_gene$annotation) %in% candidate_symbols]
+    ))
+  } else {
+    candidate_symbols
+  }
+
   contrast_results <- list()
   all_tables <- list()
 
@@ -88,27 +134,53 @@ main <- function() {
     c_group <- if (length(c_parts) > 1) c_parts[2] else "control"
     contrast_tag <- paste0(t_group, "-", c_group)
 
-    # Export full unthresholded expression analysis
+    # Export full unthresholded expression analysis using rlang::inject to avoid NSE failure
     exp_tbl <- tryCatch(
-      tidyproteomics::export_analysis(tp_data, c_name, .analysis = "expression"),
+      rlang::inject(tidyproteomics::export_analysis(tp_data, !!rlang::parse_expr(c_name), .analysis = "expression")),
       error = function(e) NULL
     )
     if (is.null(exp_tbl) || nrow(exp_tbl) == 0) next
 
-    # Detect entity/symbol columns
-    id_cols <- intersect(
-      c("gene_name", "gene_symbol", "symbol", "gene", "protein", "accession"),
-      colnames(exp_tbl)
-    )
-    if (length(id_cols) == 0) id_cols <- colnames(exp_tbl)[1]
+    # Annotate with gene_name if absent, and description if absent
+    if (!"gene_name" %in% colnames(exp_tbl) && !is.null(gene_first)) {
+      exp_tbl <- exp_tbl %>% dplyr::left_join(gene_first %>% dplyr::select(protein, gene_name = all_genes, primary_gene), by = "protein")
+    } else if (!is.null(gene_first) && !"primary_gene" %in% colnames(exp_tbl)) {
+      exp_tbl <- exp_tbl %>% dplyr::left_join(gene_first %>% dplyr::select(protein, primary_gene), by = "protein")
+    }
+    if (!"description" %in% colnames(exp_tbl) && !is.null(desc_first)) {
+      exp_tbl <- exp_tbl %>% dplyr::left_join(desc_first, by = "protein")
+    }
+
+    # Sanitize delimiters and provide fallback for missing/NA gene symbols (Bug 5)
+    desc_col <- if ("description" %in% colnames(exp_tbl)) exp_tbl$description else rep(NA_character_, nrow(exp_tbl))
+    clean_desc_word <- sub(" .*$", "", trimws(desc_col))
+    clean_desc_word[is.na(clean_desc_word) | clean_desc_word == ""] <- NA_character_
+
+    exp_tbl <- exp_tbl %>%
+      dplyr::mutate(
+        gene_name = dplyr::coalesce(
+          if ("gene_name" %in% colnames(exp_tbl)) ifelse(is.na(gene_name) | !nzchar(trimws(gene_name)), NA_character_, gene_name) else NA_character_,
+          if ("primary_gene" %in% colnames(exp_tbl)) primary_gene else NA_character_,
+          clean_desc_word,
+          protein
+        ),
+        gene_name = gsub(";+", "; ", trimws(gene_name)),
+        gene_name = gsub("^[; ]+|[; ]+$", "", gene_name)
+      )
 
     # Filter unthresholded table for candidate symbols
     matched_rows <- exp_tbl %>%
-      dplyr::filter(dplyr::if_any(dplyr::all_of(id_cols), ~ toupper(as.character(.x)) %in% candidate_symbols))
+      dplyr::filter(
+        protein %in% matched_prots |
+        toupper(as.character(protein)) %in% candidate_symbols |
+        vapply(strsplit(toupper(as.character(gene_name)), "[;,[:space:]]+"), function(syms) any(syms %in% candidate_symbols), logical(1))
+      )
 
     # Evaluate metrics
     num_tested <- length(candidate_symbols)
     num_detected <- nrow(matched_rows)
+
+    id_cols <- intersect(c("gene_name", "protein", "accession", "description"), colnames(exp_tbl))
 
     matched_display <- matched_rows %>%
       dplyr::select(dplyr::any_of(c(
@@ -117,7 +189,8 @@ main <- function() {
       dplyr::mutate(
         subthreshold_sig = (!is.na(p_value) & p_value <= 0.05),
         strict_sig = (!is.na(adj_p_value) & adj_p_value <= 0.05 & abs(log2_foldchange) >= 1.0),
-        trend_direction = ifelse(log2_foldchange > 0, "UP", ifelse(log2_foldchange < 0, "DOWN", "FLAT"))
+        trend_direction = ifelse(log2_foldchange > 0, "UP", ifelse(log2_foldchange < 0, "DOWN", "FLAT")),
+        dplyr::across(dplyr::any_of(c("p_value", "adj_p_value")), ~ ifelse(!is.na(.) & . < 1e-4, sprintf("%.2e", .), sprintf("%.4f", .)))
       )
 
     # Fast GSEA if fgsea is available and we have at least 3 detected genes
@@ -129,7 +202,11 @@ main <- function() {
           rank_metric = ifelse(!is.na(p_value) & p_value > 0,
                                sign(log2_foldchange) * -log10(p_value),
                                log2_foldchange),
-          gene_id = toupper(as.character(.data[[id_cols[1]]]))
+          gene_id = toupper(as.character(dplyr::coalesce(
+            if ("primary_gene" %in% colnames(.)) primary_gene else NA_character_,
+            sub("[;,[:space:]].*$", "", gene_name),
+            protein
+          )))
         ) %>%
         dplyr::distinct(gene_id, .keep_all = TRUE) %>%
         dplyr::arrange(dplyr::desc(rank_metric))
@@ -138,8 +215,15 @@ main <- function() {
       pathway_list <- list()
       pathway_list[[module_name]] <- candidate_symbols
 
+      bpparam <- if (requireNamespace("BiocParallel", quietly = TRUE)) BiocParallel::SerialParam() else NULL
       fgsea_out <- tryCatch(
-        as.data.frame(fgsea::fgsea(pathways = pathway_list, stats = ranks, minSize = 2, maxSize = 500, nPermSimple = 2000)),
+        as.data.frame(
+          if (!is.null(bpparam)) {
+            fgsea::fgsea(pathways = pathway_list, stats = ranks, minSize = 2, maxSize = 500, nPermSimple = 2000, BPPARAM = bpparam)
+          } else {
+            fgsea::fgsea(pathways = pathway_list, stats = ranks, minSize = 2, maxSize = 500, nPermSimple = 2000, nproc = 1)
+          }
+        ),
         error = function(e) NULL
       )
 
@@ -160,7 +244,7 @@ main <- function() {
     md_table <- ""
     if (nrow(matched_display) > 0) {
       cols_to_show <- intersect(
-        c(id_cols[1], "log2_foldchange", "p_value", "adj_p_value", "trend_direction", "subthreshold_sig", "strict_sig"),
+        c("gene_name", "protein", "log2_foldchange", "p_value", "adj_p_value", "trend_direction", "subthreshold_sig", "strict_sig"),
         colnames(matched_display)
       )
       tbl_clean <- matched_display[, cols_to_show, drop = FALSE]

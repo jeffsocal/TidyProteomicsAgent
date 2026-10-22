@@ -1,3 +1,9 @@
+---
+skills:
+  - TIDYPROTEOMICS_CORE
+  - TIDYPROTEOMICS_IMPORT_INSPECT
+---
+
 ### Phase 1: Data Ingestion & Exploratory Quality Inspection
 
 Construct and execute `code/01_inspect.R`, capturing full execution output to `logs/01_inspect/console.log` (e.g. `mkdir -p logs/01_inspect && Rscript code/01_inspect.R 2>&1 | tee logs/01_inspect/console.log`). You must strictly enforce all checkpoints below.
@@ -76,11 +82,82 @@ Construct and execute `code/01_inspect.R`, capturing full execution output to `l
   ```
 - [ ] **Checkpoint 1.2**: Verify that replicate counts, quantifiable fractions, replicate CV distributions, missingness metrics, and feature overlap / binary switch profiles are printed to stdout and recorded in `logs/01_inspect/console.log`.
 
-#### Phase 1.3: Annotation & Sample Inventory Enforcement
+#### Phase 1.3: Annotation, Metadata Heuristics & Sample Inventory Enforcement
 - [ ] Extract and inspect sample group designations:
   ```r
   sample_names <- get_sample_names(data)
   print(sample_names)
+  ```
+- [ ] **Automated Metadata Heuristics & Study Structure Parser**:
+  Inspect raw acquisition file names (`data$experiments$sample_file`) to discover hidden study structure, donor pairings, technical cuts, and cross-batch bridge samples:
+  ```r
+  parse_sample_metadata <- function(files) {
+    sub_matches <- regmatches(files, regexec("(Sample|Donor|Patient|Subject)[-_ ]?([0-9]+)([a-zA-Z])?", files, ignore.case = TRUE))
+    batch_matches <- regmatches(files, regexec("(Batch[-_ ]?[0-9]+)", files, ignore.case = TRUE))
+    date_matches <- regmatches(files, regexec("(20[12][0-9][01][0-9][0-3][0-9])", files))
+    rep_matches <- regmatches(files, regexec("[-_ ](rep|run|tech|cut)[-_ ]?([0-9]+|[a-zA-Z])", files, ignore.case = TRUE))
+    
+    n <- length(files)
+    subjects <- character(n)
+    replicates <- character(n)
+    batches <- character(n)
+    
+    for (i in seq_len(n)) {
+      sm <- sub_matches[[i]]
+      if (length(sm) >= 3) {
+        subjects[i] <- paste0(sm[2], sm[3])
+        replicates[i] <- if (length(sm) >= 4 && nzchar(sm[4])) sm[4] else "rep1"
+      } else {
+        subjects[i] <- paste0("Subject_", i)
+        replicates[i] <- "rep1"
+      }
+      
+      rm <- rep_matches[[i]]
+      if (length(rm) >= 3 && replicates[i] == "rep1") {
+        replicates[i] <- paste0(rm[2], rm[3])
+      }
+      
+      bm <- batch_matches[[i]]
+      dm <- date_matches[[i]]
+      if (length(bm) >= 2 && nzchar(bm[2])) {
+        batches[i] <- bm[2]
+      } else if (length(dm) >= 2 && nzchar(dm[2])) {
+        batches[i] <- paste0("Batch_", dm[2])
+      } else {
+        batches[i] <- "Batch1"
+      }
+    }
+    
+    data.frame(
+      sample_file = files,
+      subject_id = subjects,
+      replicate_id = replicates,
+      batch = batches,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  parsed_meta <- parse_sample_metadata(data$experiments$sample_file)
+  data$experiments$subject_id <- parsed_meta$subject_id
+  data$experiments$replicate_id <- parsed_meta$replicate_id
+  data$experiments$batch <- parsed_meta$batch
+
+  n_files <- nrow(data$experiments)
+  n_subjects <- length(unique(data$experiments$subject_id))
+  n_batches <- length(unique(data$experiments$batch))
+  cat(sprintf("Discovered Study Structure: %d raw files mapping to %d unique biological subjects across %d batches.\n",
+              n_files, n_subjects, n_batches))
+
+  # Audit pairings, bridge samples, and technical replicates:
+  subj_by_cond <- split(data$experiments$sample, data$experiments$subject_id)
+  paired_subjs <- names(subj_by_cond)[sapply(subj_by_cond, function(x) length(unique(x)) > 1)]
+  subj_by_batch <- split(data$experiments$batch, data$experiments$subject_id)
+  bridge_subjs <- names(subj_by_batch)[sapply(subj_by_batch, function(x) length(unique(x)) > 1)]
+  tech_subjs <- names(which(sapply(subj_by_cond, function(x) length(x) > length(unique(x)))))
+
+  cat("Paired subjects across groups: ", ifelse(length(paired_subjs), paste(paired_subjs, collapse = ", "), "none"), "\n")
+  cat("Bridge subjects across batches: ", ifelse(length(bridge_subjs), paste(bridge_subjs, collapse = ", "), "none"), "\n")
+  cat("Technical cuts within group: ", ifelse(length(tech_subjs), paste(tech_subjs, collapse = ", "), "none"), "\n")
   ```
 - [ ] Query and print all available functional annotation terms:
   ```r
@@ -94,7 +171,7 @@ Construct and execute `code/01_inspect.R`, capturing full execution output to `l
   ```
 - [ ] **Checkpoint 1.3 (Phase Gate & Log Verification)**:
   1. `logs/01_inspect/console.log` (or `logs/01_inspect.log`) exists on disk with non-zero file size.
-  2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size.
+  2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size and populated `subject_id`, `replicate_id`, and `batch` metadata.
   3. `sample_names` confirms the exact naming of control and treatment/perturbation conditions.
   4. `annot_terms` outputs all functional category names available in the dataset (e.g., Gene Ontology, Reactome, UniProt keywords).
   5. Count diagnostic plot (`data/plot_proteins_counts.png` or `data/plot_peptides_counts.png`) exists in `data/` with non-zero file size (along with optional `data/plot_*_venn.png` or `data/plot_*_euler.png` if generated).
@@ -110,7 +187,12 @@ Construct and execute `code/01_inspect.R`, capturing full execution output to `l
   - Inspect Section 3 (`## 3. Sample Grouping, Recoding & Contrast Designations`) in `docs/experiment.md`.
   - If Section 3 contains `*(Pending Phase 1 data ingestion)*`, is missing, or contains unconfigured tables:
     - **Scaffold Section 3**: Update Section 3 of `docs/experiment.md` directly using standardized visual badges:
-      1. Section 3.A: Label with `ℹ️ [AUTO-GENERATED REFERENCE - READ ONLY]:` and list all discovered sample groups with replicate counts.
+      1. Section 3.A: Label with `ℹ️ [AUTO-GENERATED REFERENCE - READ ONLY]:` and list:
+         - Discovered biological subjects vs raw files count (`<N>` unique subjects across `<M>` raw files).
+         - Paired donor detection (flagging subjects detected in multiple condition groups).
+         - Cross-batch bridge samples (flagging subjects acquired across multiple batches).
+         - Technical replicates / cuts (flagging subjects with duplicate injections/cuts within group).
+         - Discovered sample groups table with raw file counts and unique subject counts.
       2. Section 3.B: Label with `👉 [USER REVIEW & EDIT TABLE]:`. If technical batch suffixes are detected (e.g. `active_necrotic granuloma_batch5`, `batch6`, `batch9` and `healthy_healthy_batch8`), provide a suggested **Sample Group Renaming & Pooling Map** table proposing clean biological names (e.g. stripping `_batch\d+` to pool into `active necrotic granuloma` and `healthy`), and add `👉 [USER TOGGLE]:` with `- **Reassign Sample Names According to Pooling Map**: TRUE`.
       3. Section 3.C: Label with `👉 [USER ACTION REQUIRED - DEFINE TARGET CONTRASTS]:` and suggest logical **Target Contrasts** based on the cleaned groups (e.g. `active necrotic granuloma` vs `healthy`).
       4. Section 3.D: Label with `⚠️ [PRE-FLIGHT GATE DECISION]:`. If disease condition is confounded with batch across cohorts (e.g. healthy only in batch 8, disease in batches 5/6/9), explicitly document the confounding in the template comments and set `- **Proceed With Potential Batch Confounding**: FALSE` as the scaffolded default awaiting researcher review. Setting this default does NOT fail or halt Phase 1 (confounding authorization gating belongs strictly in Phase 4).

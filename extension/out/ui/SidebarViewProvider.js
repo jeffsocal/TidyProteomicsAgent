@@ -43,6 +43,7 @@ const ProviderClient_1 = require("../llm/ProviderClient");
 const ToolRegistry_1 = require("../tools/ToolRegistry");
 const LiteratureService_1 = require("../literature/LiteratureService");
 const IngestionRunner_1 = require("../literature/IngestionRunner");
+const AdvisorService_1 = require("../agent/AdvisorService");
 class SidebarViewProvider {
     _extensionUri;
     context;
@@ -54,6 +55,7 @@ class SidebarViewProvider {
     literatureService;
     corpusService;
     ingestionRunner;
+    advisorService;
     workspaceRoot;
     customWorkspaceRoot;
     onFolderChangedCallback;
@@ -96,6 +98,38 @@ class SidebarViewProvider {
             this.sendLiteratureProgress(ev);
             this.sendLiteratureState();
         }, (log, updateLast) => this.sendLog(log, updateLast));
+        this.advisorService = new AdvisorService_1.AdvisorService(this.workspaceRoot, this.client, async () => this.orchestrator?.getState(), async (phaseId) => {
+            if (!this.workspaceRoot) {
+                vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder first.");
+                return;
+            }
+            const cfg = this.client.getConfig();
+            if (cfg.provider !== "ollama" && !cfg.apiKey) {
+                vscode.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key in the Provider tab first.");
+                return;
+            }
+            await this.syncActiveModelSummary();
+            if (phaseId) {
+                vscode.window.showInformationMessage(`TidyProteomicsAgent Advisor: Resuming phase ${phaseId}...`);
+                this.orchestrator?.runSinglePhase(phaseId).catch((err) => {
+                    vscode.window.showErrorMessage(`TidyProteomicsAgent: Phase execution error - ${err.message}`);
+                });
+            }
+            else {
+                vscode.window.showInformationMessage("TidyProteomicsAgent Advisor: Starting pipeline execution...");
+                this.orchestrator?.runFullPipeline().catch((err) => {
+                    vscode.window.showErrorMessage(`TidyProteomicsAgent: Pipeline error - ${err.message}`);
+                });
+            }
+        }, () => {
+            if (this._view && this._view.webview) {
+                this._view.webview.postMessage({
+                    type: "advisorState",
+                    isGenerating: this.advisorService.isRunning(),
+                    messages: this.advisorService.getMessages(),
+                });
+            }
+        }, this._extensionUri.fsPath);
         this.syncActiveModelSummary().catch(() => { });
         // Watch for VS Code settings changes
         context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async (e) => {
@@ -147,6 +181,7 @@ class SidebarViewProvider {
         this.customWorkspaceRoot = folderPath;
         this.workspaceRoot = folderPath;
         this.literatureService.setWorkspaceRoot(folderPath);
+        this.advisorService.setWorkspaceRoot(folderPath);
     }
     getActiveWorkspaceRoot() {
         if (this.customWorkspaceRoot && fs.existsSync(this.customWorkspaceRoot)) {
@@ -205,6 +240,7 @@ class SidebarViewProvider {
             this.workspaceRoot = newRoot;
             this.tools.setWorkspaceRoot(this.workspaceRoot);
             this.literatureService.setWorkspaceRoot(this.workspaceRoot);
+            this.advisorService.setWorkspaceRoot(this.workspaceRoot);
             if (this.orchestrator) {
                 if (changed) {
                     await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
@@ -511,6 +547,7 @@ class SidebarViewProvider {
                             this.workspaceRoot = selectedPath;
                             this.tools.setWorkspaceRoot(this.workspaceRoot);
                             this.literatureService.setWorkspaceRoot(this.workspaceRoot);
+                            this.advisorService.setWorkspaceRoot(this.workspaceRoot);
                             if (this.orchestrator) {
                                 await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
                             }
@@ -555,6 +592,7 @@ class SidebarViewProvider {
                     case "requestState": {
                         await this.refreshState();
                         this.sendCorpusState();
+                        await this.advisorService.checkAndTriggerOnboarding();
                         break;
                     }
                     case "literatureGetState":
@@ -730,6 +768,116 @@ class SidebarViewProvider {
                         }
                         break;
                     }
+                    case "advisorSendMessage": {
+                        const text = String(data.text || "").trim();
+                        if (!text)
+                            return;
+                        console.log("[SidebarViewProvider] advisorSendMessage:", text);
+                        try {
+                            const result = await this.advisorService.sendMessage(text, (chunk) => {
+                                if (this._view && this._view.webview) {
+                                    this._view.webview.postMessage({
+                                        type: "advisorChunk",
+                                        chunk: chunk,
+                                    });
+                                }
+                            });
+                            if (this._view && this._view.webview) {
+                                this._view.webview.postMessage({
+                                    type: "advisorDone",
+                                    reply: result.reply,
+                                    usage: result.usage,
+                                    messages: this.advisorService.getMessages(),
+                                });
+                            }
+                        }
+                        catch (err) {
+                            vscode.window.showErrorMessage(`TidyProteomicsAgent Advisor: ${err.message}`);
+                            if (this._view && this._view.webview) {
+                                this._view.webview.postMessage({
+                                    type: "advisorError",
+                                    error: err.message || String(err),
+                                    messages: this.advisorService.getMessages(),
+                                });
+                            }
+                        }
+                        break;
+                    }
+                    case "advisorClear": {
+                        await this.advisorService.clearMessages();
+                        if (this._view && this._view.webview) {
+                            this._view.webview.postMessage({
+                                type: "advisorState",
+                                isGenerating: false,
+                                messages: [],
+                            });
+                        }
+                        break;
+                    }
+                    case "advisorStop": {
+                        this.advisorService.cancel();
+                        break;
+                    }
+                    case "advisorGetState": {
+                        await this.advisorService.checkAndTriggerOnboarding();
+                        if (this._view && this._view.webview) {
+                            this._view.webview.postMessage({
+                                type: "advisorState",
+                                isGenerating: this.advisorService.isRunning(),
+                                messages: this.advisorService.getMessages(),
+                            });
+                        }
+                        break;
+                    }
+                    case "advisorPickDataFile": {
+                        const fileUris = await vscode.window.showOpenDialog({
+                            canSelectFiles: true,
+                            canSelectFolders: false,
+                            canSelectMany: false,
+                            openLabel: "Select Dataset File",
+                            title: "Select Mass Spectrometry Dataset File for TidyProteomics",
+                            filters: {
+                                "Proteomics Data": ["xlsx", "csv", "tsv", "txt", "rds", "parquet", "zip"],
+                                "All Files": ["*"],
+                            },
+                        });
+                        if (fileUris && fileUris.length > 0) {
+                            const selectedUri = fileUris[0];
+                            let targetPath = selectedUri.fsPath;
+                            if (this.workspaceRoot && targetPath.startsWith(this.workspaceRoot)) {
+                                targetPath = path.relative(this.workspaceRoot, targetPath);
+                            }
+                            try {
+                                const result = await this.advisorService.sendMessage(targetPath, (chunk) => {
+                                    if (this._view && this._view.webview) {
+                                        this._view.webview.postMessage({
+                                            type: "advisorChunk",
+                                            chunk: chunk,
+                                        });
+                                    }
+                                });
+                                if (this._view && this._view.webview) {
+                                    this._view.webview.postMessage({
+                                        type: "advisorDone",
+                                        reply: result.reply,
+                                        usage: result.usage,
+                                        messages: this.advisorService.getMessages(),
+                                    });
+                                }
+                            }
+                            catch (err) {
+                                vscode.window.showErrorMessage(`TidyProteomicsAgent Advisor: ${err.message}`);
+                                if (this._view && this._view.webview) {
+                                    this._view.webview.postMessage({
+                                        type: "advisorError",
+                                        error: err.message || String(err),
+                                        messages: this.advisorService.getMessages(),
+                                    });
+                                }
+                            }
+                        }
+                        break;
+                    }
                 }
             }
             catch (e) {
@@ -750,6 +898,7 @@ class SidebarViewProvider {
                 this.customWorkspaceRoot = this.workspaceRoot;
                 this.tools.setWorkspaceRoot(this.workspaceRoot);
                 this.literatureService.setWorkspaceRoot(this.workspaceRoot);
+                this.advisorService.setWorkspaceRoot(this.workspaceRoot);
                 if (this.orchestrator) {
                     await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
                 }
@@ -794,6 +943,7 @@ class SidebarViewProvider {
                 this.customWorkspaceRoot = this.workspaceRoot;
                 this.tools.setWorkspaceRoot(this.workspaceRoot);
                 this.literatureService.setWorkspaceRoot(this.workspaceRoot);
+                this.advisorService.setWorkspaceRoot(this.workspaceRoot);
                 if (this.orchestrator) {
                     await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
                 }
@@ -846,8 +996,16 @@ class SidebarViewProvider {
             if (fs.existsSync(sharedDir)) {
                 copyFileSafe(path.join(sharedDir, "code", "00_install.R"), path.join(this.workspaceRoot, "code", "00_install.R"), true);
                 copyFileSafe(path.join(sharedDir, "tools", "lint_tidyproteomics.R"), path.join(this.workspaceRoot, "tools", "lint_tidyproteomics.R"), true);
-                copyFileSafe(path.join(sharedDir, "agent", "PROTOCOL.md"), path.join(this.workspaceRoot, "agent", "PROTOCOL.md"), true);
-                copyFileSafe(path.join(sharedDir, "agent", "SKILL.md"), path.join(this.workspaceRoot, "agent", "SKILL.md"), true);
+                // Copy all agent protocol and modular skill templates
+                const agentTemplatesDir = path.join(sharedDir, "agent");
+                if (fs.existsSync(agentTemplatesDir)) {
+                    const aFiles = fs.readdirSync(agentTemplatesDir);
+                    for (const af of aFiles) {
+                        if (af.endsWith(".md")) {
+                            copyFileSafe(path.join(agentTemplatesDir, af), path.join(this.workspaceRoot, "agent", af), true);
+                        }
+                    }
+                }
                 copyFileSafe(path.join(sharedDir, "docs", "experiment.md"), path.join(this.workspaceRoot, "docs", "experiment.md"), false);
                 copyFileSafe(path.join(sharedDir, "docs", "notes.md"), path.join(this.workspaceRoot, "docs", "notes.md"), false);
                 copyFileSafe(path.join(sharedDir, "docs", "concept.md"), path.join(this.workspaceRoot, "docs", "concept.md"), false);
@@ -970,6 +1128,14 @@ class SidebarViewProvider {
                 console.warn("[SidebarViewProvider] Exception posting stateUpdate:", err);
             }
         }
+        if (state && Array.isArray(state.phases)) {
+            const failed = state.phases.find((p) => p.status === "failed");
+            if (failed) {
+                this.advisorService.handlePhaseHalted(failed).catch((err) => {
+                    console.warn("[SidebarViewProvider] Error handling halted phase in advisor:", err);
+                });
+            }
+        }
     }
     syncLiteratureWorkspace() {
         const root = this.getActiveWorkspaceRoot();
@@ -977,9 +1143,11 @@ class SidebarViewProvider {
             this.workspaceRoot = root;
             this.tools.setWorkspaceRoot(root);
             this.literatureService.setWorkspaceRoot(root);
+            this.advisorService.setWorkspaceRoot(root);
         }
         else if (root) {
             this.literatureService.setWorkspaceRoot(root);
+            this.advisorService.setWorkspaceRoot(root);
         }
         return this.workspaceRoot;
     }
@@ -1191,7 +1359,7 @@ class SidebarViewProvider {
     /* Segmented Tab Bar */
     .tab-bar {
       display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(6, minmax(0, 1fr));
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 6px;
@@ -1413,7 +1581,8 @@ class SidebarViewProvider {
       display: block !important;
     }
     #pane-pipeline.active,
-    #pane-literature.active {
+    #pane-literature.active,
+    #pane-chat.active {
       display: flex !important;
       flex-direction: column;
       flex: 1 1 auto;
@@ -1432,6 +1601,240 @@ class SidebarViewProvider {
       flex: 1 1 auto;
       min-height: 0;
     }
+
+    /* Live Advisor Chat Styles */
+    .advisor-container {
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 auto;
+      height: 100%;
+      min-height: 0;
+      gap: 8px;
+    }
+    .advisor-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 8px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+    .advisor-suggestions {
+      display: flex;
+      gap: 4px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+      flex-shrink: 0;
+      scrollbar-width: none;
+    }
+    .advisor-suggestions::-webkit-scrollbar {
+      display: none;
+    }
+    .advisor-chip {
+      background: rgba(59, 130, 246, 0.1);
+      color: #93c5fd;
+      border: 1px solid rgba(59, 130, 246, 0.25);
+      border-radius: 12px;
+      padding: 3px 8px;
+      font-size: 9.5px;
+      font-weight: 500;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      flex-shrink: 0;
+    }
+    .advisor-chip:hover {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+    }
+    .advisor-thread {
+      flex: 1 1 auto;
+      min-height: 120px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 4px 2px;
+      margin-bottom: 4px;
+    }
+    .advisor-msg {
+      display: flex;
+      gap: 6px;
+      max-width: 100%;
+    }
+    .advisor-msg.user {
+      flex-direction: row-reverse;
+    }
+    .advisor-avatar {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: rgba(59, 130, 246, 0.2);
+      color: #60a5fa;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    .advisor-avatar .svg-icon {
+      width: 13px;
+      height: 13px;
+    }
+    .advisor-msg.user .advisor-avatar {
+      background: rgba(16, 185, 129, 0.2);
+      color: #34d399;
+    }
+    .advisor-bubble {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 11px;
+      line-height: 1.45;
+      color: var(--fg);
+      max-width: 88%;
+      word-break: break-word;
+      overflow-wrap: break-word;
+    }
+    .advisor-msg.user .advisor-bubble {
+      background: rgba(59, 130, 246, 0.15);
+      border-color: rgba(59, 130, 246, 0.35);
+      color: #dbeafe;
+    }
+    .advisor-msg-title {
+      font-size: 9.5px;
+      font-weight: 700;
+      color: var(--primary);
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .advisor-msg.user .advisor-msg-title {
+      color: #60a5fa;
+    }
+    .advisor-msg-body code {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 10px;
+      background: rgba(0, 0, 0, 0.3);
+      padding: 1px 4px;
+      border-radius: 3px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .advisor-msg-body pre {
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 6px 8px;
+      overflow-x: auto;
+      margin: 6px 0;
+    }
+    .advisor-msg-body pre code {
+      background: transparent;
+      padding: 0;
+      border: none;
+      font-size: 10px;
+    }
+    .advisor-msg-body ul, .advisor-msg-body ol {
+      margin: 4px 0 6px 16px;
+      padding: 0;
+    }
+    .advisor-msg-body li {
+      margin-bottom: 2px;
+    }
+    .advisor-msg-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 8px;
+    }
+    .advisor-msg-chip {
+      background: var(--input-bg, #252526);
+      color: var(--primary, #3b82f6);
+      border: 1px solid rgba(59, 130, 246, 0.4);
+      border-radius: 12px;
+      padding: 3px 9px;
+      font-size: 10px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .advisor-msg-chip:hover {
+      background: rgba(59, 130, 246, 0.2);
+      border-color: var(--primary, #3b82f6);
+      transform: translateY(-1px);
+    }
+    .advisor-pipeline-banner {
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(16, 185, 129, 0.08));
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin-bottom: 8px;
+    }
+    .advisor-input-area {
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .advisor-input-wrapper {
+      background: var(--input-bg);
+      border: 1px solid var(--input-border);
+      border-radius: 6px;
+      padding: 6px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: border-color 0.15s ease;
+    }
+    .advisor-input-wrapper:focus-within {
+      border-color: var(--input-focus);
+    }
+    #advisorInput {
+      width: 100%;
+      background: transparent;
+      border: none;
+      color: var(--input-fg);
+      font-family: var(--vscode-font-family, inherit);
+      font-size: 11px;
+      line-height: 1.4;
+      resize: none;
+      min-height: 38px;
+      max-height: 120px;
+      outline: none;
+      box-sizing: border-box;
+      padding: 0;
+    }
+    .advisor-input-controls {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 6px;
+    }
+    .advisor-input-hint {
+      font-size: 8.5px;
+      color: var(--muted);
+      text-align: right;
+      padding-right: 2px;
+    }
+    .advisor-streaming-cursor {
+      display: inline-block;
+      width: 6px;
+      height: 11px;
+      background: var(--primary);
+      margin-left: 2px;
+      animation: pulse 1s infinite;
+      vertical-align: middle;
+    }
+
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(2px); }
       to { opacity: 1; transform: translateY(0); }
@@ -1701,7 +2104,7 @@ class SidebarViewProvider {
       align-items: center;
       gap: 3px;
       flex-shrink: 0;
-      margin-left: 2px;
+      margin: 0;
     }
     button.task-action-icon-btn {
       background: transparent;
@@ -2021,9 +2424,19 @@ class SidebarViewProvider {
       <span class="tab-label">Pipeline</span>
       <span class="tab-indicator" id="pipelineIndicator"></span>
     </button>
+    <button type="button" class="tab-btn" data-tab="chat" onclick="window.switchTab && window.switchTab('chat')" title="Proteomics Live Advisor">
+      <span class="tab-icon">${icons["chat"] || ""}</span>
+      <span class="tab-label">Chat</span>
+      <span class="tab-indicator" id="chatIndicator"></span>
+    </button>
     <button type="button" class="tab-btn" data-tab="blackboard" onclick="window.switchTab && window.switchTab('blackboard')" title="Memory notes, protocol & chat log">
       <span class="tab-icon">${icons["ftp"] || ""}</span>
       <span class="tab-label">Memory</span>
+    </button>
+    <button type="button" class="tab-btn" data-tab="literature" onclick="window.switchTab && window.switchTab('literature')" title="Literature Database & Ingestion">
+      <span class="tab-icon">${icons["database"] || ""}</span>
+      <span class="tab-label">Literature</span>
+      <span class="tab-indicator" id="literatureIndicator"></span>
     </button>
     <button type="button" class="tab-btn" data-tab="provider" onclick="window.switchTab && window.switchTab('provider')" title="LLM Provider, model & API key">
       <span class="tab-icon">${icons["cube"] || ""}</span>
@@ -2034,11 +2447,6 @@ class SidebarViewProvider {
       <span class="tab-icon">${icons["folder-open"] || ""}</span>
       <span class="tab-label">Directory</span>
       <span class="tab-indicator" id="dirIndicator"></span>
-    </button>
-    <button type="button" class="tab-btn" data-tab="literature" onclick="window.switchTab && window.switchTab('literature')" title="Literature Database & Ingestion">
-      <span class="tab-icon">${icons["database"] || ""}</span>
-      <span class="tab-label">Literature</span>
-      <span class="tab-indicator" id="literatureIndicator"></span>
     </button>
   </div>
 
@@ -2083,10 +2491,21 @@ class SidebarViewProvider {
 
     <!-- State C: Active Pipeline Dashboard (shown when analysis/ exists and has tasks) -->
     <div id="activePipelineDashboard" style="display:none;">
-      <!-- Pipeline Execution Controls -->
+      <!-- Pipeline Execution Controls & Advisor Guidance -->
       <div class="section">
+        <div id="advisorPipelineBanner" class="advisor-pipeline-banner">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+            <div style="display:flex; align-items:center; gap:6px;">
+              <span style="font-size:14px; line-height:1;">💬</span>
+              <div>
+                <div style="font-weight:600; font-size:11px;">Advisor-Guided Pipeline</div>
+                <div style="font-size:9.5px; color:var(--muted);" id="advisorBannerSubtext">Chat with Advisor to configure and start</div>
+              </div>
+            </div>
+            <button type="button" id="openAdvisorFromPipelineBtn" class="btn-insight-action-primary" style="padding:4px 8px; font-size:10px; cursor:pointer;" title="Switch to Live Advisor">Open Advisor ↗</button>
+          </div>
+        </div>
         <div style="display:flex; gap:4px; margin-bottom:8px;">
-          <button id="startPipelineBtn" style="width:100%;">${icons["play"] || ""} Run Analysis Pipeline</button>
           <button id="stopBtn" class="btn-stop" style="display:none; width:100%;">${icons["stop"] || ""} Stop Pipeline</button>
         </div>
 
@@ -2130,16 +2549,77 @@ class SidebarViewProvider {
         </table>
       </div>
 
-      <!-- Live Sub-Loop Terminal Feed -->
+      <!-- Live Terminal Feed -->
       <div class="section terminal-section">
         <div class="section-header">
-          <h3>${icons["terminal"] || ""} Sub-Loop Live Feed</h3>
+          <h3>${icons["terminal"] || ""} Live Feed</h3>
           <div style="display:flex; gap:4px;">
             <button class="btn-sm" id="viewChatLogBtn" title="Open master logs/pipeline.md in VS Code">${icons["list"] || ""} Pipeline Log</button>
             <button class="btn-sm" id="clearLogBtn">Clear</button>
           </div>
         </div>
         <div class="terminal" id="terminalLog">TidyProteomicsAgent ready. Phases discovered from analysis/*.md.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: CHAT ADVISOR -->
+  <div class="tab-pane" id="pane-chat" style="display:none;">
+    <div class="advisor-container">
+      <div class="advisor-header">
+        <div style="display:flex; align-items:center; gap:6px;">
+          <span style="font-size:13px; color:var(--primary); display:inline-flex; align-items:center;">${icons["chat"] || ""}</span>
+          <h3 style="margin:0; font-size:12px; font-weight:600;">Live Advisor</h3>
+        </div>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <button type="button" class="btn-sm" id="advisorClearBtn" title="Clear conversation history">Clear</button>
+        </div>
+      </div>
+
+      <!-- Quick Action Suggestion Chips -->
+      <div class="advisor-suggestions">
+        <button type="button" class="advisor-chip" data-prompt="What is the current status of the analysis pipeline? Any issues or recommended next steps?">📊 Pipeline Status</button>
+        <button type="button" class="advisor-chip" data-prompt="Review docs/experiment.md and verify if my experimental factors, sample groupings, and contrasts are properly set up.">🧪 Check Design</button>
+        <button type="button" class="advisor-chip" data-prompt="Explain any batch confounding warnings or risks detected in the dataset, and what actions I should take.">⚠️ Batch Effects</button>
+        <button type="button" class="advisor-chip" data-prompt="Summarize the key biological findings and observations recorded in docs/notes.md.">🧬 Summary</button>
+      </div>
+
+      <!-- Messages Thread -->
+      <div class="advisor-thread" id="advisorThread">
+        <div class="advisor-msg assistant">
+          <div class="advisor-avatar">${icons["robot"] || "🤖"}</div>
+          <div class="advisor-bubble">
+            <div class="advisor-msg-title">TidyProteomics Live Advisor</div>
+            <div class="advisor-msg-body">
+              Hello! I am your live proteomics advisor. I monitor your experimental design in <code>docs/experiment.md</code>, pipeline execution status, and findings in <code>docs/notes.md</code>.
+              <br><br>
+              Feel free to ask questions about:
+              <ul>
+                <li>Experimental design, sample grouping, & contrasts</li>
+                <li>Batch effect detection & confounding evaluation</li>
+                <li>Choosing normalization & imputation methods in tidyproteomics</li>
+                <li>Interpreting volcano plots, PCA, & differential expression</li>
+                <li>Enrichment analysis & pathway biology</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input Bar -->
+      <div class="advisor-input-area">
+        <div class="advisor-input-wrapper">
+          <textarea id="advisorInput" rows="1" placeholder="Ask the advisor about your analysis, design, or results..."></textarea>
+          <div class="advisor-input-controls">
+            <button type="button" id="advisorStopBtn" class="btn-stop btn-sm" style="display:none;" title="Stop generation">
+              ${icons["stop"] || ""} Stop
+            </button>
+            <button type="button" id="advisorSendBtn" class="btn-primary btn-sm" title="Send message to Advisor">
+              ${icons["play"] || ""} Send
+            </button>
+          </div>
+        </div>
+        <div class="advisor-input-hint">Enter to send • Shift+Enter for new line</div>
       </div>
     </div>
   </div>
@@ -2518,7 +2998,7 @@ class SidebarViewProvider {
         panes.forEach(function (p) {
           if (p.id === "pane-" + tabId) {
             p.classList.add("active");
-            p.style.display = (tabId === "pipeline" || tabId === "literature" || tabId === "corpus") ? "flex" : "block";
+            p.style.display = (tabId === "pipeline" || tabId === "literature" || tabId === "corpus" || tabId === "chat") ? "flex" : "block";
           } else {
             p.classList.remove("active");
             p.style.display = "none";
@@ -2527,6 +3007,10 @@ class SidebarViewProvider {
 
         if (tabId === "literature" || tabId === "corpus") {
           vscode.postMessage({ type: "literatureGetState" });
+        } else if (tabId === "chat") {
+          vscode.postMessage({ type: "advisorGetState" });
+          const input = document.getElementById("advisorInput");
+          if (input) setTimeout(function () { input.focus(); }, 50);
         }
 
         try {
@@ -2638,6 +3122,13 @@ class SidebarViewProvider {
         return;
       }
 
+      // Open Advisor from Pipeline Banner
+      const openAdv = e.target.closest ? e.target.closest("#openAdvisorFromPipelineBtn") : null;
+      if (openAdv) {
+        switchTab("chat");
+        return;
+      }
+
       // Dynamic data-actions (runPhase, openPhase, openFile)
       const target = e.target.closest ? e.target.closest("[data-action]") : null;
       if (target) {
@@ -2655,6 +3146,8 @@ class SidebarViewProvider {
         } else if (action === "authorizeConfoundingAndRerun") {
           const phaseId = target.getAttribute("data-phase-id");
           if (phaseId) vscode.postMessage({ type: "authorizeConfoundingAndRerun", phaseId: phaseId });
+        } else if (action === "openAdvisorTab") {
+          switchTab("chat");
         }
         return;
       }
@@ -3334,8 +3827,12 @@ class SidebarViewProvider {
           if (initPipelineSection) initPipelineSection.style.display = "none";
           if (activePipelineDashboard) activePipelineDashboard.style.display = "flex";
 
-          if (startPipelineBtn) startPipelineBtn.style.display = anyRunning ? "none" : "block";
+          if (startPipelineBtn) startPipelineBtn.style.display = "none";
           if (stopBtn) stopBtn.style.display = anyRunning ? "block" : "none";
+          const advSubtext = document.getElementById("advisorBannerSubtext");
+          if (advSubtext) {
+            advSubtext.textContent = anyRunning ? "Pipeline running autonomously..." : "Chat with Advisor to configure and start";
+          }
           if (phaseCountLabel) phaseCountLabel.textContent = phaseCount + " Task" + (phaseCount === 1 ? "" : "s");
 
           // Render Dynamic Analysis Tasks (Tab 1)
@@ -3432,6 +3929,7 @@ class SidebarViewProvider {
                 if (hasNotesDoc) {
                   linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/notes.md">View docs/notes.md ↗</button>';
                 }
+                linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="openAdvisorTab" title="Ask Live Advisor to resolve this question">💬 Ask Advisor ↗</button>';
 
                 failInsightHtml = '<div class="task-insight-box" title="' + escapeHtml(errorText) + '">' +
                   '<div class="task-insight-header">' +
@@ -3455,11 +3953,10 @@ class SidebarViewProvider {
                   '<div class="task-left">' +
                     '<input type="checkbox" ' + checked + ' data-phase-id="' + escapeHtml(p.id) + '" title="Include in pipeline" ' + (anyRunning ? "disabled" : "") + ' />' +
                     '<span class="task-name" data-action="openPhase" data-file="' + safeFileName + '" title="Click to edit ' + safeFileName + ' in VS Code">' + safeTaskName + '</span>' +
-                    iconLinksHtml +
                   '</div>' +
                   '<div class="task-right">' +
-                    '<button type="button" class="btn-run" data-action="runPhase" data-id="' + escapeHtml(p.id) + '" ' + runDisabled + ' title="' + escapeHtml(runBtnTitle) + '">' + (ICONS["play"] || "") + ' RUN</button>' +
                     '<span class="' + badgeClass + '">' + escapeHtml(displayStatus) + '</span>' +
+                    iconLinksHtml +
                     '<span class="task-duration">' + escapeHtml(durationText) + '</span>' +
                   '</div>' +
                 '</div>' +
@@ -3549,6 +4046,252 @@ class SidebarViewProvider {
       }
     }
 
+    // ==========================================
+    // Live Advisor Chat Client Implementation
+    // ==========================================
+    const advisorThread = document.getElementById("advisorThread");
+    const advisorInput = document.getElementById("advisorInput");
+    const advisorSendBtn = document.getElementById("advisorSendBtn");
+    const advisorStopBtn = document.getElementById("advisorStopBtn");
+    const advisorClearBtn = document.getElementById("advisorClearBtn");
+    const chatIndicator = document.getElementById("chatIndicator");
+
+    let isAdvisorGenerating = false;
+    let currentStreamingMsgElement = null;
+    let accumulatedStreamingText = "";
+
+    function formatAdvisorMarkdown(text) {
+      if (!text) return "";
+      let escaped = escapeHtml(text);
+      const BT = String.fromCharCode(96);
+      const BT3 = BT + BT + BT;
+
+      // Code blocks
+      escaped = escaped.replace(new RegExp(BT3 + "([a-zA-Z0-9_-]*)\\n([\\s\\S]*?)" + BT3, "g"), function (match, lang, code) {
+        return '<pre><code>' + code + '</code></pre>';
+      });
+
+      // Inline code
+      escaped = escaped.replace(new RegExp(BT + "([^" + BT + "\\n]+)" + BT, "g"), '<code>$1</code>');
+
+      // Bold
+      escaped = escaped.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
+
+      // Convert file links or mentions to clickable buttons
+      escaped = escaped.replace(/\\b(docs\\/(?:experiment|notes|llm|literature_database)\\.md)\\b/g, function (match, p1) {
+        return '<button type="button" class="btn-insight-link" data-action="openFile" data-path="' + p1 + '" style="font-size:10px; padding:1px 5px; margin:0 2px;">' + p1 + ' ↗</button>';
+      });
+
+      // Convert newlines (outside of pre)
+      const parts = escaped.split(/(<pre>[\\s\\S]*?<\\/pre>)/g);
+      for (let i = 0; i < parts.length; i++) {
+        if (!parts[i].startsWith('<pre>')) {
+          parts[i] = parts[i].split(String.fromCharCode(10)).join('<br>');
+        }
+      }
+      return parts.join('');
+    }
+
+    function scrollAdvisorToBottom() {
+      if (advisorThread) {
+        advisorThread.scrollTop = advisorThread.scrollHeight;
+      }
+    }
+
+    function setAdvisorGenerating(generating) {
+      isAdvisorGenerating = !!generating;
+      if (advisorSendBtn) advisorSendBtn.style.display = isAdvisorGenerating ? "none" : "inline-flex";
+      if (advisorStopBtn) advisorStopBtn.style.display = isAdvisorGenerating ? "inline-flex" : "none";
+      if (chatIndicator) chatIndicator.className = isAdvisorGenerating ? "tab-indicator running" : "tab-indicator";
+    }
+
+    function renderAdvisorState(messages, isGenerating) {
+      setAdvisorGenerating(isGenerating);
+      if (!advisorThread) return;
+
+      if (!messages || messages.length === 0) {
+        advisorThread.innerHTML = '<div class="advisor-msg assistant">' +
+          '<div class="advisor-avatar">' + (ICONS["robot"] || "🤖") + '</div>' +
+          '<div class="advisor-bubble">' +
+            '<div class="advisor-msg-title">TidyProteomics Live Advisor</div>' +
+            '<div class="advisor-msg-body">' +
+              'Hello! I am your live proteomics advisor. I monitor your experimental design in <code>docs/experiment.md</code>, pipeline execution status, and findings in <code>docs/notes.md</code>.<br><br>' +
+              'Feel free to ask questions about sample grouping, confounding warnings, normalization, differential expression, or biological pathways.' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+        return;
+      }
+
+      let html = "";
+      for (let i = 0; i < messages.length; i++) {
+        const m = messages[i];
+        const isUser = m.role === "user";
+        const avatar = isUser ? "👤" : (ICONS["robot"] || "🤖");
+        const sender = isUser ? "You" : "TidyProteomics Advisor";
+        const time = m.timestamp ? ' <span style="font-size:8.5px; opacity:0.6; font-weight:normal;">' + escapeHtml(m.timestamp) + '</span>' : '';
+        const body = formatAdvisorMarkdown(m.content);
+
+        let chipsHtml = "";
+        if (m.quickChips && m.quickChips.length > 0) {
+          chipsHtml = '<div class="advisor-msg-chips">';
+          for (let c = 0; c < m.quickChips.length; c++) {
+            const chipText = escapeHtml(m.quickChips[c]);
+            chipsHtml += '<button type="button" class="advisor-msg-chip" data-chip="' + chipText + '">' + chipText + '</button>';
+          }
+          chipsHtml += '</div>';
+        }
+
+        html += '<div class="advisor-msg ' + (isUser ? 'user' : 'assistant') + '">' +
+          '<div class="advisor-avatar">' + avatar + '</div>' +
+          '<div class="advisor-bubble">' +
+            '<div class="advisor-msg-title">' + sender + time + '</div>' +
+            '<div class="advisor-msg-body">' + body + '</div>' +
+            chipsHtml +
+          '</div>' +
+        '</div>';
+      }
+      advisorThread.innerHTML = html;
+      scrollAdvisorToBottom();
+    }
+
+    function appendAdvisorChunk(chunk) {
+      if (!advisorThread) return;
+      accumulatedStreamingText += chunk;
+
+      if (!currentStreamingMsgElement) {
+        const msgDiv = document.createElement("div");
+        msgDiv.className = "advisor-msg assistant";
+        msgDiv.innerHTML = '<div class="advisor-avatar">' + (ICONS["robot"] || "🤖") + '</div>' +
+          '<div class="advisor-bubble">' +
+            '<div class="advisor-msg-title">TidyProteomics Advisor <span style="font-size:8.5px; opacity:0.6; font-weight:normal;">Thinking...</span></div>' +
+            '<div class="advisor-msg-body"></div>' +
+          '</div>';
+        advisorThread.appendChild(msgDiv);
+        currentStreamingMsgElement = msgDiv;
+      }
+
+      const bodyEl = currentStreamingMsgElement.querySelector(".advisor-msg-body");
+      if (bodyEl) {
+        bodyEl.innerHTML = formatAdvisorMarkdown(accumulatedStreamingText) + '<span class="advisor-streaming-cursor"></span>';
+      }
+      scrollAdvisorToBottom();
+    }
+
+    function completeAdvisorResponse(fullText, usage, messages) {
+      currentStreamingMsgElement = null;
+      accumulatedStreamingText = "";
+      setAdvisorGenerating(false);
+      if (messages && messages.length > 0) {
+        renderAdvisorState(messages, false);
+      }
+    }
+
+    function showAdvisorError(error) {
+      currentStreamingMsgElement = null;
+      accumulatedStreamingText = "";
+      setAdvisorGenerating(false);
+      if (!advisorThread) return;
+      const errDiv = document.createElement("div");
+      errDiv.className = "advisor-msg assistant";
+      errDiv.innerHTML = '<div class="advisor-avatar">⚠️</div>' +
+        '<div class="advisor-bubble" style="border-color:var(--error); background:rgba(239, 68, 68, 0.1);">' +
+          '<div class="advisor-msg-title" style="color:var(--error);">Advisor Error</div>' +
+          '<div class="advisor-msg-body">' + escapeHtml(error) + '</div>' +
+        '</div>';
+      advisorThread.appendChild(errDiv);
+      scrollAdvisorToBottom();
+    }
+
+    function sendAdvisorPrompt(text) {
+      const prompt = (text || (advisorInput ? advisorInput.value : "")).trim();
+      if (!prompt || isAdvisorGenerating) return;
+
+      if (advisorInput) {
+        advisorInput.value = "";
+        advisorInput.style.height = "auto";
+      }
+
+      setAdvisorGenerating(true);
+      accumulatedStreamingText = "";
+      currentStreamingMsgElement = null;
+
+      // Optimistically append user message
+      if (advisorThread) {
+        const userDiv = document.createElement("div");
+        userDiv.className = "advisor-msg user";
+        userDiv.innerHTML = '<div class="advisor-avatar">👤</div>' +
+          '<div class="advisor-bubble">' +
+            '<div class="advisor-msg-title">You</div>' +
+            '<div class="advisor-msg-body">' + formatAdvisorMarkdown(prompt) + '</div>' +
+          '</div>';
+        advisorThread.appendChild(userDiv);
+        scrollAdvisorToBottom();
+      }
+
+      vscode.postMessage({ type: "advisorSendMessage", text: prompt });
+    }
+
+    if (advisorSendBtn) {
+      advisorSendBtn.addEventListener("click", function () {
+        sendAdvisorPrompt();
+      });
+    }
+
+    if (advisorStopBtn) {
+      advisorStopBtn.addEventListener("click", function () {
+        vscode.postMessage({ type: "advisorStop" });
+        setAdvisorGenerating(false);
+      });
+    }
+
+    if (advisorClearBtn) {
+      advisorClearBtn.addEventListener("click", function () {
+        vscode.postMessage({ type: "advisorClear" });
+      });
+    }
+
+    if (advisorInput) {
+      advisorInput.addEventListener("input", function () {
+        this.style.height = "auto";
+        this.style.height = Math.min(this.scrollHeight, 120) + "px";
+      });
+
+      advisorInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          sendAdvisorPrompt();
+        }
+      });
+    }
+
+    // Quick suggestion chips and message chips handler
+    document.addEventListener("click", function (e) {
+      const chip = e.target.closest ? e.target.closest(".advisor-chip") : null;
+      if (chip) {
+        const prompt = chip.getAttribute("data-prompt");
+        if (prompt) {
+          sendAdvisorPrompt(prompt);
+        }
+        return;
+      }
+
+      const msgChip = e.target.closest ? e.target.closest(".advisor-msg-chip") : null;
+      if (msgChip) {
+        const chipText = msgChip.getAttribute("data-chip");
+        if (chipText === "Select File...") {
+          vscode.postMessage({ type: "advisorPickDataFile" });
+        } else if (chipText === "Review docs/experiment.md ↗" || chipText === "View docs/experiment.md ↗") {
+          vscode.postMessage({ type: "openFile", relPath: "docs/experiment.md" });
+        } else if (chipText === "Switch to Provider Tab ↗") {
+          switchTab("provider");
+        } else if (chipText) {
+          sendAdvisorPrompt(chipText);
+        }
+        return;
+      }
+    });
+
     // Message receiver
     window.addEventListener("message", function (event) {
       try {
@@ -3569,6 +4312,14 @@ class SidebarViewProvider {
           renderLiteratureSearchResults(message.result || message);
         } else if (message.type === "literatureProgress" || message.type === "corpusProgress") {
           vscode.postMessage({ type: "literatureGetState" });
+        } else if (message.type === "advisorState") {
+          renderAdvisorState(message.messages, message.isGenerating);
+        } else if (message.type === "advisorChunk") {
+          appendAdvisorChunk(message.chunk);
+        } else if (message.type === "advisorDone") {
+          completeAdvisorResponse(message.reply, message.usage, message.messages);
+        } else if (message.type === "advisorError") {
+          showAdvisorError(message.error);
         }
       } catch (err) {
         console.error("[TidyProteomicsAgent] Error in webview message handler:", err);
@@ -3577,8 +4328,10 @@ class SidebarViewProvider {
 
     // Request initial state proactively
     vscode.postMessage({ type: "requestState" });
+    vscode.postMessage({ type: "advisorGetState" });
     setTimeout(function () {
       vscode.postMessage({ type: "requestState" });
+      vscode.postMessage({ type: "advisorGetState" });
     }, 200);
   </script>
 </body>

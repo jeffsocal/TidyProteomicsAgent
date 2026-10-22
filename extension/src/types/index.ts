@@ -181,3 +181,11 @@ export interface ToolDefinition {
     required: string[];
   };
 }
+
+export interface AdvisorMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: string;
+}
+

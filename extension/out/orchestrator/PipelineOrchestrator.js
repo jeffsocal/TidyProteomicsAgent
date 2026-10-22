@@ -375,12 +375,18 @@ class PipelineOrchestrator {
         }
         const list = [
             { name: "Analysis Protocol", relPath: `${agentDir}/PROTOCOL.md` },
-            { name: "TidyProteomics Skills", relPath: `${agentDir}/SKILL.md` },
-            { name: "Experiment & Dataset Spec", relPath: "docs/experiment.md" },
-            { name: "Shared Memory", relPath: "docs/notes.md" },
-            { name: "Active Model Summary", relPath: "docs/llm.md" },
-            { name: "Pipeline Summary", relPath: "logs/pipeline.md" },
         ];
+        // Discover modular TIDYPROTEOMICS_*.md skills
+        try {
+            const agentFiles = await fs.readdir(path.join(this.workspaceRoot, agentDir));
+            const tidySkills = agentFiles.filter((f) => f.startsWith("TIDYPROTEOMICS_") && f.endsWith(".md")).sort();
+            for (const sf of tidySkills) {
+                const prettyName = sf.replace(/\.md$/, "").replace(/_/g, " ");
+                list.push({ name: prettyName, relPath: `${agentDir}/${sf}` });
+            }
+        }
+        catch { }
+        list.push({ name: "Experiment & Dataset Spec", relPath: "docs/experiment.md" }, { name: "Shared Memory", relPath: "docs/notes.md" }, { name: "Active Model Summary", relPath: "docs/llm.md" }, { name: "Pipeline Summary", relPath: "logs/pipeline.md" });
         // Discover per-phase chat.md and console.log files
         try {
             const logsDir = path.join(this.workspaceRoot, "logs");

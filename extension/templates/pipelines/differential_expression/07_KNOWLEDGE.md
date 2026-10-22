@@ -1,9 +1,15 @@
+---
+skills:
+  - TIDYPROTEOMICS_CORE
+  - TIDYPROTEOMICS_EXTRACT_QUERY
+---
+
 ### Phase 7: Internal Knowledge Contextualization & First-Layer Conclusions
 
 In this phase, you (the LLM) will ingest the primary data-derived observations from `06_OBSERVATIONS` (`docs/observations.md`, `logs/06_observations/console.log`, and experimental design in `docs/experiment.md`). You will apply your internal domain knowledge (molecular biology, biochemistry, cellular physiology, protein complexes, and signaling cascades) to contextualize the observations and develop the **first layer of conclusions** (strictly do not hallucinate facts, citations, or unsupported claims).
 
 If you need to query the data to test new hypotheses or check related protein family members, complex subunits, or candidate interactors:
-- Use `agent/SKILL.md` API conventions to write and execute targeted R queries against `data/tidyproteomics_data.rds` (e.g. `code/07_knowledge.R` logged to `logs/07_knowledge/console.log`).
+- Use `agent/TIDYPROTEOMICS_EXTRACT_QUERY.md` API conventions to write and execute targeted R queries against `data/tidyproteomics_data.rds` (e.g. `code/07_knowledge.R` logged to `logs/07_knowledge/console.log`).
 - Document any **new** data-derived observations in `docs/knowledge.md`.
 
 You will also develop a curated list of high-yield keyphrases for downstream web search in Phase 08.
@@ -19,13 +25,13 @@ Before proceeding, verify that:
 
 ---
 
-#### 2. Interactive Data Queries via `agent/SKILL.md` (Optional Follow-Up Hypotheses)
+#### 2. Interactive Data Queries via `agent/TIDYPROTEOMICS_EXTRACT_QUERY.md` (Optional Follow-Up Hypotheses)
 If the observed changes in `docs/observations.md` suggest follow-up questions about specific protein complexes, unthresholded co-factors, or pathway partners:
 - Write and execute a targeted R script `code/07_knowledge.R` (capturing output to `logs/07_knowledge/console.log`):
   ```bash
   mkdir -p logs/07_knowledge && Rscript code/07_knowledge.R 2>&1 | tee logs/07_knowledge/console.log
   ```
-- Use canonical `tidyproteomics` functions per `agent/SKILL.md` (e.g., `export_analysis(tp_data, "<contrast>", .analysis = "expression")`, filtering candidate gene symbols or UniProt IDs, checking nominal $p$-values and effect sizes without imposing strict FDR cutoffs):
+- Use canonical `tidyproteomics` functions per `agent/TIDYPROTEOMICS_EXTRACT_QUERY.md` (e.g., `export_analysis(tp_data, "<contrast>", .analysis = "expression")`, filtering candidate gene symbols or UniProt IDs, checking nominal $p$-values and effect sizes without imposing strict FDR cutoffs):
   ```r
   library(tidyproteomics)
   library(dplyr)
@@ -43,16 +49,25 @@ If the observed changes in `docs/observations.md` suggest follow-up questions ab
 
 ---
 
-#### 3. Developing First-Layer Biological Conclusions
-Synthesize your internal biomedical knowledge to explain the observed proteomic remodeling:
-1. **Primary vs. Secondary Perturbations**:
+#### 3. Developing First-Layer Biological Conclusions (Data-First Anchor Rule)
+Synthesize your internal biomedical knowledge to explain the observed proteomic remodeling, strictly adhering to the Data-First Anchor Rule:
+
+1. **Mandatory Top-Candidate Coverage**:
+   - The biological themes and hypotheses formulated in Phase 7 must directly reflect the dataset's strongest quantitative features.
+   - **Every protein in the Top 5 Upregulated and Top 5 Downregulated lists** from `docs/observations.md` **must** be assigned to a biological theme or explicitly investigated. Never omit or skip the primary statistical drivers of the empirical dataset.
+2. **No Dismissal of Unexpected Hits**:
+   - If a leading hit appears biologically unexpected, atypical, or uncharacterized in the studied tissue (e.g., neuronal markers like `SYN1`, epidermal markers like `S100A7`, or unexpected erythroid/membrane markers like `EPB42` or `HBG2` in lung lesions):
+     - **NEVER dismiss them** with a cursory single-sentence dismissal (e.g., "likely artifact" or "irrelevant to studied tissue biology").
+     - **Formulate testable biological hypotheses** explaining their altered detection: e.g., neuroendocrine differentiation, epithelial-to-mesenchymal transition or squamous metaplasia, ectopic expression, immune/stromal cell-lineage infiltration, or altered proteolysis/shedding.
+     - Pair biological hypotheses with technical and detection-rate audits (checking unique peptide evidence, spectral count support, and the Phase 4/6 imputation risk tag).
+3. **Primary vs. Secondary Perturbations**:
    - Differentiate direct mechanistic consequences of the target perturbation from secondary cellular stress adaptations.
-2. **Protein Complex & Pathway Contextualization**:
+4. **Protein Complex & Pathway Contextualization**:
    - Identify multi-protein complexes, stoichiometric shifts, or functional modules represented among top altered features.
-   - Explain biological roles of significantly enriched pathways (e.g., proteostasis, metabolic shifts, organelle stress, cytoskeletal remodeling).
-3. **Hypothesis Evaluation**:
+   - Explain biological roles of significantly enriched pathways (e.g., humoral immunity/complement cascade, proteostasis, metabolic shifts, extracellular matrix remodeling).
+5. **Hypothesis Evaluation**:
    - Compare the observed remodeling directly against the expectations described in `docs/experiment.md`.
-4. **Anti-Hallucination Directives**:
+6. **Anti-Hallucination Directives**:
    - Strictly ground your conclusions in established biological mechanisms.
    - Do NOT fabricate specific literature citations, author names, DOIs, or PMIDs.
    - Clearly distinguish between established molecular mechanisms and working hypotheses.
@@ -61,9 +76,10 @@ Synthesize your internal biomedical knowledge to explain the observed proteomic 
 
 #### 4. Formulating Downstream Web-Search Keyphrases
 Develop a structured set of targeted keyphrases to guide Phase 08 (`08_WEBSEARCH.md`):
-- **Entity Pairs**: Specific pairs or clusters of altered proteins (e.g. `"[Target Gene] [Top Dysregulated Gene] proteomics interaction"`).
-- **Phenotypic / Pathway Themes**: Disease states, cell stress modalities, or functional cascades (e.g. `"ER-phagy ubiquitin ligase remodeling under proteotoxic stress"`).
-- **Model-Specific Queries**: Queries combining the model organism/cell line and observed hallmarks (e.g. `"[Cell Line / Model] [Perturbation] quantitative mass spectrometry hallmarks"`).
+- **Entity Pairs**: Specific pairs or clusters of altered proteins, prioritizing top empirical drivers (e.g. `"[Target Gene] [Top Dysregulated Gene] proteomics interaction"`).
+- **Phenotypic / Pathway Themes**: Disease states, cell stress modalities, or functional cascades (e.g. `"extracellular matrix remodeling and basement membrane loss"`).
+- **Model-Specific Queries**: Queries combining the model organism/cell line, tissue context, and observed hallmarks (e.g. `"[Tissue / Model] [Perturbation] quantitative mass spectrometry hallmarks"`).
+- **Hypothesis-Testing Queries for Unexpected Hits**: Targeted queries investigating unexpected top candidates in the biological context (e.g. `"Synapsin 1 neuroendocrine differentiation lung"` or `"S100A7 squamous metaplasia granuloma"`).
 
 ---
 
@@ -84,13 +100,15 @@ Organize the document strictly into the following structured sections:
    - Concise summary of primary findings from `docs/observations.md` (quantified counts, target status, top altered proteins, and key enriched pathways).
 2. **Follow-Up Data Inquiries & New Observations**:
    - If targeted queries were run via `code/07_knowledge.R`, document the specific hypotheses tested, candidate proteins queried, and **new data-derived observations** (with exact $\log_2\text{FC}$ and $p$-values). If no additional queries were required, note that primary data sufficed.
-3. **First-Layer Biological Conclusions**:
+3. **First-Layer Biological Conclusions (Data-First Anchor Rule)**:
    - Mechanistic interpretation of observed alterations based on internal biochemical and physiological knowledge.
+   - **Explicit Top-Candidate Accounting**: Dedicated paragraphs or subsections explicitly evaluating **every candidate in the Top 5 Upregulated and Top 5 Downregulated lists**.
+   - **Formulated Hypotheses for Unexpected Hits**: Concrete biological hypotheses (e.g. neuroendocrine differentiation, metaplasia, infiltration) addressing unexpected leading candidates rather than dismissing them.
    - Discussion of known functional complexes, enzymatic cascades, and cellular pathways implicated.
 4. **Cellular Remodeling & Physiological Themes**:
-   - Detailed analysis of cellular programs altered (e.g., organellar stress, proteasomal degradation, mitochondrial dynamics, translational control).
+   - Detailed analysis of cellular programs altered (e.g., organellar stress, proteasomal degradation, mitochondrial dynamics, translational control, ECM remodeling).
 5. **Emerging Hypotheses & Open Questions**:
-   - Biological questions raised by the data that warrant external literature corroboration.
+   - Biological questions raised by the empirical data that warrant external literature corroboration.
 6. **Curated Keyphrases for Downstream Web Search**:
    - Structured, ranked list of specific keyphrases and search queries to be executed in Phase 08.
 

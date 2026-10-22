@@ -1,3 +1,9 @@
+---
+skills:
+  - TIDYPROTEOMICS_CORE
+  - TIDYPROTEOMICS_NORMALIZE_IMPUTE
+---
+
 ### Phase 3: Missingness Assessment & Quantitative Imputation
 
 Construct and execute `code/03_impute.R`, capturing full execution output to `logs/03_impute/console.log` (e.g. `mkdir -p logs/03_impute && Rscript code/03_impute.R 2>&1 | tee logs/03_impute/console.log`). You must strictly enforce all checkpoints below.
@@ -59,9 +65,28 @@ Construct and execute `code/03_impute.R`, capturing full execution output to `lo
   ```
 - **Checkpoint 3.2**: Print `print(imp_data)` and inspect operations history via `operations(imp_data)` to confirm imputation status (or verified complete-case / pre-imputed pass-through) and confirm that residual missingness has been resolved.
 
-#### Phase 3.3: Post-Imputation Distribution Verification
+#### Phase 3.3: Post-Imputation Distribution & Detection-Rate Sensitivity Audit
 - Verify that the imputed dataset maintains valid dynamic range and variance structure across conditions.
 - Confirm that no `NaN` or `Inf` values were introduced into quantitative matrices.
+- **Imputation Proportion & Limit-of-Detection (LOD) Sensitivity Audit**:
+  Audit the `accounting` slot of the tidyproteomics object to verify that imputed measurements are tracked:
+  ```r
+  cat("\n=== IMPUTATION PROPORTION & DETECTION-RATE SENSITIVITY AUDIT ===\n")
+  if ("imputed" %in% names(imp_data$accounting)) {
+    acc_imputed <- imp_data$accounting %>%
+      dplyr::left_join(imp_data$experiments %>% dplyr::select(sample_id, sample), by = "sample_id")
+    
+    prop_summary <- acc_imputed %>%
+      dplyr::group_by(sample) %>%
+      dplyr::summarise(
+        total_measurements = dplyr::n(),
+        imputed_count = sum(imputed > 0, na.rm = TRUE),
+        imputed_fraction = mean(imputed > 0, na.rm = TRUE),
+        .groups = "drop"
+      )
+    print(prop_summary)
+  }
+  ```
 
 #### Phase 3.4: Object Persistence & Blackboard Recording
 - Persist the imputed dataset to disk for downstream statistical modeling:
@@ -72,6 +97,8 @@ Construct and execute `code/03_impute.R`, capturing full execution output to `lo
   - Overall missingness percentage prior to imputation.
   - Condition-specific dropout patterns (e.g., features uniquely absent in one condition vs. another) or complete-case verification.
   - Chosen imputation method and scientific rationale (MAR vs. MNAR vs. complete-case bypass vs. verified pre-existing imputation).
+  - Per-condition imputation percentages from the sensitivity audit to flag potential LOD on/off artifacts downstream.
+  - Post-imputation data completeness confirmation.
   - Post-imputation data completeness confirmation.
 
 #### Phase 3.5: Checkpoint Verification & State Recording

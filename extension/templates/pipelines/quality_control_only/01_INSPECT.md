@@ -1,3 +1,9 @@
+---
+skills:
+  - TIDYPROTEOMICS_CORE
+  - TIDYPROTEOMICS_IMPORT_INSPECT
+---
+
 ### Phase 1: Data Ingestion & Exploratory Quality Inspection
 
 Construct and execute `code/01_inspect.R`, capturing full execution output to `logs/01_inspect/console.log` (e.g. `mkdir -p logs/01_inspect && Rscript code/01_inspect.R 2>&1 | tee logs/01_inspect/console.log`). You must strictly enforce all checkpoints below.

@@ -121,6 +121,14 @@ export class ProviderClient {
       }
     }
 
+    // Anthropic requires the first message to have role "user"
+    while (anthropicMessages.length > 0 && anthropicMessages[0].role === "assistant") {
+      anthropicMessages.shift();
+    }
+    if (anthropicMessages.length === 0) {
+      anthropicMessages.push({ role: "user", content: "Hello" });
+    }
+
     // System prompt with cache_control enabled on the massive static block
     const systemPayload = [
       {
@@ -288,6 +296,14 @@ export class ProviderClient {
       } else {
         contents.push(c);
       }
+    }
+
+    // Gemini requires the first content to have role "user"
+    while (contents.length > 0 && contents[0].role === "model") {
+      contents.shift();
+    }
+    if (contents.length === 0) {
+      contents.push({ role: "user", parts: [{ text: "Hello" }] });
     }
 
     const maxTokens = this.config.maxTokens || 16384;
