@@ -13,8 +13,85 @@ export interface IToolHandler {
   execute(args: Record<string, any>): Promise<string>;
 }
 
+/**
+ * Parses tool definitions from YAML frontmatter in phase markdown content.
+ * Supports:
+ * - inline array: tools: [tpa_health, tpa_load, ...]
+ * - quoted array: tools: ["tpa_health", "tpa_load"]
+ * - yaml list:
+ *     tools:
+ *       - tpa_health
+ *       - tpa_load
+ * - all tools: tools: all, tools: "*", tools: "all"
+ *
+ * Returns:
+ * - string[]: Array of allowed MCP tool names
+ * - "all": Wildcard allowing all MCP tools
+ * - undefined: If no frontmatter or tools key is present (defaults to all)
+ */
+export function parseToolsFromFrontmatter(content: string): string[] | "all" | undefined {
+  if (!content) {
+    return undefined;
+  }
+
+  let frontmatter: string | undefined;
+  const startFmMatch = content.match(/^\s*---\r?\n([\s\S]*?)\r?\n---/);
+  if (startFmMatch) {
+    frontmatter = startFmMatch[1];
+  } else {
+    const embeddedFmMatch = content.match(/(?:^|\n)---\r?\n([\s\S]*?tools:\s*[\s\S]*?)\r?\n---/);
+    if (embeddedFmMatch) {
+      frontmatter = embeddedFmMatch[1];
+    }
+  }
+
+  if (!frontmatter) {
+    return undefined;
+  }
+
+  // 1. Wildcard / All tools: tools: all | tools: "*" | tools: 'all'
+  if (/tools:\s*["']?(?:\*|all|ALL)["']?\s*(?:$|\r?\n)/m.test(frontmatter)) {
+    return "all";
+  }
+
+  // 2. Inline bracketed list: tools: [tool1, tool2]
+  const inlineMatch = frontmatter.match(/tools:\s*\[([\s\S]*?)\]/);
+  if (inlineMatch) {
+    return inlineMatch[1]
+      .split(",")
+      .map((s) => s.trim().replace(/^['"]|['"]$/g, ""))
+      .filter((s) => s.length > 0);
+  }
+
+  // 3. YAML list style:
+  // tools:
+  //   - tool1
+  //   - tool2
+  const listMatch = frontmatter.match(/tools:\s*\r?\n((?:\s*-\s*[^\r\n]+\r?\n?)+)/);
+  if (listMatch) {
+    return listMatch[1]
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^\s*-\s*/, "").trim().replace(/^['"]|['"]$/g, ""))
+      .filter((s) => s.length > 0);
+  }
+
+  // 4. Single unbracketed tool name (e.g. tools: tpa_health)
+  const singleMatch = frontmatter.match(/tools:\s*([a-zA-Z0-9_-]+)\s*(?:$|\r?\n)/m);
+  if (singleMatch) {
+    const val = singleMatch[1].trim();
+    if (val.toLowerCase() === "all" || val === "*") {
+      return "all";
+    }
+    return [val];
+  }
+
+  return undefined;
+}
+
 export class ToolRegistry {
   private tools = new Map<string, IToolHandler>();
+  private mcpToolNames = new Set<string>();
+  private mcpPhaseListener?: (phaseName: string) => void;
 
   constructor(private workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot || "";
@@ -25,8 +102,60 @@ export class ToolRegistry {
     this.workspaceRoot = newRoot || "";
   }
 
-  public getDefinitions(): ToolDefinition[] {
-    return Array.from(this.tools.values()).map((t) => t.definition);
+  public setMcpPhaseListener(listener: (phaseName: string) => void) {
+    this.mcpPhaseListener = listener;
+  }
+
+  public setActivePhase(phaseName: string) {
+    if (this.mcpPhaseListener) {
+      this.mcpPhaseListener(phaseName);
+    }
+  }
+
+  public getDefinitions(phaseFileName?: string, phaseContent?: string): ToolDefinition[] {
+    const allDefs = Array.from(this.tools.values()).map((t) => t.definition);
+    if (!phaseFileName && !phaseContent) {
+      return allDefs;
+    }
+
+    let rawContent = phaseContent;
+    if (!rawContent && phaseFileName) {
+      const candidatePaths = [
+        path.isAbsolute(phaseFileName) ? phaseFileName : "",
+        this.workspaceRoot ? path.join(this.workspaceRoot, "analysis", phaseFileName.endsWith(".md") ? phaseFileName : `${phaseFileName}.md`) : "",
+        this.workspaceRoot ? path.join(this.workspaceRoot, phaseFileName.endsWith(".md") ? phaseFileName : `${phaseFileName}.md`) : "",
+        this.workspaceRoot ? path.join(this.workspaceRoot, phaseFileName) : "",
+        this.workspaceRoot ? path.join(this.workspaceRoot, "extension", "templates", "pipelines", "differential_expression", phaseFileName.endsWith(".md") ? phaseFileName : `${phaseFileName}.md`) : "",
+        this.workspaceRoot ? path.join(this.workspaceRoot, "extension", "templates", "pipelines", "quality_control_only", phaseFileName.endsWith(".md") ? phaseFileName : `${phaseFileName}.md`) : "",
+      ].filter(Boolean);
+
+      for (const p of candidatePaths) {
+        if (fsSync.existsSync(p)) {
+          try {
+            rawContent = fsSync.readFileSync(p, "utf-8");
+            break;
+          } catch {
+            // ignore read error and try next candidate
+          }
+        }
+      }
+    }
+
+    const allowedMcpTools = rawContent ? parseToolsFromFrontmatter(rawContent) : undefined;
+
+    // If no frontmatter or tools: all / "*", expose all tools
+    if (allowedMcpTools === undefined || allowedMcpTools === "all") {
+      return allDefs;
+    }
+
+    const allowedSet = new Set(allowedMcpTools);
+    return allDefs.filter((def) => {
+      // Core built-in tools are ALWAYS preserved
+      if (!this.mcpToolNames.has(def.name)) {
+        return true;
+      }
+      return allowedSet.has(def.name);
+    });
   }
 
   public async execute(name: string, args: Record<string, any>): Promise<ToolResult> {
@@ -73,12 +202,9 @@ export class ToolRegistry {
     const resolved = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(root, filePath);
     const normalizedRel = root ? path.relative(path.resolve(root), resolved).replace(/\\/g, "/") : filePath.replace(/\\/g, "/");
 
-    const isProtected =
-      ["docs/llm.md", "agent/PROTOCOL.md", "agent/VARIABLES.md"].some(
-        (p) => normalizedRel === p || normalizedRel.endsWith("/" + p)
-      ) ||
-      normalizedRel.startsWith("agent/TIDYPROTEOMICS_") ||
-      normalizedRel.includes("/agent/TIDYPROTEOMICS_");
+    const isProtected = ["docs/llm.md", "agent/PROTOCOL.md", "agent/VARIABLES.md"].some(
+      (p) => normalizedRel === p || normalizedRel.endsWith("/" + p)
+    );
 
     if (isProtected) {
       throw new Error(
@@ -117,11 +243,20 @@ export class ToolRegistry {
           }
           const defaultShell = process.platform === "win32"
             ? undefined
-            : (process.env.SHELL && fsSync.existsSync(process.env.SHELL)
-                ? process.env.SHELL
-                : (fsSync.existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh"));
+            : (fsSync.existsSync("/bin/bash")
+                ? "/bin/bash"
+                : (process.env.SHELL && fsSync.existsSync(process.env.SHELL)
+                    ? process.env.SHELL
+                    : "/bin/sh"));
 
-          const { stdout, stderr } = await execAsync(args.command, {
+          // Prevent log desynchronization & truncation:
+          // Strip redundant shell redirections or pipes to console.log (the harness automatically records all output)
+          let commandToRun = args.command;
+          commandToRun = commandToRun
+            .replace(/(?:\s*2>&1)?\s*(?:>|>>|\|\s*tee(?:\s+-a)?)\s+logs\/[^\s;&|]+\/console\.log/g, "")
+            .replace(/;\s*test\s+["']?(?:\$\{?PIPESTATUS\[0\]\}?|\$\?)["']?\s+-eq\s+0/g, "");
+
+          const { stdout, stderr } = await execAsync(commandToRun, {
             cwd: effectiveCwd,
             timeout,
             maxBuffer: 10 * 1024 * 1024,
@@ -136,7 +271,7 @@ export class ToolRegistry {
           if (error.stdout) errOutput += `STDOUT:\n${error.stdout}\n`;
           if (error.stderr) errOutput += `STDERR:\n${error.stderr}\n`;
           if (error.message) errOutput += `Error message: ${error.message}\n`;
-          return errOutput;
+          throw new Error(errOutput.trim());
         }
       },
     });
@@ -403,5 +538,26 @@ export class ToolRegistry {
         return `PHASE_HALTED_FAILED: ${args.phaseName}\nReason: ${args.reason}\nActionable Insights:\n${args.actionableInsights}`;
       },
     });
+  }
+
+  public registerMcpTools(
+    tools: ToolDefinition[],
+    executor: (name: string, args: Record<string, any>) => Promise<string>
+  ) {
+    this.unregisterMcpTools();
+    for (const def of tools) {
+      this.tools.set(def.name, {
+        definition: def,
+        execute: (args) => executor(def.name, args),
+      });
+      this.mcpToolNames.add(def.name);
+    }
+  }
+
+  public unregisterMcpTools() {
+    for (const name of this.mcpToolNames) {
+      this.tools.delete(name);
+    }
+    this.mcpToolNames.clear();
   }
 }

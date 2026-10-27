@@ -1,180 +1,51 @@
 ---
-skills:
-  - TIDYPROTEOMICS_CORE
-  - TIDYPROTEOMICS_IMPORT_INSPECT
+tools: [tpa_health, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_operations, tpa_extract, tpa_export_state, tpa_set_workspace, tpa_collapse, tpa_merge, tpa_protein_map, tpa_export_sdrf]
 ---
 
 ### Phase 1: Data Ingestion & Exploratory Quality Inspection
 
-Construct and execute `code/01_inspect.R`, capturing full execution output to `logs/01_inspect/console.log` (e.g. `mkdir -p logs/01_inspect && Rscript code/01_inspect.R 2>&1 | tee logs/01_inspect/console.log`). You must strictly enforce all checkpoints below.
+Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_inspect.R` if offline). All tool executions and outputs are automatically recorded to `logs/01_inspect/console.log`. Upon satisfying all exploratory checkpoints, invoke `tpa_export_state` to generate `code/01_inspect.R` and save `data/tidyproteomics_data.rds`. You must strictly enforce all checkpoints below.
 
 ---
 
-#### Phase 1.1: Data Ingestion
-- [ ] Construct and execute `code/01_inspect.R`, piping stdout and stderr to generate `logs/01_inspect/console.log` (e.g. `mkdir -p logs/01_inspect && Rscript code/01_inspect.R 2>&1 | tee logs/01_inspect/console.log`).
-- [ ] Load required libraries: `tidyproteomics` and `dplyr`.
-- [ ] Ingest the quantitative dataset (substituting `{{PATH_TO_DATA_FILE}}`, `{{PLATFORM}}`, and `{{ANALYTE}}` with actual values from `docs/experiment.md`). If `{{PATH_TO_DATA_FILE}}` is a remote URL (starts with `http://` or `https://`), stage it locally into `data/raw/` first:
-  ```r
-  raw_file <- "{{PATH_TO_DATA_FILE}}"
-  if (grepl("^https?://", raw_file)) {
-    dir.create("data/raw", recursive = TRUE, showWarnings = FALSE)
-    local_dest <- file.path("data/raw", basename(raw_file))
-    if (!file.exists(local_dest)) {
-      cat(sprintf("Downloading remote dataset to %s...\n", local_dest))
-      download.file(raw_file, destfile = local_dest, mode = "wb")
-    }
-    raw_file <- local_dest
-  }
+> [!TIP]
+> **Consolidated Inspection Workflow (Fast-Path)**:
+> Ingest data with `tpa_load` and immediately run `tpa_inspect(what = "overview")`.
+> In tidyproteomics, `overview` returns the complete dataset topology in a single call: file count, sample group names, total protein counts, dynamic range, percent missingness, operations history (normalization/imputation status), and all functional annotation terms.
+> **DO NOT** make redundant exploratory calls for `operations`, `quant_names`, `sample_names`, or `annotation_terms` — `overview` already supplies all of them.
 
-  # Ingest pre-processed tidyproteomics RDS object or import raw platform output:
-  if (grepl("\\.rds$", raw_file, ignore.case = TRUE) || tolower("{{PLATFORM}}") %in% c("tidyproteomics", "rds")) {
-    cat(sprintf("Ingesting pre-processed tidyproteomics R data object from %s...\n", raw_file))
-    data <- readRDS(raw_file)
-  } else {
-    data <- import(files = raw_file, platform = "{{PLATFORM}}", analyte = "{{ANALYTE}}")
-  }
-  ```
-- [ ] **Audit Trail & Upstream Operations Discovery**:
-  Interrogate the ingested object's operations history and quantitative layers to detect pre-existing processing:
-  ```r
-  ops <- operations(data)
-  cat("=== UPSTREAM OPERATIONS AUDIT TRAIL ===\n")
-  print(ops)
+#### Phase 1.1: Data Ingestion & Consolidated Overview Discovery
+- [ ] Ingest the quantitative dataset using `tpa_load`:
+  - Provide `source = "{{PATH_TO_DATA_FILE}}"`, `platform = "{{PLATFORM}}"`, and `analyte = "{{ANALYTE}}"` substituting actual values from `docs/experiment.md`.
+  - If `source` is a remote URL (starts with `http://` or `https://`), `tpa_load` automatically stages the file to `data/raw/` and imports it.
+  - If `source` is an `.rds` file (or `platform` is `"tidyproteomics"` / `"rds"`), `tpa_load` ingests the pre-processed R data object directly into memory.
+- [ ] **Consolidated Topology & Operations Discovery**:
+  - Run `tpa_inspect(what = "overview")` to verify core object state in stdout and log.
+  - Extract all essential topology metrics directly from the `overview` printout:
+    - Origin platform and analyte.
+    - Composition: raw file count and sample groups (`ctl`, `treatment`, etc.).
+    - Quantitation: protein/peptide counts, dynamic range, and percent missingness.
+    - Upstream operations: detected normalization (`*normalized`) and imputation (`*imputed`) status.
+    - Functional annotations: all active ontology categories.
+  - *(Note: Running `overview` fulfills operations audit, quant names, sample group discovery, and annotation terms simultaneously. Do NOT run separate single-property calls).*
+- [ ] **Checkpoint 1.1**: Verify that `overview` prints the complete quantitative data object topology to stdout.
 
-  quants <- get_quant_names(data)
-  cat(sprintf("Available quantitative assays: %s\n", paste(quants, collapse = ", ")))
-
-  has_normalization <- length(quants) > 1 || any(grepl("normalize", ops))
-  has_imputation <- any(grepl("impute", ops)) || (sum(is.na(as.data.frame(data)$abundance_raw)) == 0)
-
-  cat(sprintf("Pre-existing Normalization Detected: %s\n", has_normalization))
-  cat(sprintf("Pre-existing Imputation Detected: %s\n", has_imputation))
-  ```
-- [ ] **Checkpoint 1.1**: Print the core object state via `print(data)`. Verify origin platform, dynamic range, percent missingness, protein/peptide counts, and upstream operations audit in stdout and log.
-
-#### Phase 1.2: Sample Quality & Replicate Inspection
-- [ ] Profile sample preparation contaminants using:
-  ```r
-  summary(data, contamination = "CRAP")
-  ```
-  *(CRITICAL: Always use the named parameter `contamination = "CRAP"`; never execute `summary(data, "contamination")`).*
-- [ ] Run sample-level quality metrics:
-  ```r
-  summary(data, "sample")
-  ```
-- [ ] Generate identification counts diagnostic plot:
-  ```r
-  invisible(data %>% plot_counts(destination = "png"))
-  for (f in list.files(pattern = "^plot_.*_counts\\.png$")) {
-    file.rename(f, file.path("data", f))
-  }
-  ```
-- [ ] **Qualitative Binary Switch Detection & Feature Overlap Profiling (`plot_venn` / `plot_euler`)**:
-  Inspect condition-unique presence/absence (proteins detected exclusively in one biological group vs another prior to imputation):
-  ```r
-  # Generate feature overlap visualization across sample groups:
-  invisible(tryCatch(data %>% plot_venn(destination = "png"), error = function(e) {
-    tryCatch(data %>% plot_euler(destination = "png"), error = function(e2) NULL)
-  }))
-  for (f in list.files(pattern = "^plot_.*_(venn|euler)\\.png$")) {
-    file.rename(f, file.path("data", f))
-  }
-  ```
+#### Phase 1.2: Sample Quality, Replicate QC & Overlap Profiling
+- [ ] Profile sample preparation contaminants using `tpa_summary(what = "contamination")`.
+- [ ] Run sample-level quality metrics using `tpa_summary(what = "sample")`.
+- [ ] Generate identification counts diagnostic plot using `tpa_plot(type = "counts")` (automatically saved to `data/`).
+- [ ] **Qualitative Binary Switch Detection & Feature Overlap Profiling**:
+  - Inspect condition-unique presence/absence (proteins detected exclusively in one biological group vs another prior to imputation) using `tpa_plot(type = "venn")` or `tpa_plot(type = "euler")` (automatically saved to `data/`).
 - [ ] **Checkpoint 1.2**: Verify that replicate counts, quantifiable fractions, replicate CV distributions, missingness metrics, and feature overlap / binary switch profiles are printed to stdout and recorded in `logs/01_inspect/console.log`.
 
-#### Phase 1.3: Annotation, Metadata Heuristics & Sample Inventory Enforcement
-- [ ] Extract and inspect sample group designations:
-  ```r
-  sample_names <- get_sample_names(data)
-  print(sample_names)
-  ```
-- [ ] **Automated Metadata Heuristics & Study Structure Parser**:
-  Inspect raw acquisition file names (`data$experiments$sample_file`) to discover hidden study structure, donor pairings, technical cuts, and cross-batch bridge samples:
-  ```r
-  parse_sample_metadata <- function(files) {
-    sub_matches <- regmatches(files, regexec("(Sample|Donor|Patient|Subject)[-_ ]?([0-9]+)([a-zA-Z])?", files, ignore.case = TRUE))
-    batch_matches <- regmatches(files, regexec("(Batch[-_ ]?[0-9]+)", files, ignore.case = TRUE))
-    date_matches <- regmatches(files, regexec("(20[12][0-9][01][0-9][0-3][0-9])", files))
-    rep_matches <- regmatches(files, regexec("[-_ ](rep|run|tech|cut)[-_ ]?([0-9]+|[a-zA-Z])", files, ignore.case = TRUE))
-    
-    n <- length(files)
-    subjects <- character(n)
-    replicates <- character(n)
-    batches <- character(n)
-    
-    for (i in seq_len(n)) {
-      sm <- sub_matches[[i]]
-      if (length(sm) >= 3) {
-        subjects[i] <- paste0(sm[2], sm[3])
-        replicates[i] <- if (length(sm) >= 4 && nzchar(sm[4])) sm[4] else "rep1"
-      } else {
-        subjects[i] <- paste0("Subject_", i)
-        replicates[i] <- "rep1"
-      }
-      
-      rm <- rep_matches[[i]]
-      if (length(rm) >= 3 && replicates[i] == "rep1") {
-        replicates[i] <- paste0(rm[2], rm[3])
-      }
-      
-      bm <- batch_matches[[i]]
-      dm <- date_matches[[i]]
-      if (length(bm) >= 2 && nzchar(bm[2])) {
-        batches[i] <- bm[2]
-      } else if (length(dm) >= 2 && nzchar(dm[2])) {
-        batches[i] <- paste0("Batch_", dm[2])
-      } else {
-        batches[i] <- "Batch1"
-      }
-    }
-    
-    data.frame(
-      sample_file = files,
-      subject_id = subjects,
-      replicate_id = replicates,
-      batch = batches,
-      stringsAsFactors = FALSE
-    )
-  }
-
-  parsed_meta <- parse_sample_metadata(data$experiments$sample_file)
-  data$experiments$subject_id <- parsed_meta$subject_id
-  data$experiments$replicate_id <- parsed_meta$replicate_id
-  data$experiments$batch <- parsed_meta$batch
-
-  n_files <- nrow(data$experiments)
-  n_subjects <- length(unique(data$experiments$subject_id))
-  n_batches <- length(unique(data$experiments$batch))
-  cat(sprintf("Discovered Study Structure: %d raw files mapping to %d unique biological subjects across %d batches.\n",
-              n_files, n_subjects, n_batches))
-
-  # Audit pairings, bridge samples, and technical replicates:
-  subj_by_cond <- split(data$experiments$sample, data$experiments$subject_id)
-  paired_subjs <- names(subj_by_cond)[sapply(subj_by_cond, function(x) length(unique(x)) > 1)]
-  subj_by_batch <- split(data$experiments$batch, data$experiments$subject_id)
-  bridge_subjs <- names(subj_by_batch)[sapply(subj_by_batch, function(x) length(unique(x)) > 1)]
-  tech_subjs <- names(which(sapply(subj_by_cond, function(x) length(x) > length(unique(x)))))
-
-  cat("Paired subjects across groups: ", ifelse(length(paired_subjs), paste(paired_subjs, collapse = ", "), "none"), "\n")
-  cat("Bridge subjects across batches: ", ifelse(length(bridge_subjs), paste(bridge_subjs, collapse = ", "), "none"), "\n")
-  cat("Technical cuts within group: ", ifelse(length(tech_subjs), paste(tech_subjs, collapse = ", "), "none"), "\n")
-  ```
-- [ ] Query and print all available functional annotation terms:
-  ```r
-  annot_terms <- get_annotation_terms(data)
-  cat("Annotation categories:\n")
-  print(annot_terms)
-  ```
-- [ ] Persist the imported dataset to disk for downstream phases:
-  ```r
-  saveRDS(data, file = "data/tidyproteomics_data.rds")
-  ```
+#### Phase 1.3: State Persistence & Phase Gate Verification
+- [ ] Persist the imported dataset and generate reproducible R script:
+  - Invoke `tpa_export_state(rds_path = "data/tidyproteomics_data.rds", script_path = "code/01_inspect.R")`.
 - [ ] **Checkpoint 1.3 (Phase Gate & Log Verification)**:
-  1. `logs/01_inspect/console.log` (or `logs/01_inspect.log`) exists on disk with non-zero file size.
-  2. `data/tidyproteomics_data.rds` exists on disk with non-zero file size and populated `subject_id`, `replicate_id`, and `batch` metadata.
-  3. `sample_names` confirms the exact naming of control and treatment/perturbation conditions.
-  4. `annot_terms` outputs all functional category names available in the dataset (e.g., Gene Ontology, Reactome, UniProt keywords).
-  5. Count diagnostic plot (`data/plot_proteins_counts.png` or `data/plot_peptides_counts.png`) exists in `data/` with non-zero file size (along with optional `data/plot_*_venn.png` or `data/plot_*_euler.png` if generated).
+  1. `logs/01_inspect/console.log` exists on disk with non-zero file size.
+  2. `data/tidyproteomics_data.rds` and `code/01_inspect.R` exist on disk with non-zero file size.
+  3. `overview` confirms exact sample groups (`ctl`, treatment cohorts) and functional annotation terms.
+  4. Count diagnostic plot (`data/plot_proteins_counts.png` or `data/plot_peptides_counts.png`) exists in `data/` with non-zero file size (along with optional `data/plot_*_venn.png` or `data/plot_*_euler.png` if generated).
 
 #### Phase 1.4: Experimental Alignment, Contrast Scaffolding & Hypothesis Verification
 - [ ] **Inspect User Hypothesis & Parameters (`docs/experiment.md` Sections 1 & 2)**:
@@ -186,6 +57,7 @@ Construct and execute `code/01_inspect.R`, capturing full execution output to `l
 - [ ] **Proactive Section 3 Scaffolding in `docs/experiment.md`**:
   - Inspect Section 3 (`## 3. Sample Grouping, Recoding & Contrast Designations`) in `docs/experiment.md`.
   - If Section 3 contains `*(Pending Phase 1 data ingestion)*`, is missing, or contains unconfigured tables:
+    - *Targeting Edits*: Target concise unique anchor lines (e.g. replacing `- *(Pending Phase 1 data ingestion)*` in Section 3.A) rather than replacing large multi-paragraph comment blocks, ensuring `replace_file_content` succeeds reliably without whitespace mismatches.
     - **Scaffold Section 3**: Update Section 3 of `docs/experiment.md` directly using standardized visual badges:
       1. Section 3.A: Label with `ℹ️ [AUTO-GENERATED REFERENCE - READ ONLY]:` and list:
          - Discovered biological subjects vs raw files count (`<N>` unique subjects across `<M>` raw files).

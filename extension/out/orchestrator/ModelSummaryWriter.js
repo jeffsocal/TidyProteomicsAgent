@@ -47,7 +47,7 @@ function formatDateTime(d = new Date()) {
     const minutes = pad(d.getMinutes());
     return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
-function generateActiveModelSummaryMarkdown(config, extensionVersion = "0.1.0", date = new Date()) {
+function generateActiveModelSummaryMarkdown(config, extensionVersion = "0.1.0", date = new Date(), engine = "mcp") {
     const timestampStr = formatDateTime(date);
     const providerStr = (config.provider || "anthropic").toUpperCase();
     const modelStr = config.model || "claude-3-7-sonnet-20250219";
@@ -76,6 +76,7 @@ Agent: ${agentStr}
 | :--- | :--- |
 | **Provider** | ${providerStr} |
 | **Model** | ${modelStr} |
+| **Execution Engine** | ${engine === "mcp" ? "MCP Server (Live In-Memory)" : "Markdown Skills (Script Generation)"} |
 | **Author** | ${authorStr} |
 | **Agent** | ${agentStr} |
 | **Prompt Caching** | ${cachingStr} |
@@ -87,7 +88,7 @@ Agent: ${agentStr}
 ---
 
 ## Agent Document Header Standard
-All agent-authored documents and reports (including \`docs/observations.md\`, \`docs/knowledge.md\`, \`docs/websearch.md\`, \`docs/literature.md\`, \`docs/scientific_report.md\`, and any other generated markdown reports) must reference this specification and place the following metadata block immediately below the title:
+All agent-authored documents and reports (including \`docs/observations.md\`, \`docs/knowledge.md\`, \`docs/websearch.md\`, \`docs/literature.md\`, \`docs/manuscript.md\`, and any other generated markdown reports) must reference this specification and place the following metadata block immediately below the title:
 
 \`\`\`markdown
 Title
@@ -98,13 +99,13 @@ Agent: ${agentStr}
 \`\`\`
 `;
 }
-async function writeActiveModelSummaryFile(workspaceRoot, config, extensionVersion = "0.1.0") {
+async function writeActiveModelSummaryFile(workspaceRoot, config, extensionVersion = "0.1.0", engine = "mcp") {
     if (!workspaceRoot)
         return "";
     const docsDir = path.join(workspaceRoot, "docs");
     await fs.mkdir(docsDir, { recursive: true });
     const llmPath = path.join(docsDir, "llm.md");
-    const markdown = generateActiveModelSummaryMarkdown(config, extensionVersion);
+    const markdown = generateActiveModelSummaryMarkdown(config, extensionVersion, new Date(), engine);
     try {
         const existing = await fs.readFile(llmPath, "utf-8");
         const stripCreated = (s) => s.replace(/Created:\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/g, "");

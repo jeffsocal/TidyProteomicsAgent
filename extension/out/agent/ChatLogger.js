@@ -160,13 +160,11 @@ class ChatLogger {
         const systemFiles = params.systemPromptFiles || [
             "agent/PROTOCOL.md",
             "docs/experiment.md",
-            "agent/TIDYPROTEOMICS_CORE.md",
         ];
         const inputFiles = params.inputPromptFiles || [
             params.phaseFileName.includes("/") ? params.phaseFileName : `analysis/${params.phaseFileName}`,
             "docs/notes.md",
             "docs/llm.md",
-            "docs/experiment.md",
         ];
         const lines = [
             "",
@@ -235,8 +233,10 @@ class ChatLogger {
         // 1. Special Handling for execute_command: Keeps R console noise OUT of chat.md
         if (toolName === "execute_command") {
             const command = toolArgs?.command || "(command string unavailable)";
-            // Persist full unvarnished terminal output to logs/<phaseTag>/console.log
-            if (this.consoleLogPath) {
+            // Prevent recursive log echo chambers:
+            // Do not append output of read-only log inspection commands back into console.log
+            const isLogSelfInspection = /(?:grep|sed|tail|head|cat|awk|less|more)\b.*logs\/[^\s;&|]+\/console\.log/.test(command);
+            if (this.consoleLogPath && !isLogSelfInspection) {
                 const consoleEntry = [
                     "================================================================================",
                     `[${timestamp}] Command: ${command}`,
@@ -253,8 +253,10 @@ class ChatLogger {
                 `#### [${timestamp}] Tool Result: \`${toolName}\` [${status}] (id: \`${callId}\`)`,
                 `- **Command**: \`${command}\``,
                 `- **Status**: ${isError ? "❌ Command failed" : "✓ Command executed successfully"}`,
-                `- **Console Output**: Logged to [\`logs/${this.currentPhaseTag}/console.log\`](${relConsole})`,
             ];
+            if (!isLogSelfInspection) {
+                lines.push(`- **Console Output**: Logged to [\`logs/${this.currentPhaseTag}/console.log\`](${relConsole})`);
+            }
             if (isError) {
                 // Extract up to 10 lines of salient error / traceback so LLM reasoning remains clear
                 const rawLines = cleanResult.split("\n");
@@ -338,6 +340,14 @@ class ChatLogger {
         const statusIcon = params.success ? "✓" : "❌";
         const statusText = params.success ? "COMPLETED" : "FAILED";
         const cached = params.tokensUsed.cachedPromptTokens || 0;
+        let phaseTag = this.currentPhaseTag;
+        if (params.phaseFileName) {
+            let t = path.basename(params.phaseFileName).replace(/\.md$/i, "").toLowerCase();
+            if (t.startsWith("instruct")) {
+                t = "00_install";
+            }
+            phaseTag = t;
+        }
         const banner = [
             `### [${timestamp}] ${statusIcon} Phase ${statusText}: ${params.phaseTitle}`,
             `- **Duration**: ${params.durationSeconds}s | **Total Turns**: ${params.turnCount}`,
@@ -350,10 +360,11 @@ class ChatLogger {
             "---",
             "",
         ].join("\n");
-        await this.append(banner);
+        const targetChatLog = this.resolveLogPath(`logs/${phaseTag}/chat.md`);
+        await this.appendToFile(targetChatLog || this.logPath || this.pipelineLogPath, banner);
         // Update master pipeline.md index table
         if (this.pipelineLogPath) {
-            const summaryRow = `| ${statusIcon} **${this.currentPhaseTag}** | ${params.phaseTitle} | ${statusText} | ${params.durationSeconds}s | ${params.tokensUsed.totalTokens.toLocaleString()} | [Chat](./${this.currentPhaseTag}/chat.md) \\| [Console](./${this.currentPhaseTag}/console.log) |`;
+            const summaryRow = `| ${statusIcon} **${phaseTag}** | ${params.phaseTitle} | ${statusText} | ${params.durationSeconds}s | ${params.tokensUsed.totalTokens.toLocaleString()} | [Chat](./${phaseTag}/chat.md) \\| [Console](./${phaseTag}/console.log) |`;
             await this.appendToFile(this.pipelineLogPath, summaryRow);
         }
     }

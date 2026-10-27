@@ -1,7 +1,5 @@
 ---
-skills:
-  - TIDYPROTEOMICS_CORE
-  - TIDYPROTEOMICS_EXTRACT_QUERY
+tools: [tpa_health, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_export_table, tpa_operations, tpa_extract, tpa_run_code, tpa_export_state, tpa_protein_map]
 ---
 
 ### Phase 7: Internal Knowledge Contextualization & First-Layer Conclusions
@@ -9,7 +7,7 @@ skills:
 In this phase, you (the LLM) will ingest the primary data-derived observations from `06_OBSERVATIONS` (`docs/observations.md`, `logs/06_observations/console.log`, and experimental design in `docs/experiment.md`). You will apply your internal domain knowledge (molecular biology, biochemistry, cellular physiology, protein complexes, and signaling cascades) to contextualize the observations and develop the **first layer of conclusions** (strictly do not hallucinate facts, citations, or unsupported claims).
 
 If you need to query the data to test new hypotheses or check related protein family members, complex subunits, or candidate interactors:
-- Use `agent/TIDYPROTEOMICS_EXTRACT_QUERY.md` API conventions to write and execute targeted R queries against `data/tidyproteomics_data.rds` (e.g. `code/07_knowledge.R` logged to `logs/07_knowledge/console.log`).
+- Use `tidyproteomics query tools (tpa_extract, tpa_run_code, or Rscript)` API conventions to write and execute targeted R queries against `data/tidyproteomics_data.rds` (e.g. `code/07_knowledge.R` logged to `logs/07_knowledge/console.log`).
 - Document any **new** data-derived observations in `docs/knowledge.md`.
 
 You will also develop a curated list of high-yield keyphrases for downstream web search in Phase 08.
@@ -25,13 +23,17 @@ Before proceeding, verify that:
 
 ---
 
-#### 2. Interactive Data Queries via `agent/TIDYPROTEOMICS_EXTRACT_QUERY.md` (Optional Follow-Up Hypotheses)
+#### 2. Interactive Data Queries via `tidyproteomics query tools (tpa_extract, tpa_run_code, or Rscript)` (Optional Follow-Up Hypotheses)
 If the observed changes in `docs/observations.md` suggest follow-up questions about specific protein complexes, unthresholded co-factors, or pathway partners:
-- Write and execute a targeted R script `code/07_knowledge.R` (capturing output to `logs/07_knowledge/console.log`):
+- Write and execute a targeted R script `code/07_knowledge.R` (output is automatically captured to `logs/07_knowledge/console.log`):
   ```bash
-  mkdir -p logs/07_knowledge && Rscript code/07_knowledge.R 2>&1 | tee logs/07_knowledge/console.log
+  Rscript code/07_knowledge.R
   ```
-- Use canonical `tidyproteomics` functions per `agent/TIDYPROTEOMICS_EXTRACT_QUERY.md` (e.g., `export_analysis(tp_data, "<contrast>", .analysis = "expression")`, filtering candidate gene symbols or UniProt IDs, checking nominal $p$-values and effect sizes without imposing strict FDR cutoffs):
+- **Canonical Expression Table Columns**:
+  - `tidyproteomics` exports differential expression tables with the following exact column names:
+    - `gene_name`, `protein`, `description`, `log2_foldchange` (⚠️ **CRITICAL**: spelled `log2_foldchange` with *no* underscore between 'fold' and 'change'), `p_value`, `adj_p_value`, `foldchange`.
+  - Always reference `log2_foldchange` (or use `any_of(...)` in `dplyr::select`) to prevent runtime column-not-found errors.
+- Use canonical `tidyproteomics` functions per `tidyproteomics query tools (tpa_extract, tpa_run_code, or Rscript)` (e.g., `export_analysis(tp_data, "<contrast>", .analysis = "expression")`, filtering candidate gene symbols or UniProt IDs, checking nominal $p$-values and effect sizes without imposing strict FDR cutoffs):
   ```r
   library(tidyproteomics)
   library(dplyr)

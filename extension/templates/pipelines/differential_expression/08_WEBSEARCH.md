@@ -1,7 +1,5 @@
 ---
-skills:
-  - TIDYPROTEOMICS_CORE
-  - TIDYPROTEOMICS_EXTRACT_QUERY
+tools: [tpa_health, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_export_table, tpa_operations, tpa_extract, tpa_run_code, tpa_export_state]
 ---
 
 ### Phase 8: Web Search Corroboration & Second-Layer Conclusions
@@ -14,7 +12,7 @@ In this phase, you (the LLM) will use the keyphrases curated in `07_KNOWLEDGE` (
 to further contextualize the observations and develop the **second layer of conclusions**.
 
 If web search findings reveal new candidate interactors, orthologs, pathway regulators, or disease biomarkers that suggest follow-up questions:
-- Use `agent/TIDYPROTEOMICS_EXTRACT_QUERY.md` to query the saved dataset (`data/tidyproteomics_data.rds`) directly (e.g. writing `code/08_websearch.R` logged to `logs/08_websearch/console.log`).
+- Use `tidyproteomics query tools (tpa_extract, tpa_run_code, or Rscript)` to query the saved dataset (`data/tidyproteomics_data.rds`) directly (e.g. writing `code/08_websearch.R` logged to `logs/08_websearch/console.log`).
 - Document any **new** data-derived observations in `docs/websearch.md`.
 
 You will also develop a targeted **Literature Search Strategy** (defining candidate seed gene symbols, functional modules, and context filters) to prepare for the DuckDB Literature Knowledge Database interrogation in Phase 09.
@@ -34,7 +32,7 @@ Before proceeding, verify that:
 #### 2. Executing Web Searches
 Extract the prioritized keyphrases from `docs/knowledge.md` and execute targeted web inquiries:
 - If web search tools are enabled in the agent environment, execute searches for the keyphrase groups.
-- If web search is performed via command-line utilities (e.g. `curl` queries to PubMed, UniProt, or public APIs), execute commands via `execute_command` and capture relevant text summaries.
+- If web search is performed via command-line utilities (e.g. `curl` queries to PubMed/UniProt APIs or inline scripting), execute commands via `execute_command` and capture relevant text summaries. If executing Python snippets, explicitly invoke `python3` (as `/usr/bin/python` is unavailable on macOS and modern systems). **Rate Limit / API Discipline**: When invoking NCBI E-utilities (esearch/esummary), unauthenticated API calls are strictly capped at 3 requests per second. Always insert `time.sleep(0.4)` between HTTP requests in scripts to prevent HTTP 429 (Too Many Requests) errors.
 - In offline or sandboxed environments without direct internet access, synthesize published literature and database knowledge corresponding to the curated keyphrases, ensuring strict attribution without hallucination.
 - Search priorities:
   1. Primary perturbation target in the specific cell line / organism: reported proteomic alterations, direct interactors, and downstream markers.
@@ -43,13 +41,13 @@ Extract the prioritized keyphrases from `docs/knowledge.md` and execute targeted
 
 ---
 
-#### 3. Interactive Data Queries via `agent/TIDYPROTEOMICS_EXTRACT_QUERY.md` (Testing New Web-Derived Hypotheses)
+#### 3. Interactive Data Queries via `tidyproteomics query tools (tpa_extract, tpa_run_code, or Rscript)` (Testing New Web-Derived Hypotheses)
 If external web findings suggest candidate interactors, co-complex members, or downstream pathway markers that were not initially examined in Phase 6:
-- Write and execute `code/08_websearch.R` (capturing output to `logs/08_websearch/console.log`):
+- Write and execute `code/08_websearch.R` (output is automatically captured to `logs/08_websearch/console.log`):
   ```bash
-  mkdir -p logs/08_websearch && Rscript code/08_websearch.R 2>&1 | tee logs/08_websearch/console.log
+  Rscript code/08_websearch.R
   ```
-- Use canonical `tidyproteomics` functions per `agent/TIDYPROTEOMICS_EXTRACT_QUERY.md`:
+- Use canonical `tidyproteomics` functions per `tidyproteomics query tools (tpa_extract, tpa_run_code, or Rscript)`:
   ```r
   library(tidyproteomics)
   library(dplyr)

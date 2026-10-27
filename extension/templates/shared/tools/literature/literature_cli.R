@@ -260,7 +260,28 @@ cmd_search <- function(db_path, query, limit = 50L) {
   con <- open_db(db_path, read_only = TRUE)
   on.exit(close_db(con), add = TRUE)
 
-  # Exact symbol / alias matches rank first, then substring matches on entity,
+  # Support batch querying if query contains comma- or semicolon-separated tokens
+  tokens <- trimws(unlist(strsplit(query, "[,;]+")))
+  tokens <- tokens[nzchar(tokens)]
+  if (length(tokens) > 1) {
+    placeholders <- paste(rep("?", length(tokens)), collapse = ", ")
+    batch_limit <- limit * length(tokens)
+    rows <- DBI::dbGetQuery(con, sprintf(
+      "SELECT canonical_human_symbol, raw_entity_name, relationship_type, functional_module,
+              quantitative_note, evidence_quote, organism, model_name, perturbation_type,
+              perturbation_target, assay_modality, study_id, title, year, context_id, assertion_id
+         FROM v_assertions_full
+        WHERE UPPER(canonical_human_symbol) IN (%s)
+           OR UPPER(raw_entity_name) IN (%s)
+        ORDER BY canonical_human_symbol, year DESC NULLS LAST
+        LIMIT %d", placeholders, placeholders, batch_limit),
+      params = c(as.list(toupper(tokens)), as.list(toupper(tokens)))
+    )
+    emit(list(ok = TRUE, action = "search", query = query, count = nrow(rows), limit = batch_limit, rows = rows, results = rows))
+    return()
+  }
+
+  # Single-query: exact symbol / alias matches rank first, then substring matches on entity,
   # functional module, or perturbation target.
   pattern <- paste0("%", query, "%")
   rows <- DBI::dbGetQuery(con, sprintf(

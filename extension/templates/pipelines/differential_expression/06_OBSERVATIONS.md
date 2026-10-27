@@ -1,7 +1,5 @@
 ---
-skills:
-  - TIDYPROTEOMICS_CORE
-  - TIDYPROTEOMICS_EXTRACT_QUERY
+tools: [tpa_health, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_export_table, tpa_operations, tpa_extract, tpa_run_code, tpa_export_state, tpa_protein_map, tpa_normalization_sensitivity]
 ---
 
 ### Phase 6: Primary Data-Derived Observations & Extraction
@@ -20,13 +18,20 @@ You will then author `docs/observations.md` strictly documenting these primary d
 ---
 
 #### 1. Deterministic Data Extraction via `code/06_observations.R`
-Rather than reading massive CSV files into context, write and execute `code/06_observations.R` (capturing output to `logs/06_observations/console.log`: `mkdir -p logs/06_observations && Rscript code/06_observations.R 2>&1 | tee logs/06_observations/console.log`). 
+> ⚡ **CRITICAL ONE-SHOT WORKFLOW DIRECTIVE**:
+> In this phase, do NOT call interactive MCP inspection tools (`tpa_inspect`, `tpa_summary`, `tpa_run_code`, `tpa_export_table`) or burn turns on exploratory queries. Proceed deterministically in 3 concise turns:
+> 1. Author `code/06_observations.R` using the complete extraction script template below.
+> 2. Execute `code/06_observations.R` via `execute_command`: `if [ -f tools/lint_tidyproteomics.R ]; then Rscript tools/lint_tidyproteomics.R code/06_observations.R && Rscript code/06_observations.R; else Rscript code/06_observations.R; fi`. (Output is logged to `logs/06_observations/console.log` and formatted Markdown tables are automatically written to `data/observations_summary.md`).
+> 3. Populate `docs/observations.md` in a single step (`execute_command: cp data/observations_summary.md docs/observations.md` or a single `read_file` + `write_file`). **Do NOT burn turns reading `data/observations_summary.md` in small repetitive chunks.** Verify checkpoint passing (`PHASE_6_EXTRACTION_CHECKPOINT_PASS`) and immediately invoke `complete_phase`.
+
+Rather than reading massive CSV or TSV files into context, write and execute `code/06_observations.R`. The script extracts exact metrics, resolves pathway names, generates clean markdown tables, and writes `data/observations_summary.md` directly.
 
 Use `tidyproteomics`, `dplyr`, and `knitr` to extract exact numbers, target verification (or untargeted scope), top biomarkers, and pathway summaries across all evaluated contrasts:
 ```r
 library(tidyproteomics)
 library(dplyr)
 library(knitr)
+library(readr)
 
 # 1. Load persisted tidyproteomics data object from data/
 tp_data <- readRDS("data/tidyproteomics_data.rds")
@@ -89,6 +94,20 @@ format_stats <- function(df) {
   df %>% mutate(across(any_of(c("p_value", "adj_p_value")), ~ ifelse(!is.na(.) & . < 1e-4, sprintf("%.2e", .), sprintf("%.4f", .))))
 }
 
+# Accumulator for structured observations summary markdown file
+md_out <- character(0)
+emit_md <- function(...) {
+  lines <- paste0(...)
+  md_out <<- c(md_out, lines)
+  cat(lines, sep = "\n")
+}
+emit_table <- function(df, format = "pipe") {
+  tbl_lines <- knitr::kable(df, format = format)
+  md_out <<- c(md_out, tbl_lines, "")
+  cat(tbl_lines, sep = "\n")
+  cat("\n")
+}
+
 # 2. Checkpoint & dataset dimension summary
 cat("=== OBJECT SUMMARY ===\n")
 print(tp_data)
@@ -96,7 +115,6 @@ print(tp_data)
 analyte_name <- tp_data$analyte
 available_terms <- get_annotation_terms(tp_data, format = "vector")
 
-# 3. Extract differential expression results across all defined contrasts:
 completed_analyses <- get_analyses(tp_data)
 contrast_names <- unique(completed_analyses$comparison)
 cat(sprintf("\nAvailable contrasts in object: %s\n", paste(contrast_names, collapse = ", ")))
@@ -105,6 +123,13 @@ cat(sprintf("\nAvailable contrasts in object: %s\n", paste(contrast_names, colla
 target_gene <- "<decided_target_gene_or_NULL>"         # e.g., "MYC" or NULL
 target_uniprot <- "<decided_target_uniprot_or_NULL>"   # e.g., "P01106" or NULL
 
+emit_md("# Primary Observations Summary (Data-Derived)")
+emit_md("")
+emit_md(sprintf("- **Generated**: %s", format(Sys.time(), "%Y-%m-%d %H:%M:%S")))
+emit_md(sprintf("- **Analyte**: `%s`", analyte_name))
+emit_md(sprintf("- **Available Contrasts**: %s", paste(contrast_names, collapse = ", ")))
+emit_md("")
+
 for (c_name in contrast_names) {
   c_parts <- strsplit(c_name, "/")[[1]]
   treatment_group <- c_parts[1]
@@ -112,11 +137,35 @@ for (c_name in contrast_names) {
   contrast_str <- paste0(treatment_group, "/", control_group)
   contrast_tag <- paste0(treatment_group, "-", control_group)
 
-  cat(sprintf("\n=======================================================\nCONTRAST: %s vs %s\n=======================================================\n", treatment_group, control_group))
+  emit_md(sprintf("## Contrast: %s vs %s", treatment_group, control_group))
+  emit_md("")
 
   exp_tbl <- rlang::inject(export_analysis(tp_data, !!rlang::parse_expr(contrast_str), .analysis = "expression"))
 
-  # Missing gene symbol fallback and delimiter sanitation (Bug 5)
+  c_clean <- gsub("[^A-Za-z0-9]", ".*", contrast_str)
+  # Load Phase 4 exported expression table containing candidate reliability & imputation metrics (TSV or CSV):
+  exp_files <- list.files("data", pattern = sprintf("^table_%s_expression_.*%s.*[.](tsv|csv)$", analyte_name, c_clean), full.names = TRUE, ignore.case = TRUE)
+  if (length(exp_files) == 0) {
+    exp_files <- list.files("data", pattern = sprintf("^table_.*_expression_.*%s.*[.](tsv|csv)$", c_clean), full.names = TRUE, ignore.case = TRUE)
+  }
+  if (length(exp_files) == 0) {
+    exp_files <- list.files("data", pattern = "^table_.*_expression_.*[.](tsv|csv)$", full.names = TRUE, ignore.case = TRUE)
+  }
+  if (length(exp_files) > 0 && file.exists(exp_files[1])) {
+    csv_tbl <- tryCatch(
+      if (grepl("[.]tsv$", exp_files[1], ignore.case = TRUE)) readr::read_tsv(exp_files[1], show_col_types = FALSE) else readr::read_csv(exp_files[1], show_col_types = FALSE),
+      error = function(e) NULL
+    )
+    if (!is.null(csv_tbl) && nrow(csv_tbl) > 0) {
+      metric_cols <- intersect(c("candidate_reliability", "imputation_bias", "imputation_delta", "log2fc_observed", "imputed_total"), names(csv_tbl))
+      cols_to_add <- setdiff(metric_cols, names(exp_tbl))
+      if (length(cols_to_add) > 0 && "protein" %in% names(exp_tbl) && "protein" %in% names(csv_tbl)) {
+        exp_tbl <- exp_tbl %>% left_join(csv_tbl %>% select(any_of(c("protein", cols_to_add))), by = "protein")
+      }
+    }
+  }
+
+  # Missing gene symbol fallback and delimiter sanitation
   clean_desc_word <- if ("description" %in% names(exp_tbl)) sub(" .*$", "", trimws(exp_tbl$description)) else NA_character_
   clean_desc_word[is.na(clean_desc_word) | clean_desc_word == ""] <- NA_character_
 
@@ -131,22 +180,40 @@ for (c_name in contrast_names) {
       gene_name = gsub("^[; ]+|[; ]+$", "", gene_name)
     )
 
-  # Imputation Risk Flagging (Optimization 3)
+  # Imputation Risk & LOD Flagging
   g1_imp <- paste0("imputed_", treatment_group)
   g2_imp <- paste0("imputed_", control_group)
   exp_tbl <- exp_tbl %>%
     mutate(
       imputed_total = if ("imputed_total" %in% names(.)) imputed_total else if ("imputed" %in% names(.)) imputed else NA_real_,
-      imputation_bias = if ("imputation_bias" %in% names(.)) imputation_bias else case_when(
+      imputation_bias = if ("imputation_bias" %in% names(.) && any(!is.na(imputation_bias))) imputation_bias else case_when(
         pmax(if (g1_imp %in% names(.)) get(g1_imp) else 0,
              if (g2_imp %in% names(.)) get(g2_imp) else 0, na.rm = TRUE) > 0.5 ~ "HIGH",
         pmax(if (g1_imp %in% names(.)) get(g1_imp) else 0,
              if (g2_imp %in% names(.)) get(g2_imp) else 0, na.rm = TRUE) >= 0.2 ~ "MODERATE",
         TRUE ~ "LOW"
-      )
+      ),
+      candidate_reliability = if ("candidate_reliability" %in% names(.) && any(!is.na(candidate_reliability))) candidate_reliability else case_when(
+        imputation_bias == "LOW" ~ "ROBUST_QUANTITATIVE",
+        imputation_bias == "HIGH" ~ "DETECTION_LIMITED_ON_OFF",
+        TRUE ~ "HIGH_UNCERTAINTY"
+      ),
+      imputation_delta = if ("imputation_delta" %in% names(.)) imputation_delta else if (g1_imp %in% names(.) && g2_imp %in% names(.)) round(get(g1_imp) - get(g2_imp), 3) else NA_real_
     )
 
+  # Persist augmented expression table with reliability and imputation metrics for downstream phases (e.g. 10_FIGURES)
+  out_tsv <- sprintf("data/table_%s_expression_%s.tsv", analyte_name, gsub("[^A-Za-z0-9]", "_", contrast_str))
+  readr::write_tsv(exp_tbl, out_tsv)
+  if (length(exp_files) > 0 && file.exists(exp_files[1])) {
+    if (grepl("[.]tsv$", exp_files[1], ignore.case = TRUE)) {
+      readr::write_tsv(exp_tbl, exp_files[1])
+    } else {
+      readr::write_csv(exp_tbl, exp_files[1])
+    }
+  }
+
   # Target perturbation / biomarker check (if targeted):
+  emit_md("### Target Status")
   if (!is.null(target_gene) && target_gene != "" && !grepl("<decided_", target_gene)) {
     target_cols <- intersect(
       c("gene_name", "gene_symbol", "symbol", "gene", "protein", "accession", "peptide", "uniprot", "uniprot_id"),
@@ -161,62 +228,79 @@ for (c_name in contrast_names) {
       target_rows <- target_rows %>% mutate(percent_change = (foldchange - 1) * 100)
     }
 
-    cat(sprintf("\n=== TARGET STATUS (%s / %s) ===\n", target_gene, ifelse(is.null(target_uniprot), "NA", target_uniprot)))
     target_display <- target_rows %>% select(any_of(c(
       target_cols, "log2_foldchange", "foldchange", "p_value",
-      "adj_p_value", "imputation_bias", "percent_change", "description", "name"
+      "adj_p_value", "imputation_bias", "candidate_reliability", "percent_change", "description", "name"
     ))) %>% format_stats()
-    cat(knitr::kable(target_display, format = "pipe"), sep = "\n")
+    emit_table(target_display)
   } else {
-    cat("\n=== TARGET STATUS: Untargeted / Discovery Screen (No single target gene specified) ===\n")
+    emit_md("Untargeted / Discovery Screen (No single target gene specified).")
+    emit_md("")
   }
 
-  cat("\n=== QUANTITATIVE THRESHOLD COUNTS ===\n")
+  emit_md("### Quantitative Threshold Counts")
   sig_all <- exp_tbl %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05, abs(log2_foldchange) >= 1)
   sig_up <- exp_tbl %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05, log2_foldchange >= 1)
   sig_down <- exp_tbl %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05, log2_foldchange <= -1)
 
-  cat(sprintf("Total Quantified Identifiers (%s): %d\n", analyte_name, nrow(exp_tbl)))
-  cat(sprintf("Total Significant (|log2FC| >= 1, q <= 0.05): %d\n", nrow(sig_all)))
-  cat(sprintf("Total Upregulated (log2FC >= 1, q <= 0.05): %d\n", nrow(sig_up)))
-  cat(sprintf("Total Downregulated (log2FC <= -1, q <= 0.05): %d\n", nrow(sig_down)))
+  emit_md(sprintf("- **Total Quantified Identifiers (%s)**: %d", analyte_name, nrow(exp_tbl)))
+  emit_md(sprintf("- **Total Significant (|log2FC| >= 1, q <= 0.05)**: %d", nrow(sig_all)))
+  emit_md(sprintf("- **Total Upregulated (log2FC >= 1, q <= 0.05)**: %d", nrow(sig_up)))
+  emit_md(sprintf("- **Total Downregulated (log2FC <= -1, q <= 0.05)**: %d", nrow(sig_down)))
+  emit_md("")
 
-  cat("Imputation risk breakdown for all quantified features:\n")
-  print(table(exp_tbl$imputation_bias))
-
-  # Dynamically assemble display columns based on available identifiers, statistics, annotations, and imputation tags:
-  id_cols <- intersect(
-    c("gene_name", "gene_symbol", "symbol", "gene", "protein", "peptide", "accession", "description", "name"),
+  # Clean, readable display columns for tables (omit broad multi-pathway annotations to preserve table clarity)
+  display_columns <- intersect(
+    c("gene_name", "protein", "description", "log2_foldchange", "p_value", "adj_p_value", "imputation_bias", "candidate_reliability", "imputation_delta"),
     colnames(exp_tbl)
   )
-  stat_cols <- intersect(c("log2_foldchange", "p_value", "adj_p_value", "imputation_bias"), colnames(exp_tbl))
-  anno_cols <- setdiff(
-    intersect(available_terms, colnames(exp_tbl)),
-    c(id_cols, stat_cols, "gene_id_entrez", "gene_id_ensemble")
-  )
-  display_columns <- unique(c(id_cols, stat_cols, anno_cols))
 
-  cat(sprintf("\n=== TOP 10 UPREGULATED %s (MARKDOWN TABLE) ===\n", toupper(analyte_name)))
+  emit_md(sprintf("### Top 10 Upregulated %s", toupper(analyte_name)))
   top_up <- sig_up %>% arrange(desc(log2_foldchange), adj_p_value) %>% head(10)
-  cat(knitr::kable(top_up %>% select(any_of(display_columns)) %>% format_stats(), format = "pipe"), sep = "\n")
+  emit_table(top_up %>% select(any_of(display_columns)) %>% format_stats())
 
-  cat(sprintf("\n=== TOP 10 DOWNREGULATED %s (MARKDOWN TABLE) ===\n", toupper(analyte_name)))
+  emit_md(sprintf("### Top 10 Downregulated %s", toupper(analyte_name)))
   top_down <- sig_down %>% arrange(log2_foldchange, adj_p_value) %>% head(10)
-  cat(knitr::kable(top_down %>% select(any_of(display_columns)) %>% format_stats(), format = "pipe"), sep = "\n")
+  emit_table(top_down %>% select(any_of(display_columns)) %>% format_stats())
 
-  # 4. Top robust candidates ranked by volcano pi-score: |log2FC| * -log10(adj_p_value)
-  cat(sprintf("\n=== TOP 10 BALANCED CANDIDATES (VOLCANO PI-SCORE) FOR %s ===\n", contrast_tag))
+  # Top robust candidates ranked by volcano pi-score: |log2FC| * -log10(adj_p_value)
+  emit_md(sprintf("### Top 10 Balanced Candidates (Volcano Pi-Score) for %s", contrast_tag))
   top_pi <- sig_all %>%
     mutate(pi_score = abs(log2_foldchange) * -log10(pmax(adj_p_value, 1e-10))) %>%
     arrange(desc(pi_score)) %>%
     head(10)
-  cat(knitr::kable(top_pi %>% select(any_of(c(display_columns, "pi_score"))) %>% format_stats(), format = "pipe"), sep = "\n")
+  top_pi_display <- top_pi %>%
+    select(any_of(c(display_columns, "pi_score"))) %>%
+    format_stats()
+  emit_table(top_pi_display)
 
-  # 5. Extract enrichment results across all analyzed categories for this contrast (with member proteins)
-  enr_csv <- file.path("data", paste0("table_proteins_enrichment_", gsub("/", "-", contrast_str), ".csv"))
-  if (file.exists(enr_csv)) {
-    enr_tbl <- tryCatch(readr::read_csv(enr_csv, show_col_types = FALSE), error = function(e) NULL)
-  } else {
+  # Extract enrichment results across all analyzed categories for this contrast
+  enr_files <- list.files("data", pattern = paste0("^table_.*_enrichment_.*", c_clean, ".*[.](tsv|csv)$"), full.names = TRUE, ignore.case = TRUE)
+  enr_tbl <- NULL
+  if (length(enr_files) > 0) {
+    enr_tbl <- dplyr::bind_rows(lapply(enr_files, function(f) {
+      tbl <- tryCatch(
+        if (grepl("[.]tsv$", f, ignore.case = TRUE)) readr::read_tsv(f, show_col_types = FALSE) else readr::read_csv(f, show_col_types = FALSE),
+        error = function(e) NULL
+      )
+      if (!is.null(tbl) && nrow(tbl) > 0) {
+        if (!"term" %in% names(tbl)) {
+          category <- sub(paste0("^.*_enrichment_(.*)_", c_clean, "\\.(tsv|csv)$"), "\\1", basename(f), ignore.case = TRUE)
+          if (identical(category, basename(f))) {
+            category <- sub("^.*_enrichment_([^_]+(?:_[^_]+)*?)_.*$", "\\1", basename(f), ignore.case = TRUE)
+          }
+          tbl$term <- category
+        }
+      }
+      tbl
+    }))
+    if (!is.null(enr_tbl) && nrow(enr_tbl) > 0 && "annotation" %in% names(enr_tbl)) {
+      enr_tbl <- enr_tbl %>% dplyr::mutate(annotation = resolve_reactome_ids(annotation))
+    } else {
+      enr_tbl <- NULL
+    }
+  }
+  if (is.null(enr_tbl) || nrow(enr_tbl) == 0) {
     enriched_terms <- if (nrow(completed_analyses) > 0) {
       completed_analyses %>%
         filter(comparison == contrast_str, analysis == "enrichment") %>%
@@ -238,40 +322,61 @@ for (c_name in contrast_names) {
   }
 
   if (!is.null(enr_tbl) && nrow(enr_tbl) > 0) {
-    cat(sprintf("\n=== MULTI-CATEGORY ENRICHMENT FOR %s ===\n", contrast_tag))
-    cat(knitr::kable(enr_tbl %>% group_by(term) %>% summarise(
+    emit_md(sprintf("### Multi-Category Enrichment for %s", contrast_tag))
+    enr_summary <- enr_tbl %>% group_by(term) %>% summarise(
       terms_count = n(),
       sig_terms = sum(adj_p_value <= 0.05, na.rm = TRUE),
       .groups = "drop"
-    ), format = "pipe"), sep = "\n")
+    )
+    emit_table(enr_summary)
 
-    cat(sprintf("\n=== TOP SIGNIFICANT PATHWAYS FOR %s (MARKDOWN TABLE) ===\n", contrast_tag))
-    if ("member_proteins" %in% names(enr_tbl)) {
+    emit_md(sprintf("### Top Significant Pathways for %s", contrast_tag))
+    if ("member_genes" %in% names(enr_tbl) && any(!is.na(enr_tbl$member_genes))) {
+      enr_tbl <- enr_tbl %>%
+        mutate(top_drivers = sapply(strsplit(as.character(member_genes), ",\\s*"), function(x) paste(head(x, 4), collapse = ", ")))
+    } else if ("member_proteins" %in% names(enr_tbl)) {
       enr_tbl <- enr_tbl %>%
         mutate(top_drivers = sapply(strsplit(as.character(member_proteins), ",\\s*"), function(x) paste(head(x, 4), collapse = ", ")))
+    } else {
+      # Derive top driving member genes directly from exp_tbl annotations if available
+      enr_tbl$top_drivers <- sapply(seq_len(nrow(enr_tbl)), function(i) {
+        ann <- enr_tbl$annotation[i]
+        if (is.na(ann) || !nzchar(ann)) return(NA_character_)
+        matching_genes <- sig_all %>%
+          filter(if_any(any_of(c("biological_process", "cellular_component", "molecular_function", "reactome_pathway", "wiki_pathway", "annotation")), ~ grepl(ann, .x, fixed = TRUE))) %>%
+          arrange(desc(abs(log2_foldchange))) %>%
+          pull(gene_name)
+        if (length(matching_genes) > 0) paste(head(unique(matching_genes), 4), collapse = ", ") else NA_character_
+      })
     }
-    enr_cols <- intersect(c("term", "annotation", "enrichment", "size", "p_value", "adj_p_value", "top_drivers", "leading_edge_count"), names(enr_tbl))
-    sig_enr <- enr_tbl %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05) %>% arrange(adj_p_value) %>% head(30)
-    cat(knitr::kable(sig_enr %>% select(any_of(enr_cols)) %>% format_stats(), format = "pipe"), sep = "\n")
+    enr_cols <- intersect(c("term", "annotation", "enrichment", "size", "p_value", "adj_p_value", "top_drivers", "member_genes", "member_proteins", "leading_edge_count"), names(enr_tbl))
+    sig_enr <- enr_tbl %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05) %>% arrange(adj_p_value) %>% head(15)
+    emit_table(sig_enr %>% select(any_of(enr_cols)) %>% format_stats())
   }
 }
 
-# 6. Multi-Contrast Cross-Comparison (if >= 2 contrasts evaluated)
+# Multi-Contrast Cross-Comparison (if >= 2 contrasts evaluated)
 if (length(contrast_names) >= 2) {
-  cat("\n=== MULTI-CONTRAST CROSS-COMPARISON SUMMARY ===\n")
-  cat(sprintf("Total contrasts: %d. Comparing shared vs contrast-specific significant features.\n", length(contrast_names)))
+  emit_md("## Multi-Contrast Cross-Comparison Summary")
+  emit_md(sprintf("Total contrasts: %d. Comparing shared vs contrast-specific significant features.", length(contrast_names)))
+  emit_md("")
 }
 
-# 5. Checkpoints
+# Write summary markdown directly to disk
+writeLines(md_out, "data/observations_summary.md")
+cat("Structured markdown summary saved to: data/observations_summary.md\n")
+
+# Checkpoints
 cat("\n=== CHECKPOINTS ===\n")
 cat("Artifact tidyproteomics_data.rds exists in data/:", file.exists("data/tidyproteomics_data.rds"), "\n")
-expr_tables <- list.files("data", pattern = "^table_.*_expression_.*\\.csv$")
+expr_tables <- list.files("data", pattern = "^table_.*_expression_.*\\.(csv|tsv)$", ignore.case = TRUE)
 cat("Expression tables found in data/:", length(expr_tables), "\n")
 stopifnot("Expression data extraction failed" = length(expr_tables) > 0)
+stopifnot("Observations summary file missing" = file.exists("data/observations_summary.md"))
 cat("PHASE_6_EXTRACTION_CHECKPOINT_PASS\n")
 ```
 
-- **CLI Verification**: For log inspection, use native command-line utilities (e.g. `head -n 30 logs/06_observations/console.log`, `grep -i "pass" ...`) instead of dumping full raw files into the prompt context. Note: Markdown tables in the log can be directly transferred into `docs/observations.md`.
+- **Summary Transfer**: `code/06_observations.R` automatically outputs pre-formatted markdown tables and quantitative statistics to `data/observations_summary.md`. Inspect `data/observations_summary.md` via `read_file(filePath = "data/observations_summary.md")` to assemble `docs/observations.md` in a single clean turn without scraping raw console logs.
 
 ---
 
@@ -295,12 +400,12 @@ Organize the document strictly into the following structured sections:
    - Quantitative breakdown of the primary target (if targeted) or leading master regulator / key functional hub (if untargeted screening): Gene Symbol / Accession, $\log_2\text{FC}$, fold change, $p$-value, $q$-value, imputation risk tag, and percent change.
    - Comparison with experimental expectations stated in `docs/experiment.md`.
 3. **Top Significantly Upregulated Proteins**:
-   - Structured markdown table: Rank, Identifier (Gene Symbol / Accession), Description, $\log_2\text{FC}$, $q$-value, Imputation Risk (`imputation_bias`: HIGH, MODERATE, LOW). (Directly copy pre-formatted markdown table from `logs/06_observations/console.log`). Prominently tag candidates like `HBG2` or `SYN1` so detection/missingness-driven shifts are distinguished from continuous shifts.
+   - Structured markdown table: Rank, Identifier (Gene Symbol / Accession), Description, $\log_2\text{FC}$, $q$-value, Imputation Risk (`imputation_bias`: HIGH, MODERATE, LOW), Candidate Reliability (`candidate_reliability`: ROBUST_QUANTITATIVE, DETECTION_LIMITED_ON_OFF, HIGH_UNCERTAINTY), and $\Delta$ (`imputation_delta`). (Directly copy pre-formatted markdown table from `data/observations_summary.md`). Prominently tag candidates like `HBG2` or `SYN1` so detection/missingness-driven shifts are distinguished from continuous shifts.
 4. **Top Significantly Downregulated Proteins**:
-   - Structured markdown table: Rank, Identifier (Gene Symbol / Accession), Description, $\log_2\text{FC}$, $q$-value, Imputation Risk (`imputation_bias`: HIGH, MODERATE, LOW). (Directly copy pre-formatted markdown table from `logs/06_observations/console.log`).
+   - Structured markdown table: Rank, Identifier (Gene Symbol / Accession), Description, $\log_2\text{FC}$, $q$-value, Imputation Risk (`imputation_bias`: HIGH, MODERATE, LOW), Candidate Reliability (`candidate_reliability`: ROBUST_QUANTITATIVE, DETECTION_LIMITED_ON_OFF, HIGH_UNCERTAINTY), and $\Delta$ (`imputation_delta`). (Directly copy pre-formatted markdown table from `data/observations_summary.md`).
 5. **Top Significant Pathway Enrichments**:
-   - Summary table of significant terms across analyzed annotation categories (Category/Term, Annotation Name, Direction / Enrichment Score, $q$-value, Leading Driver Proteins [top 3–5 member gene symbols], Leading-Edge Count).
-   - Primary biological themes identified across contrasts based directly on statistical enrichment and driven by specific leading-edge member proteins.
+   - Summary table of significant terms across analyzed annotation categories (Category/Term, Annotation Name, Direction / Enrichment Score, $q$-value, Leading Driver Genes [top 3–5 member gene symbols from `member_genes`, falling back to `member_proteins` if symbols are absent], Leading-Edge Count). (Directly copy pre-formatted markdown table from `data/observations_summary.md`).
+   - Primary biological themes identified across contrasts based directly on statistical enrichment and driven by specific leading-edge member genes.
 6. **Primary Empirical Data Summary**:
    - Objective, factual synthesis of data-derived observations directly grounded in the quantitative tables and figures.
    - Detection-rate sensitivity discussion: explicitly evaluate whether top candidates are driven by continuous abundance changes (LOW imputation bias) or limit-of-detection presence/absence shifts (HIGH imputation bias).
@@ -309,7 +414,7 @@ Organize the document strictly into the following structured sections:
 ---
 
 #### 3. Critical Constraints
-- **Absolute Data Grounding**: Every numerical value ($\log_2\text{FC}$, $p$-value, $q$-value, feature count, pathway score) MUST strictly match `logs/06_observations/console.log` and the exported CSV tables. Never fabricate or extrapolate numbers.
+- **Absolute Data Grounding**: Every numerical value ($\log_2\text{FC}$, $p$-value, $q$-value, feature count, pathway score) MUST strictly match `data/observations_summary.md` and the exported CSV/TSV tables. Never fabricate or extrapolate numbers.
 - **Scientific Precision Formatting (No Exact Zeros)**: Format all statistical significance columns ($p$-value, $q$-value) smaller than $1 \times 10^{-4}$ using scientific notation (e.g., `3.99e-10` rather than `0.0000000` or `0.0e+00`). Tables must never report misleading "exact zero" values.
 - **Human-Readable Pathway Resolution**: Resolve bare Reactome accession IDs (e.g., `R-HSA-977606`, `R-HSA-166663`) to human-readable biological pathway names (e.g., `Regulation of Complement cascade`, `Initial triggering of complement`) via `resolve_reactome_ids()`. Never report `"identifier unresolved in export"`.
 - **Sanitized Delimiters & Missing Identifier Fallback**: Strip redundant delimiter characters (avoid `;;` or trailing semicolons) and provide sensible fallbacks for unmapped gene symbols (e.g., fallback to the first word of the protein description or canonical accession rather than `NA`).
@@ -319,8 +424,9 @@ Organize the document strictly into the following structured sections:
 
 #### 4. Phase Completion Gate
 - [ ] **Checkpoint Gate**:
-  1. `code/06_observations.R` executed with status code 0 and output logged to `logs/06_observations/console.log` (or `logs/06_observations.log`).
-  2. `logs/06_observations/console.log` (or `logs/06_observations.log`) ends with `PHASE_6_EXTRACTION_CHECKPOINT_PASS`.
-  3. `docs/observations.md` exists on disk with non-zero size and conforms to the structure above.
+  1. `code/06_observations.R` executed with status code 0 and output logged to `logs/06_observations/console.log`.
+  2. `logs/06_observations/console.log` ends with `PHASE_6_EXTRACTION_CHECKPOINT_PASS`.
+  3. `data/observations_summary.md` exists on disk with non-zero size containing formatted tables.
+  4. `docs/observations.md` exists on disk with non-zero size and conforms to the structure above.
 - [ ] **Complete Phase**:
   - Invoke `complete_phase(phaseName = "06_OBSERVATIONS", summary = "Primary data-derived observations extracted and compiled in docs/observations.md with verified biomarker metrics, markdown tables, and pathway enrichment summaries.")`

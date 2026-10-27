@@ -163,15 +163,11 @@ export class ProviderClient {
         signal: AbortSignal.timeout(this.getTimeoutMs()),
       });
     } catch (err: any) {
-      if (err.name === "TimeoutError" || (err.message && err.message.includes("timeout"))) {
-        throw new Error(`Anthropic API request timed out after ${timeoutSeconds}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`);
-      }
-      throw err;
+      this.handleFetchError(err, "Anthropic", url, timeoutSeconds);
     }
 
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Anthropic API error (${res.status}): ${errText}`);
+      await this.handleHttpError(res, "Anthropic", url);
     }
 
     const data: any = await res.json();
@@ -329,15 +325,11 @@ export class ProviderClient {
         signal: AbortSignal.timeout(this.getTimeoutMs()),
       });
     } catch (err: any) {
-      if (err.name === "TimeoutError" || (err.message && err.message.includes("timeout"))) {
-        throw new Error(`Gemini API request timed out after ${timeoutSeconds}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`);
-      }
-      throw err;
+      this.handleFetchError(err, "Gemini", url, timeoutSeconds);
     }
 
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Gemini API error (${res.status}): ${errText}`);
+      await this.handleHttpError(res, "Gemini", url);
     }
 
     const data: any = await res.json();
@@ -458,15 +450,11 @@ export class ProviderClient {
         signal: AbortSignal.timeout(this.getTimeoutMs()),
       });
     } catch (err: any) {
-      if (err.name === "TimeoutError" || (err.message && err.message.includes("timeout"))) {
-        throw new Error(`OpenAI API request timed out after ${timeoutSeconds}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`);
-      }
-      throw err;
+      this.handleFetchError(err, "OpenAI", url, timeoutSeconds);
     }
 
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`OpenAI API error (${res.status}): ${errText}`);
+      await this.handleHttpError(res, "OpenAI", url);
     }
 
     const data: any = await res.json();
@@ -590,15 +578,11 @@ export class ProviderClient {
         signal: AbortSignal.timeout(this.getTimeoutMs()),
       });
     } catch (err: any) {
-      if (err.name === "TimeoutError" || (err.message && err.message.includes("timeout"))) {
-        throw new Error(`OpenRouter API request timed out after ${timeoutSeconds}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`);
-      }
-      throw err;
+      this.handleFetchError(err, "OpenRouter", url, timeoutSeconds);
     }
 
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`OpenRouter API error (${res.status}): ${errText}`);
+      await this.handleHttpError(res, "OpenRouter", url);
     }
 
     const data: any = await res.json();
@@ -736,15 +720,11 @@ export class ProviderClient {
         signal: AbortSignal.timeout(this.getTimeoutMs()),
       });
     } catch (err: any) {
-      if (err.name === "TimeoutError" || (err.message && err.message.includes("timeout"))) {
-        throw new Error(`Remote Ollama API request timed out after ${timeoutSeconds}s at ${url}. For local/remote 70B models, increase Request Timeout in settings.`);
-      }
-      throw err;
+      this.handleFetchError(err, "Remote Ollama", url, timeoutSeconds);
     }
 
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Remote Ollama API error at ${url} (${res.status}): ${errText}`);
+      await this.handleHttpError(res, "Remote Ollama", url);
     }
 
     const data: any = await res.json();
@@ -792,6 +772,145 @@ export class ProviderClient {
       finishReason,
       truncationDetected: isTruncated,
     };
+  }
+
+  /**
+   * Translates low-level fetch/network/timeout errors into actionable diagnostic Error objects.
+   */
+  private handleFetchError(err: any, providerLabel: string, url: string, timeoutSeconds: number): never {
+    const isTimeout =
+      err.name === "TimeoutError" ||
+      err.name === "AbortError" ||
+      /timeout|aborted|ETIMEDOUT/i.test(err.message || "");
+
+    if (isTimeout) {
+      const e = new Error(
+        `${providerLabel} API request timed out after ${timeoutSeconds}s at ${url}. Increase Request Timeout in settings if running large models or heavy synthesis turns.`
+      );
+      (e as any).isTimeout = true;
+      (e as any).isRetryable = true;
+      throw e;
+    }
+
+    // Inspect underlying cause attached by Node.js fetch/undici
+    const cause = err.cause;
+    const causeName = cause?.name || "";
+    const causeCode = cause?.code || "";
+    const causeMsg = cause?.message || "";
+
+    if (causeName === "ConnectTimeoutError" || causeCode === "UND_ERR_CONNECT_TIMEOUT") {
+      const e = new Error(
+        `${providerLabel} connection timed out establishing connection to ${url}. Check your internet connection, VPN, or firewall settings (ConnectTimeoutError).`
+      );
+      (e as any).isNetworkError = true;
+      (e as any).isRetryable = true;
+      throw e;
+    }
+
+    if (causeCode === "ENOTFOUND" || /getaddrinfo ENOTFOUND/i.test(causeMsg)) {
+      const e = new Error(
+        `${providerLabel} host lookup failed at ${url}. Unable to resolve host via DNS. Check internet connection or DNS configuration (ENOTFOUND).`
+      );
+      (e as any).isNetworkError = true;
+      (e as any).isRetryable = true;
+      throw e;
+    }
+
+    if (causeCode === "ECONNREFUSED") {
+      const e = new Error(
+        `${providerLabel} connection refused at ${url}. Ensure the server/endpoint is active and reachable (ECONNREFUSED).`
+      );
+      (e as any).isNetworkError = true;
+      (e as any).isRetryable = true;
+      throw e;
+    }
+
+    if (causeCode === "ECONNRESET") {
+      const e = new Error(
+        `${providerLabel} connection reset by peer at ${url}. The connection was unexpectedly closed (ECONNRESET).`
+      );
+      (e as any).isNetworkError = true;
+      (e as any).isRetryable = true;
+      throw e;
+    }
+
+    if (/CERT_|certificate|SSL|TLS/i.test(causeCode + " " + causeMsg)) {
+      const e = new Error(
+        `${providerLabel} SSL/TLS certificate verification failed for ${url} (${causeCode || causeMsg}). Check system clock and SSL proxy settings.`
+      );
+      (e as any).isNetworkError = true;
+      (e as any).isRetryable = false;
+      throw e;
+    }
+
+    if (err.message === "fetch failed") {
+      const detail = causeMsg || causeCode || "unable to connect";
+      const e = new Error(
+        `${providerLabel} network connection failed connecting to ${url} (${detail}). Verify internet access and provider endpoint.`
+      );
+      (e as any).isNetworkError = true;
+      (e as any).isRetryable = true;
+      throw e;
+    }
+
+    const e = new Error(`${providerLabel} request failed: ${err.message || String(err)}`);
+    (e as any).isNetworkError = true;
+    (e as any).isRetryable = true;
+    throw e;
+  }
+
+  /**
+   * Formats HTTP error status codes with targeted, actionable diagnostics.
+   */
+  private async handleHttpError(res: Response, providerLabel: string, url: string): Promise<never> {
+    const rawText = await res.text().catch(() => "");
+    let cleanMessage = rawText.trim();
+    try {
+      const parsed = JSON.parse(rawText);
+      cleanMessage = parsed.error?.message || parsed.message || parsed.error || rawText;
+      if (typeof cleanMessage === "object") cleanMessage = JSON.stringify(cleanMessage);
+    } catch (_) { }
+
+    let friendly = "";
+    let isRetryable = false;
+
+    switch (res.status) {
+      case 401:
+        friendly = `${providerLabel} authentication failed (HTTP 401): Invalid or missing API key. Please check your credentials in settings.`;
+        break;
+      case 402:
+        friendly = `${providerLabel} payment required (HTTP 402): Insufficient credits or account balance limit reached.`;
+        break;
+      case 403:
+        friendly = `${providerLabel} access forbidden (HTTP 403): Account lacks permission for this model or region.`;
+        break;
+      case 404:
+        friendly = `${providerLabel} resource not found (HTTP 404): The specified model '${this.config.model}' or endpoint does not exist.`;
+        break;
+      case 429:
+        friendly = `${providerLabel} rate limited (HTTP 429): Request or token quota exceeded. Retrying may succeed.`;
+        isRetryable = true;
+        break;
+      case 500:
+      case 502:
+      case 503:
+      case 504:
+        friendly = `${providerLabel} server error (HTTP ${res.status}): Provider service is temporarily degraded or undergoing maintenance.`;
+        isRetryable = true;
+        break;
+      default:
+        friendly = `${providerLabel} API error (${res.status}): ${cleanMessage || "Unexpected response"}`;
+        break;
+    }
+
+    const errorMsg = cleanMessage && cleanMessage !== friendly
+      ? `${friendly} [Detail: ${cleanMessage.length > 200 ? cleanMessage.slice(0, 197) + "..." : cleanMessage}]`
+      : friendly;
+
+    const err = new Error(errorMsg);
+    (err as any).status = res.status;
+    (err as any).isRetryable = isRetryable;
+    throw err;
   }
 }
 

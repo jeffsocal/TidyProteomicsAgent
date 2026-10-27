@@ -1,3 +1,4 @@
+import * as vscode from "vscode";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { FolderStatus, PhaseInfo, PhaseStatus, PipelineState, PromptFileInfo, TokenUsage } from "../types";
@@ -101,6 +102,53 @@ export class PipelineOrchestrator {
         const reason = String(args?.reason || "").trim();
         return `[Halt Phase] ${pName}${reason ? ": " + reason : ""}`;
       }
+      case "tpa_load": {
+        const src = args?.source || args?.load_local || "";
+        return `[MCP Load] ${path.basename(String(src)) || src}`;
+      }
+      case "tpa_inspect": {
+        return `[MCP Inspect] ${args?.what || "structure"}`;
+      }
+      case "tpa_summary": {
+        return `[MCP Summary] ${args?.by || "summary"}`;
+      }
+      case "tpa_subset": {
+        return `[MCP Subset] ${args?.subset_expression || ""}`;
+      }
+      case "tpa_normalize": {
+        const methods = Array.isArray(args?.methods) ? args.methods.join(", ") : args?.methods || "";
+        return `[MCP Normalize] ${methods}`;
+      }
+      case "tpa_select_normalization": {
+        return `[MCP Select Normalization] ${args?.method || ""}`;
+      }
+      case "tpa_impute": {
+        return `[MCP Impute] ${args?.algorithm || args?.method || ""}`;
+      }
+      case "tpa_expression": {
+        return `[MCP Expression] ${args?.comparison || ""}`;
+      }
+      case "tpa_enrichment": {
+        return `[MCP Enrichment] ${args?.comparison || ""} (${args?.term || ""})`;
+      }
+      case "tpa_plot": {
+        return `[MCP Plot] ${args?.type || "plot"}`;
+      }
+      case "tpa_export_table": {
+        return `[MCP Export Table] ${args?.file_name || args?.type || ""}`;
+      }
+      case "tpa_export_state": {
+        return `[MCP Export State] ${path.basename(String(args?.script_path || "pipeline.R"))}`;
+      }
+      case "tpa_extract": {
+        return `[MCP Extract] ${args?.values || "values"}`;
+      }
+      case "tpa_operations": {
+        return `[MCP Audit Operations]`;
+      }
+      case "tpa_health": {
+        return `[MCP Health Check]`;
+      }
       default: {
         const keys = Object.keys(args || {});
         const summary = keys.length > 0 ? ` (${keys.join(", ")})` : "";
@@ -203,6 +251,43 @@ export class PipelineOrchestrator {
     } catch {
       // notes.md not available or readable
     }
+
+    // Secondary fallback: scan logs/pipeline.md master table
+    // If docs/notes.md was overwritten or is missing a phase entry, restore telemetry and status from pipeline.md
+    try {
+      const pipelineLogPath = path.join(this.workspaceRoot, "logs", "pipeline.md");
+      const pipelineContent = await fs.readFile(pipelineLogPath, "utf-8");
+      const lines = pipelineContent.split("\n");
+      for (const line of lines) {
+        const match = line.match(
+          /\|\s*([✓❌⏳\?])\s*\*\*([^\*]+)\*\*\s*\|\s*([^\|]+)\|\s*([A-Z]+)\s*\|\s*(\d+)s\s*\|\s*([\d,]+)\s*\|/i
+        );
+        if (match) {
+          const rawTag = match[2].trim().toLowerCase();
+          const statusText = match[4].trim().toUpperCase();
+          const status: PhaseStatus = statusText === "COMPLETED" ? "completed" : statusText === "FAILED" ? "failed" : "pending";
+          const durationSeconds = parseInt(match[5], 10);
+          const totalTokens = parseInt(match[6].replace(/,/g, ""), 10);
+
+          const record = {
+            status,
+            durationSeconds,
+            tokenUsage: { totalTokens, promptTokens: 0, completionTokens: 0, cachedPromptTokens: 0 },
+            summary: undefined,
+          };
+
+          const existing = map.get(rawTag) || map.get(`${rawTag.toUpperCase()}.md`);
+          if (!existing || (existing.status !== "completed" && status === "completed")) {
+            map.set(rawTag, record);
+            map.set(`${rawTag.toUpperCase()}.md`, record);
+            map.set(`${rawTag}.md`, record);
+          }
+        }
+      }
+    } catch {
+      // logs/pipeline.md not available or readable
+    }
+
     return map;
   }
 
@@ -272,7 +357,10 @@ export class PipelineOrchestrator {
         }
 
         const prev = existingMap.get(fileName);
-        const noteRec = notesRecords.get(fileName) || notesRecords.get(path.basename(fileName));
+        const noteRec =
+          notesRecords.get(fileName) ||
+          notesRecords.get(path.basename(fileName)) ||
+          notesRecords.get(fileName.replace(/\.md$/i, "").toLowerCase());
 
         let title = prev?.title;
         if (!title) {
@@ -286,12 +374,12 @@ export class PipelineOrchestrator {
             // fallback
           }
           if (!title) {
-            title = fileName.replace(/^[0-9]+_/, "").replace(/\.md$/, "").replace(/_/g, " ");
+            title = fileName.replace(/^[0-9]+[a-zA-Z]?_/, "").replace(/\.md$/, "").replace(/_/g, " ");
             title = `Phase: ${title}`;
           }
         }
 
-        const id = fileName.match(/^([0-9]+)/)?.[1] || String(i + 1).padStart(2, "0");
+        const id = fileName.match(/^([0-9]+[a-zA-Z]?)/)?.[1] || fileName.match(/^([0-9]+)/)?.[1] || String(i + 1).padStart(2, "0");
         const isMaster = fileName.startsWith("00_");
 
         let resolvedStatus: PhaseStatus = "pending";
@@ -381,24 +469,11 @@ export class PipelineOrchestrator {
 
     const list: { name: string; relPath: string }[] = [
       { name: "Analysis Protocol", relPath: `${agentDir}/PROTOCOL.md` },
-    ];
-
-    // Discover modular TIDYPROTEOMICS_*.md skills
-    try {
-      const agentFiles = await fs.readdir(path.join(this.workspaceRoot, agentDir));
-      const tidySkills = agentFiles.filter((f) => f.startsWith("TIDYPROTEOMICS_") && f.endsWith(".md")).sort();
-      for (const sf of tidySkills) {
-        const prettyName = sf.replace(/\.md$/, "").replace(/_/g, " ");
-        list.push({ name: prettyName, relPath: `${agentDir}/${sf}` });
-      }
-    } catch {}
-
-    list.push(
       { name: "Experiment & Dataset Spec", relPath: "docs/experiment.md" },
       { name: "Shared Memory", relPath: "docs/notes.md" },
       { name: "Active Model Summary", relPath: "docs/llm.md" },
       { name: "Pipeline Summary", relPath: "logs/pipeline.md" }
-    );
+    ];
 
     // Discover per-phase chat.md and console.log files
     try {
@@ -505,7 +580,7 @@ Construct and execute code for this phase, capturing output to logs.
     }
 
     const list = [
-      { name: "analysis", relPath: "analysis", description: "Phase Prompts (00_INSTALL.md .. 10_SYNTHESIS.md)" },
+      { name: "analysis", relPath: "analysis", description: "Phase Prompts (00_INSTALL.md .. 11_SYNTHESIS.md)" },
       { name: agentFolder, relPath: agentFolder, description: "Protocol, Variables & Skills (Cached Prefix)" },
       { name: "code", relPath: "code", description: "Generated Analysis Scripts" },
       { name: "tools", relPath: "tools", description: "Linter & Execution Helper Utilities" },
@@ -621,6 +696,7 @@ Construct and execute code for this phase, capturing output to logs.
 
     const filesToRemove = new Set<string>();
     for (const p of targetPhases) {
+      if (!p.enabled) continue; // NEVER prune notes for disabled/unchecked completed phases!
       filesToRemove.add(p.fileName);
       filesToRemove.add(path.basename(p.fileName));
       if (p.isMasterSetup) {
@@ -629,6 +705,8 @@ Construct and execute code for this phase, capturing output to logs.
         filesToRemove.add("INSTRUCT.md");
       }
     }
+
+    if (filesToRemove.size === 0) return;
 
     const notesPath = path.join(this.workspaceRoot, "docs", "notes.md");
     try {
@@ -669,9 +747,15 @@ Construct and execute code for this phase, capturing output to logs.
       return;
     }
 
-    // Invalidate target phase and all downstream phases
+    // Immediately acquire lock before any async awaits
+    this.isRunning = true;
+    this.isFullPipelineRunning = false;
+    this.shouldStop = false;
+
+    // Invalidate target phase and all downstream ENABLED phases
     for (let i = phaseIndex; i < this.phases.length; i++) {
       const p = this.phases[i];
+      if (i !== phaseIndex && !p.enabled) continue;
       if (i === phaseIndex) {
         p.status = "running";
         p.startTime = new Date().toISOString();
@@ -697,9 +781,6 @@ Construct and execute code for this phase, capturing output to logs.
     // Notify UI immediately so downstream tasks visibly clear out to PENDING
     await this.notifyState();
 
-    this.isRunning = true;
-    this.isFullPipelineRunning = false;
-    this.shouldStop = false;
     try {
       await this.executePhase(phaseIndex);
     } catch (err: any) {
@@ -712,20 +793,148 @@ Construct and execute code for this phase, capturing output to logs.
   }
 
   /**
-   * Run the complete multi-phase pipeline sequentially
+   * Intelligently resume execution from the first incomplete/failed phase (or a specified phase),
+   * running sequentially through all remaining downstream phases.
    */
-  public async runFullPipeline() {
+  public async resumePipeline(fromPhaseId?: string): Promise<void> {
     if (this.isRunning) {
-      this.logPipeline("Execution busy: A pipeline is already running.");
+      this.logPipeline("Execution busy: A pipeline or phase is already running. Please wait or stop it first.");
       return;
     }
     if (!this.workspaceRoot || this.phases.length === 0) {
       this.logPipeline("No analysis tasks found to execute. Please initialize an analysis pipeline first.");
       return;
     }
+
+    let startIndex = -1;
+    if (fromPhaseId) {
+      startIndex = this.phases.findIndex((p) => p.id === fromPhaseId || p.fileName.includes(fromPhaseId));
+      if (startIndex !== -1 && !this.phases[startIndex].enabled) {
+        this.phases[startIndex].enabled = true;
+      }
+    }
+
+    if (startIndex === -1) {
+      // Find the first ENABLED phase that is not completed (failed, pending, or running)
+      startIndex = this.phases.findIndex((p) => p.enabled && p.status !== "completed");
+    }
+
+    if (startIndex === -1) {
+      // If all enabled phases are completed, find the first enabled phase to allow re-running
+      startIndex = this.phases.findIndex((p) => p.enabled);
+    }
+
+    if (startIndex === -1) {
+      this.logPipeline("No enabled analysis tasks found to execute. Please enable at least one task in the pipeline list.");
+      return;
+    }
+
+    // Immediately acquire lock before any async awaits
     this.isRunning = true;
     this.isFullPipelineRunning = true;
     this.shouldStop = false;
+
+    const startPhase = this.phases[startIndex];
+    const hasAnyCompleted = this.phases.some((p) => p.status === "completed");
+    const resumeVerb = (startIndex === 0 && !hasAnyCompleted) ? "Starting" : "Resuming";
+    this.logPipeline(`${resumeVerb} autonomous pipeline at ${new Date().toLocaleTimeString()} from Phase ${startPhase.id} (${startPhase.title})`);
+    this.logPipeline(`Working Directory: ${this.workspaceRoot}`);
+
+    // Invalidate target phase and all downstream ENABLED phases so UI shows pending
+    for (let i = startIndex; i < this.phases.length; i++) {
+      const p = this.phases[i];
+      if (!p.enabled) continue; // NEVER invalidate or reset disabled phases!
+      p.status = "pending";
+      p.startTime = undefined;
+      p.endTime = undefined;
+      p.durationSeconds = undefined;
+      p.tokenUsage = undefined;
+      p.summary = undefined;
+      p.error = undefined;
+    }
+
+    await this.pruneNotesFromPhase(startIndex);
+    await this.notifyState();
+
+    try {
+      for (let i = startIndex; i < this.phases.length; i++) {
+        if (this.shouldStop) {
+          this.logPipeline("Execution stopped by user.");
+          break;
+        }
+
+        const phase = this.phases[i];
+        if (!phase.enabled) {
+          this.logPipeline(`Skipping disabled phase: ${phase.title}`);
+          continue;
+        }
+
+        await this.pruneNotesFromPhase(i);
+
+        const success = await this.executePhase(i);
+        if (!success) {
+          this.logPipeline(`Pipeline paused due to checkpoint failure in ${phase.title}`);
+          break;
+        }
+      }
+    } catch (err: any) {
+      this.logPipeline(`Full pipeline error: ${err.message}`);
+    } finally {
+      this.isRunning = false;
+      this.isFullPipelineRunning = false;
+      this.shouldStop = false;
+      await this.notifyState();
+    }
+  }
+
+  /**
+   * Force a complete restart of the pipeline from Phase 0
+   */
+  public async restartPipeline(): Promise<void> {
+    return this.runFullPipeline(true);
+  }
+
+  /**
+   * Run the complete multi-phase pipeline sequentially.
+   * If not forced from beginning, automatically resumes from the first incomplete phase.
+   */
+  public async runFullPipeline(forceFromBeginning = false) {
+    if (this.isRunning) {
+      this.logPipeline("Execution busy: A pipeline is already running.");
+      return;
+    }
+
+    if (!forceFromBeginning) {
+      const enabledPhases = this.phases.filter((p) => p.enabled);
+      const hasCompleted = this.phases.some((p) => p.status === "completed");
+      const hasIncomplete = enabledPhases.some((p) => p.status !== "completed");
+      if (hasCompleted || hasIncomplete) {
+        return this.resumePipeline();
+      }
+    }
+
+    if (!this.workspaceRoot || this.phases.length === 0) {
+      this.logPipeline("No analysis tasks found to execute. Please initialize an analysis pipeline first.");
+      return;
+    }
+
+    // Immediately acquire lock before any async awaits
+    this.isRunning = true;
+    this.isFullPipelineRunning = true;
+    this.shouldStop = false;
+
+    // If forcing restart from beginning, reset all enabled phases to pending
+    for (const p of this.phases) {
+      if (!p.enabled) continue;
+      p.status = "pending";
+      p.startTime = undefined;
+      p.endTime = undefined;
+      p.durationSeconds = undefined;
+      p.tokenUsage = undefined;
+      p.summary = undefined;
+      p.error = undefined;
+    }
+    await this.notifyState();
 
     this.logPipeline(`Starting autonomous run at ${new Date().toLocaleTimeString()}`);
     this.logPipeline(`Working Directory: ${this.workspaceRoot}`);
@@ -865,7 +1074,8 @@ Construct and execute code for this phase, capturing output to logs.
         () => this.shouldStop
       );
 
-      const result = await loop.run();
+      const maxTurns = vscode.workspace.getConfiguration("tidyproteomicsagent").get<number>("maxTurns") || 30;
+      const result = await loop.run(maxTurns);
       const durationSeconds = Math.max(1, Math.round((Date.now() - startTimeMs) / 1000));
       const currentPhase = getActivePhase();
 
@@ -939,7 +1149,22 @@ ${summaryContent}
       } catch {
         current = `# Autonomous Proteomics Analysis Notes\nModel: ${this.client.getConfig().model}\n\n`;
       }
-      await fs.writeFile(notesPath, current + entry, "utf-8");
+
+      // Standardize note ownership and eliminate duplicate entries:
+      // If docs/notes.md already contains an entry for this phase title, replace it so exactly one entry exists.
+      const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const titlePattern = new RegExp(
+        `(\\n*###\\s*${escapeRegExp(phase.title)}[\\s\\S]*?(?=\\n###|\\n---\\s*\\n###|$)(?:\\n---\\s*\\n)?)`,
+        "i"
+      );
+
+      if (titlePattern.test(current)) {
+        current = current.replace(titlePattern, entry);
+      } else {
+        current = current.trimEnd() + "\n" + entry;
+      }
+
+      await fs.writeFile(notesPath, current, "utf-8");
     } catch (e) {
       this.logPipeline(`Warning: Failed to update docs/notes.md: ${e}`);
     }

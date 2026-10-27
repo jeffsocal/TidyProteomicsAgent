@@ -34,16 +34,16 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode2 = __toESM(require("vscode"));
+var vscode5 = __toESM(require("vscode"));
+var fs12 = __toESM(require("fs"));
+
+// src/ui/SidebarViewProvider.ts
+var vscode4 = __toESM(require("vscode"));
 var path11 = __toESM(require("path"));
 var fs11 = __toESM(require("fs"));
 
-// src/ui/SidebarViewProvider.ts
-var vscode = __toESM(require("vscode"));
-var path10 = __toESM(require("path"));
-var fs10 = __toESM(require("fs"));
-
 // src/orchestrator/PipelineOrchestrator.ts
+var vscode = __toESM(require("vscode"));
 var fs5 = __toESM(require("fs/promises"));
 var path5 = __toESM(require("path"));
 
@@ -570,12 +570,12 @@ var LiteratureService = class {
     return next;
   }
   execR(script, args, timeoutMs) {
-    return new Promise((resolve2) => {
+    return new Promise((resolve3) => {
       let rscript;
       try {
         rscript = this.resolveRscript();
       } catch (e) {
-        resolve2({ ok: false, error: e.message });
+        resolve3({ ok: false, error: e.message });
         return;
       }
       (0, import_child_process.execFile)(
@@ -590,13 +590,13 @@ var LiteratureService = class {
               const marker = line.startsWith(JSON_MARKER) ? JSON_MARKER : LEGACY_JSON_MARKER;
               const payload = JSON.parse(line.slice(marker.length));
               if (payload && payload.ok) {
-                resolve2({ ok: true, data: payload, stderr: String(stderr || "") });
+                resolve3({ ok: true, data: payload, stderr: String(stderr || "") });
               } else {
-                resolve2({ ok: false, error: payload?.error || "Unknown R error", stderr: String(stderr || "") });
+                resolve3({ ok: false, error: payload?.error || "Unknown R error", stderr: String(stderr || "") });
               }
               return;
             } catch (parseErr) {
-              resolve2({ ok: false, error: `Could not parse R output: ${parseErr.message}`, stderr: String(stderr || "") });
+              resolve3({ ok: false, error: `Could not parse R output: ${parseErr.message}`, stderr: String(stderr || "") });
               return;
             }
           }
@@ -610,7 +610,7 @@ var LiteratureService = class {
             const tail = String(stderr || error?.message || "").trim().split(/\r?\n/).slice(-6).join("\n");
             msg = tail || "R process exited without output.";
           }
-          resolve2({ ok: false, error: msg, stderr: String(stderr || "") });
+          resolve3({ ok: false, error: msg, stderr: String(stderr || "") });
         }
       );
     });
@@ -641,48 +641,13 @@ var ContextBuilder = class {
    * Resolves the list of skill names required for a phase.
    * Checks YAML frontmatter in the phase directive first, then applies intelligent phase defaults.
    */
-  getSkillsForPhase(phaseFileName, phaseContent) {
-    const match = phaseContent.match(/^---\s*[\r\n]+([\s\S]*?)[\r\n]+---/);
-    if (match) {
-      const frontmatter = match[1];
-      const skillsMatch = frontmatter.match(/skills:\s*[\r\n]+((?:\s*-\s*[\w_]+[\r\n]+)+)/);
-      if (skillsMatch) {
-        return skillsMatch[1].split(/[\r\n]+/).map((s) => s.replace(/^\s*-\s*/, "").trim()).filter(Boolean);
-      }
-    }
-    const baseName = path2.basename(phaseFileName).toUpperCase();
-    if (baseName.includes("INSTALL") || baseName.includes("SETUP") && !baseName.includes("DATA")) {
-      return ["TIDYPROTEOMICS_CORE"];
-    }
-    if (baseName.includes("INSPECT") || baseName.includes("DATA_QUALITY")) {
-      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_IMPORT_INSPECT"];
-    }
-    if (baseName.includes("NORMALIZE")) {
-      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_NORMALIZE_IMPUTE"];
-    }
-    if (baseName.includes("IMPUTE")) {
-      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_NORMALIZE_IMPUTE"];
-    }
-    if (baseName.includes("EXPRESSION")) {
-      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_EXPRESSION"];
-    }
-    if (baseName.includes("ENRICHMENT")) {
-      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_ENRICHMENT"];
-    }
-    if (baseName.includes("OBSERVATION") || baseName.includes("KNOWLEDGE") || baseName.includes("WEBSEARCH") || baseName.includes("LITERATURE")) {
-      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_EXTRACT_QUERY"];
-    }
-    if (baseName.includes("SYNTHESIS")) {
-      return ["TIDYPROTEOMICS_CORE"];
-    }
-    return ["TIDYPROTEOMICS_CORE"];
+  getSkillsForPhase(_phaseFileName, _phaseContent) {
+    return [];
   }
   /**
-   * Builds the isolated context bundle for a specific phase.
-   * Persistent elements (rules, skills, variables, instructions) form the static prefix.
-   * Dynamic elements (blackboard docs/notes.md, experiment.md) and the phase file form the prompt.
+   * Builds the prompt context for a phase using persistent MCP in-memory tool calling.
    */
-  async buildPhaseContext(phaseFileName) {
+  async buildPhaseContext(phaseFileName, _overrideMode) {
     let agentDir = this.promptsDir;
     let protocol = await this.readFileSafe(path2.join(agentDir, "PROTOCOL.md"));
     if (!protocol && agentDir === "agent") {
@@ -690,6 +655,12 @@ var ContextBuilder = class {
       if (fallback) {
         agentDir = "prompts";
         protocol = fallback;
+      } else {
+        const tplFallback = await this.readFileSafe(path2.join("extension", "templates", "shared", "agent", "PROTOCOL.md"));
+        if (tplFallback) {
+          agentDir = path2.join("extension", "templates", "shared", "agent");
+          protocol = tplFallback;
+        }
       }
     }
     if (!protocol) {
@@ -702,75 +673,72 @@ ${instruct}`.trim();
     let phasePath = phaseFileName;
     if (!phaseFileName.includes("/") && !phaseFileName.includes("\\")) {
       phasePath = path2.join(this.analysisDir, phaseFileName);
+      const contentCheck = await this.readFileSafe(phasePath);
+      if (!contentCheck) {
+        const tplPhase = path2.join("extension", "templates", "pipelines", "differential_expression", phaseFileName);
+        const tplContent = await this.readFileSafe(tplPhase);
+        if (tplContent) {
+          phasePath = tplPhase;
+        }
+      }
     }
     const phaseContent = await this.readFileSafe(phasePath);
-    const skillNames = this.getSkillsForPhase(phaseFileName, phaseContent);
-    const loadedSkillFiles = [];
-    const skillParts = [];
-    for (const sName of skillNames) {
-      const fName = sName.endsWith(".md") ? sName : `${sName}.md`;
-      const content = await this.readFileSafe(path2.join(agentDir, fName));
-      if (content) {
-        loadedSkillFiles.push(path2.join(agentDir, fName));
-        skillParts.push(content);
-      }
-    }
-    if (skillParts.length === 0) {
-      const coreContent = await this.readFileSafe(path2.join(agentDir, "TIDYPROTEOMICS_CORE.md"));
-      if (coreContent) {
-        loadedSkillFiles.push(path2.join(agentDir, "TIDYPROTEOMICS_CORE.md"));
-        skillParts.push(coreContent);
-      }
-    }
-    const skill = skillParts.join("\n\n---\n\n").trim();
     const experiment = await this.readFileSafe(path2.join("docs", "experiment.md"));
-    let variables = await this.readFileSafe(path2.join(agentDir, "VARIABLES.md"));
-    if (!variables) {
-      variables = experiment || "No dataset parameters provided. See docs/experiment.md.";
-    }
-    const biology = await this.readFileSafe(path2.join(agentDir, "BIOLOGY.md"));
-    const biologySection = biology ? `
-
-# CURATED DOMAIN BIOLOGICAL CONTEXT
-${biology}` : "";
     const staticPrefixForCache = `
 # AUTONOMOUS ANALYSIS PROTOCOL & QUALITY GATES
 ${protocol}
-
-# INPUT DATASET PARAMETERS & EXPERIMENT SPECIFICATION
-${variables}
-${biologySection}
-
-# DOMAIN SKILL SPECIFICATION & API CONVENTIONS
-${skill}
 `.trim();
-    const notes = await this.readFileSafe(path2.join("docs", "notes.md"));
+    const systemPrompt = staticPrefixForCache;
+    const executiveBlackboard = await this.buildExecutiveBlackboard(phaseFileName, "mcp");
     const llm = await this.readFileSafe(path2.join("docs", "llm.md"));
     const blackboardState = `
 ## CURRENT RUNTIME STATE (Shared Memory)
-### docs/notes.md:
-${notes || "No prior execution notes found. Initialize if this is Phase 0 or Phase 1."}
+${executiveBlackboard}
 
 ### docs/llm.md (ACTIVE MODEL & AGENT SPECIFICATION - READ ONLY):
 ${llm || "No active model summary found."}
-
-### docs/experiment.md (USER EXPERIMENT & DATASET SPECIFICATION):
-${experiment || "No user experiment design provided. Note: Sections 1 & 2 are strictly user-maintained. The agent may append or update Section 3 to scaffold sample grouping, renaming, and contrast suggestions for user confirmation."}
 ${this.buildLiteratureSection()}
 `.trim();
-    const systemPrompt = staticPrefixForCache;
+    const workspaceManifest = await this.buildWorkspaceManifest();
+    const engineSection = `
+### EXECUTION ENGINE: TIDYPROTEOMICS MCP (Live In-Memory Session)
+- **Live Tool Calling Enabled**: The persistent tidyproteomics MCP server is CONNECTED and maintains the S3 dataset in memory. All analysis operations are executed via live \`tpa_*\` MCP tools.
+- **Direct Tools Available**: You have direct access to live \`tpa_*\` MCP tools dynamically scoped for this phase.
+- **Standard MCP-First Workflow**:
+  1. **Phase 1 Ingestion**: Ingest the dataset directly via \`tpa_load(source = "<URL_OR_PATH>", platform = "<PLATFORM>", analyte = "proteins")\`. Remote HTTPS URLs are automatically downloaded to \`data/raw/\` and imported into memory.
+  2. **Phase 2+ State Continuity**: In subsequent phases, the dataset is already held in memory from prior phases. If reloading is needed, call \`tpa_load(source = "data/tidyproteomics_data.rds")\`.
+  3. **In-Memory Transformation**: Execute subsetting, normalization benchmarking, imputation, and contrast testing directly using the corresponding \`tpa_*\` MCP tools. All tool executions and outputs are automatically recorded to \`logs/<phase>/console.log\`.
+  4. **Phase Checkpoint Gates & Artifact Generation**: When completing each phase, invoke \`tpa_export_state(rds_path = "data/tidyproteomics_data.rds", script_path = "code/<NN>_<phase>.R")\`. This automatically saves the data object to \`data/tidyproteomics_data.rds\` and writes the reproducible script to \`code/<NN>_<phase>.R\`, fully satisfying all checkpoint gates.
+  5. **No Redundant Script Authoring**: Do NOT author manual R scripts from scratch or run redundant R scripts via 'execute_command' when live 'tpa_*' MCP tools perform the tasks in memory. 'tpa_export_state' produces the required reproducible script automatically.
+  6. **Strict Tool Discipline (No Ad-Hoc Python or Shell Data Munging)**: Do NOT invoke Python, pandas, openpyxl, Rscript, or shell scripts via 'execute_command' to inspect, parse, or manipulate dataset files or raw tables. All study metadata, raw acquisition files, sample IDs, condition groups, and replicate layouts MUST be inspected through \`tpa_inspect(what = "experiments")\` and \`tpa_summary()\`.
+`.trim();
     const normalizedPhaseName = path2.basename(phaseFileName).replace(/\.md$/, "").toUpperCase();
     const phasePrompt = `
-${blackboardState}
+${workspaceManifest ? `${workspaceManifest}
+
+---
+
+` : ""}${blackboardState}
+
+---
+
+## EXPERIMENT SPECIFICATION & DATASET PARAMETERS (docs/experiment.md)
+${experiment || "No dataset parameters provided. See docs/experiment.md."}
 
 ---
 
 ## ACTIVE PHASE DIRECTIVE (${phaseFileName})
 ${phaseContent}
 
+${engineSection}
+
 ### Execution Instructions:
 - Adhere strictly to the guidelines and gate checkpoints for this phase.
-- Execute code and commands to make real progress.
+- Standard Workspace Manifest Pre-Indexed: Key workspace files across code/, data/, docs/, tools/, and logs/ are pre-indexed in [WORKSPACE MANIFEST] above. Do NOT waste Turn 1 calling 'list_directory' to inspect existing files; proceed immediately to phase execution tasks.
+- Execute phase tasks directly using the available \`tpa_*\` MCP tools.
+- MCP-First Workflow: Do NOT author manual R scripts from scratch or run redundant R scripts via 'execute_command' when live 'tpa_*' MCP tools can perform the transformations in memory. Use 'tpa_export_state' to export the persisted data object and reproducible script ('code/<phase>.R') automatically upon completing in-memory tasks.
+- Strict Tool Discipline: Never run ad-hoc Python, pandas, or shell scripts via 'execute_command' to inspect data tables, read Excel sheets, or parse sample metadata. Rely strictly on \`tpa_inspect(what = "experiments")\` for sample, replicate, and file mappings, and \`tpa_summary()\` for quality distributions. 'execute_command' is strictly reserved for environment checks (Phase 0), AST linting ('tools/lint_tidyproteomics.R'), and literature CLI tools ('tools/literature/*').
+- Document Editing Discipline: In docs/experiment.md, never overwrite or modify Sections 1 & 2 (user hypotheses and dataset parameters). Update Section 3 (Sample Grouping, Recoding & Contrast Designations) using 'replace_file_content' or 'write_file'. Do NOT execute Python or shell scripts (e.g. pathlib, sed, awk) via 'execute_command' to modify documents.
 - For scripts and documents under 150 lines, always write or overwrite the full file using 'write_file'.
 - When authoring or updating any report or document (e.g. in docs/), reference 'docs/llm.md' and place the metadata header immediately beneath the title:
   Title
@@ -778,17 +746,201 @@ ${phaseContent}
   Created: YYYY-MM-DD HH:MM
   Author: PROVIDER | LLM-MODEL
   Agent: TidyProteomicsAgent vX.X.X
-- In docs/experiment.md: Never overwrite or modify Sections 1 & 2 (user hypotheses and dataset parameters). You are authorized and instructed to append or update Section 3 (Sample Grouping, Recoding & Contrast Designations) to scaffold discovered sample groups, renaming/pooling tables, and suggested contrast pairs for user review.
+- Standardized Note Ownership: Do not directly append phase completion headers or raw execution blocks to docs/notes.md from manual file commands. The orchestration framework automatically records a single, clean markdown summary upon complete_phase(phaseName = "${normalizedPhaseName}", summary = "...").
 - Once all checkpoints for this phase are satisfied and verified, invoke complete_phase(phaseName = "${normalizedPhaseName}", summary = "...").
-- If a mandatory pre-flight gate, configuration prerequisite, or checkpoint fails and requires user intervention (such as unconfigured placeholders or ambiguous/confounded contrasts in docs/experiment.md), scaffold concrete suggestions directly into Section 3 of docs/experiment.md, then immediately invoke fail_phase(phaseName = "${normalizedPhaseName}", reason = "...", actionableInsights = "...") to halt execution and present actionable insights to the user.
+- If a mandatory pre-flight gate, configuration prerequisite, or checkpoint fails and requires user intervention (such as unconfigured placeholders or unconfirmed contrasts in docs/experiment.md Section 3.C), scaffold concrete suggestions directly into Section 3 of docs/experiment.md, then immediately invoke fail_phase(phaseName = "${normalizedPhaseName}", reason = "...", actionableInsights = "...") to halt execution and present actionable insights to the user.
 `.trim();
     return {
       systemPrompt,
       phasePrompt,
       blackboardState,
       staticPrefixForCache,
-      loadedSkillFiles
+      phaseContent,
+      loadedSkillFiles: [],
+      phaseSkillFiles: []
     };
+  }
+  async buildWorkspaceManifest() {
+    if (!this.workspaceRoot)
+      return "";
+    const targetDirs = ["code", "data", "docs", "tools", "logs"];
+    const lines = ["[WORKSPACE MANIFEST]"];
+    for (const dirName of targetDirs) {
+      const fullDir = path2.join(this.workspaceRoot, dirName);
+      try {
+        const stat5 = await fs2.stat(fullDir);
+        if (stat5.isDirectory()) {
+          const entries = await fs2.readdir(fullDir);
+          const cleanFiles = entries.filter((f) => !f.startsWith(".") && f !== "node_modules").sort();
+          if (cleanFiles.length > 0) {
+            let displayList;
+            if (cleanFiles.length <= 15) {
+              displayList = cleanFiles.join(", ");
+            } else {
+              const head = cleanFiles.slice(0, 12).join(", ");
+              displayList = `${head}, ... (${cleanFiles.length} files total)`;
+            }
+            lines.push(`${dirName}/: ${displayList}`);
+          } else {
+            lines.push(`${dirName}/: (empty)`);
+          }
+        }
+      } catch {
+      }
+    }
+    if (lines.length === 1)
+      return "";
+    return lines.join("\n");
+  }
+  /**
+   * Builds a lean, rolling Executive Blackboard for Turn 1 injection.
+   * Replaces raw multi-KB docs/notes.md with a lightweight summary containing ONLY:
+   * 1. Active Data State (number of proteins, active assay, imputation status)
+   * 2. Confirmed Study Design (sample groups, contrast pair)
+   * 3. Prior Phase Summary (ONLY the immediately preceding phase summary)
+   */
+  async buildExecutiveBlackboard(currentPhaseFileName, activeMode = "mcp") {
+    const notesContent = await this.readFileSafe(path2.join("docs", "notes.md"));
+    const experimentContent = await this.readFileSafe(path2.join("docs", "experiment.md"));
+    let proteinCount = "Not yet loaded (pre-ingestion)";
+    let activeAssay = "raw (unnormalized)";
+    let imputationStatus = "Unimputed / pending Phase 3";
+    if (notesContent) {
+      const proteinMatches = [...notesContent.matchAll(/(\b\d[\d,]*)\s+(?:human\s+)?proteins\b/gi)];
+      if (proteinMatches.length > 0) {
+        proteinCount = proteinMatches[proteinMatches.length - 1][1] + " proteins";
+      }
+      if (/\brandomforest\b/i.test(notesContent)) {
+        activeAssay = "randomforest";
+      } else if (/\bloess\b/i.test(notesContent)) {
+        activeAssay = "loess";
+      } else if (/\blinear\b/i.test(notesContent)) {
+        activeAssay = "linear";
+      } else if (/\bmedian\b/i.test(notesContent)) {
+        activeAssay = "median";
+      } else if (/\blimma\b/i.test(notesContent)) {
+        activeAssay = "limma";
+      }
+      if (/imput(?:ed|ation)|zero missing|0%\s+missing/i.test(notesContent)) {
+        if (/column[\s/-]?min(?:imum)?/i.test(notesContent)) {
+          imputationStatus = "Imputed (column-minimum, 0% missing)";
+        } else if (/half[\s/-]?min(?:imum)?/i.test(notesContent)) {
+          imputationStatus = "Imputed (half-minimum, 0% missing)";
+        } else if (/upstream.*imput/i.test(notesContent)) {
+          imputationStatus = "Preserved upstream imputation (0% missing)";
+        } else if (/0%\s+missing|zero\s+missing/i.test(notesContent)) {
+          imputationStatus = "Complete cases / 0% missing";
+        } else {
+          imputationStatus = "Imputed (post-Phase 3)";
+        }
+      }
+    }
+    let contrastPair = "Pending Phase 1 confirmation";
+    let sampleGroups = [];
+    if (experimentContent) {
+      const contrastMatch = experimentContent.match(/###\s*3\.C[^\n]*\n+([^\n\r#]+)/i);
+      if (contrastMatch) {
+        const raw = contrastMatch[1].replace(/[`*]/g, "").trim();
+        if (raw && !raw.includes("[REQUIRED:")) {
+          contrastPair = raw;
+        }
+      }
+      const discoveredGroups = /* @__PURE__ */ new Set();
+      const match3B = experimentContent.match(/###\s*3\.B[^\n]*\n([\s\S]*?)(?=\n###|$)/i);
+      if (match3B) {
+        const lines3B = match3B[1].split("\n").filter((l) => l.trim().startsWith("|"));
+        for (const line of lines3B) {
+          const cols = line.split("|").map((c) => c.trim().replace(/[`*]/g, ""));
+          if (cols.length >= 3) {
+            const val = cols[2];
+            if (val && !val.includes("---") && !/proposed|clean|label|current/i.test(val)) {
+              discoveredGroups.add(val);
+            }
+          }
+        }
+      }
+      if (discoveredGroups.size === 0) {
+        const match3A = experimentContent.match(/###\s*3\.A[^\n]*\n([\s\S]*?)(?=\n###|$)/i);
+        if (match3A) {
+          const lines3A = match3A[1].split("\n").filter((l) => l.trim().startsWith("|"));
+          for (const line of lines3A) {
+            const cols = line.split("|").map((c) => c.trim().replace(/[`*]/g, ""));
+            if (cols.length >= 2) {
+              const val = cols[1];
+              if (val && !val.includes("---") && !/discovered|sample|group/i.test(val)) {
+                discoveredGroups.add(val);
+              }
+            }
+          }
+        }
+      }
+      if (discoveredGroups.size > 0) {
+        sampleGroups = Array.from(discoveredGroups);
+      }
+    }
+    if (sampleGroups.length === 0) {
+      sampleGroups = ["Pending discovery in Phase 1"];
+    }
+    let priorPhaseTitle = "Prior Phase";
+    let priorPhaseStatus = "COMPLETED";
+    let priorPhaseSummary = "No prior phase executed. Initializing pipeline.";
+    if (notesContent) {
+      const sections = notesContent.split(/\n(?=###\s+)/);
+      const parsedRecords = [];
+      for (const sec of sections) {
+        const fileMatch = sec.match(/- \*\*File\*\*:\s*`([^`]+)`/);
+        if (!fileMatch)
+          continue;
+        const fileName = fileMatch[1].trim();
+        const titleMatch = sec.match(/###\s+([^-\n\r]+?)\s*-\s*(COMPLETED|FAILED)/i);
+        const title = titleMatch ? titleMatch[1].trim() : fileName;
+        const status = titleMatch ? titleMatch[2].toUpperCase() : "COMPLETED";
+        const summaryMatch = sec.match(/- \*\*Summary\*\*:\s*\n([\s\S]*?)(?:\n---|\n###|$)/);
+        const summary = summaryMatch ? summaryMatch[1].trim() : "";
+        if (summary) {
+          parsedRecords.push({ title, fileName, status, summary });
+        }
+      }
+      if (parsedRecords.length > 0) {
+        const curBase = path2.basename(currentPhaseFileName).toLowerCase();
+        let targetIdx = parsedRecords.length - 1;
+        for (let i = 0; i < parsedRecords.length; i++) {
+          if (path2.basename(parsedRecords[i].fileName).toLowerCase() === curBase) {
+            targetIdx = i - 1;
+            break;
+          }
+        }
+        if (targetIdx >= 0 && targetIdx < parsedRecords.length) {
+          const rec = parsedRecords[targetIdx];
+          priorPhaseTitle = rec.title;
+          priorPhaseStatus = rec.status;
+          priorPhaseSummary = rec.summary;
+        } else if (targetIdx === -1) {
+          priorPhaseTitle = "Prior Phase";
+          priorPhaseStatus = "N/A";
+          priorPhaseSummary = "No prior phase executed. Initializing pipeline.";
+        } else {
+          const rec = parsedRecords[parsedRecords.length - 1];
+          priorPhaseTitle = rec.title;
+          priorPhaseStatus = rec.status;
+          priorPhaseSummary = rec.summary;
+        }
+      }
+    }
+    const engineLabel = "Live MCP Server (In-Memory Session)";
+    return `
+### EXECUTIVE BLACKBOARD (Active Memory):
+- **Active Execution Engine**: ${engineLabel}
+- **Active Data State**:
+  - Quantified Proteins: ${proteinCount}
+  - Active Assay / Normalization: ${activeAssay}
+  - Imputation Status: ${imputationStatus}
+- **Confirmed Study Design**:
+  - Active Sample Groups: ${sampleGroups.join(", ")}
+  - Confirmed Contrast Pair: ${contrastPair}
+- **Prior Phase Summary (${priorPhaseTitle} - ${priorPhaseStatus})**:
+${priorPhaseSummary.split("\n").map((line) => `  ${line}`).join("\n")}
+`.trim();
   }
   /**
    * Describes the active DuckDB literature database (toggled from the Literature tab).
@@ -844,11 +996,13 @@ var AgentLoop = class {
   getTotalUsage() {
     return { ...this.totalUsage };
   }
-  async run(maxTurns = 25) {
+  async run(maxTurns = 30) {
     const startTimeMs = Date.now();
+    this.tools.setActivePhase(this.phaseName);
     this.messages.push({
       role: "user",
-      content: this.context.phasePrompt
+      content: this.context.phasePrompt,
+      turn: 0
     });
     if (this.chatLogger) {
       this.chatLogger.setPhase(this.phaseName);
@@ -859,15 +1013,14 @@ var AgentLoop = class {
         model: cfg.model,
         provider: cfg.provider,
         systemPromptFiles: [
-          "agent/PROTOCOL.md",
-          "docs/experiment.md",
-          ...this.context.loadedSkillFiles && this.context.loadedSkillFiles.length > 0 ? this.context.loadedSkillFiles : ["agent/TIDYPROTEOMICS_CORE.md"]
+          "agent/PROTOCOL.md"
         ],
         inputPromptFiles: [
           this.phaseName.includes("/") ? this.phaseName : `analysis/${this.phaseName}`,
-          "docs/notes.md",
-          "docs/llm.md",
-          "docs/experiment.md"
+          ...this.context.phaseSkillFiles && this.context.phaseSkillFiles.length > 0 ? this.context.phaseSkillFiles : [],
+          "docs/experiment.md",
+          "Executive Blackboard (Active State & Prior Summary)",
+          "docs/llm.md"
         ]
       });
     }
@@ -912,7 +1065,7 @@ var AgentLoop = class {
           response = await this.client.chat({
             system: this.context.systemPrompt,
             messages: this.messages,
-            tools: this.tools.getDefinitions(),
+            tools: this.tools.getDefinitions(this.phaseName, this.context?.phaseContent),
             onToken: (text) => {
               this.onProgress({ type: "text", data: text });
             }
@@ -921,12 +1074,17 @@ var AgentLoop = class {
           break;
         } catch (err) {
           lastError = err;
-          const isTimeout = err.name === "TimeoutError" || err.name === "AbortError" || /timeout|aborted|ETIMEDOUT|ECONNRESET/i.test(err.message || "");
-          if (isTimeout && attempt <= maxRetries && (!this.isCancelled || !this.isCancelled())) {
+          const isRetryable = err.isRetryable === true || err.isTimeout === true || err.isNetworkError === true || err.name === "TimeoutError" || err.name === "AbortError" || err.status === 429 || err.status >= 500 && err.status <= 504 || /timeout|aborted|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|ConnectTimeoutError|fetch failed|rate limit|temporar/i.test(
+            err.message || ""
+          ) || err.cause && /timeout|aborted|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|ConnectTimeoutError/i.test(
+            (err.cause.name || "") + " " + (err.cause.code || "") + " " + (err.cause.message || "")
+          );
+          if (isRetryable && attempt <= maxRetries && (!this.isCancelled || !this.isCancelled())) {
             const backoffMs = attempt * 3e3;
+            const shortReason = err.message ? err.message.length > 80 ? err.message.slice(0, 77) + "..." : err.message : "Network/API glitch";
             this.onProgress({
               type: "thought",
-              data: `Turn ${turn} timed out on attempt ${attempt}/${maxRetries + 1} (${err.message}). Retrying in ${backoffMs / 1e3}s...`
+              data: `Turn ${turn} connection/API glitch on attempt ${attempt}/${maxRetries + 1} (${shortReason}). Retrying in ${backoffMs / 1e3}s...`
             });
             await new Promise((r) => setTimeout(r, backoffMs));
             continue;
@@ -971,7 +1129,8 @@ var AgentLoop = class {
       this.messages.push({
         role: "assistant",
         content: response.content,
-        tool_calls: response.tool_calls
+        tool_calls: response.tool_calls,
+        turn
       });
       if (this.chatLogger) {
         await this.chatLogger.logAssistantResponse(
@@ -1008,11 +1167,27 @@ var AgentLoop = class {
             data: { name: tc.name, result: result.content, isError: result.isError }
           });
           let toolMessageContent = result.content;
-          const MAX_TOOL_CHARS = 24e3;
-          if (toolMessageContent && toolMessageContent.length > MAX_TOOL_CHARS) {
-            const head = toolMessageContent.slice(0, 12e3);
-            const tail = toolMessageContent.slice(-1e4);
-            const omitted = toolMessageContent.length - 22e3;
+          let maxChars = 24e3;
+          if (tc.name === "read_file") {
+            maxChars = 6e4;
+          } else if (tc.name === "execute_command") {
+            maxChars = 32e3;
+          } else if ([
+            "list_directory",
+            "check_checkpoint_gate",
+            "tpa_health",
+            "tpa_operations",
+            "tpa_export_state",
+            "file_exists"
+          ].includes(tc.name)) {
+            maxChars = 8e3;
+          }
+          if (toolMessageContent && toolMessageContent.length > maxChars) {
+            const headChars = Math.floor(maxChars * 0.55);
+            const tailChars = Math.floor(maxChars * 0.35);
+            const head = toolMessageContent.slice(0, headChars);
+            const tail = toolMessageContent.slice(-tailChars);
+            const omitted = toolMessageContent.length - (headChars + tailChars);
             toolMessageContent = `${head}
 
 ... [Output truncated: ${omitted.toLocaleString()} characters omitted to preserve context economy. See complete output in workspace/logs/ or inspect with 'read_file'] ...
@@ -1023,7 +1198,8 @@ ${tail}`;
             role: "tool",
             tool_call_id: tc.id,
             tool_name: tc.name,
-            content: toolMessageContent
+            content: toolMessageContent,
+            turn
           });
           if (this.chatLogger) {
             await this.chatLogger.logToolResult(tc.name, tc.id, result.content, result.isError, tc.args);
@@ -1329,14 +1505,12 @@ var ChatLogger = class {
     const timestamp = (/* @__PURE__ */ new Date()).toISOString();
     const systemFiles = params.systemPromptFiles || [
       "agent/PROTOCOL.md",
-      "docs/experiment.md",
-      "agent/TIDYPROTEOMICS_CORE.md"
+      "docs/experiment.md"
     ];
     const inputFiles = params.inputPromptFiles || [
       params.phaseFileName.includes("/") ? params.phaseFileName : `analysis/${params.phaseFileName}`,
       "docs/notes.md",
-      "docs/llm.md",
-      "docs/experiment.md"
+      "docs/llm.md"
     ];
     const lines = [
       "",
@@ -1405,7 +1579,8 @@ var ChatLogger = class {
     const cleanResult = result ? result.trim() : "(No output)";
     if (toolName === "execute_command") {
       const command = toolArgs?.command || "(command string unavailable)";
-      if (this.consoleLogPath) {
+      const isLogSelfInspection = /(?:grep|sed|tail|head|cat|awk|less|more)\b.*logs\/[^\s;&|]+\/console\.log/.test(command);
+      if (this.consoleLogPath && !isLogSelfInspection) {
         const consoleEntry = [
           "================================================================================",
           `[${timestamp}] Command: ${command}`,
@@ -1420,9 +1595,11 @@ var ChatLogger = class {
       const lines2 = [
         `#### [${timestamp}] Tool Result: \`${toolName}\` [${status}] (id: \`${callId}\`)`,
         `- **Command**: \`${command}\``,
-        `- **Status**: ${isError ? "\u274C Command failed" : "\u2713 Command executed successfully"}`,
-        `- **Console Output**: Logged to [\`logs/${this.currentPhaseTag}/console.log\`](${relConsole})`
+        `- **Status**: ${isError ? "\u274C Command failed" : "\u2713 Command executed successfully"}`
       ];
+      if (!isLogSelfInspection) {
+        lines2.push(`- **Console Output**: Logged to [\`logs/${this.currentPhaseTag}/console.log\`](${relConsole})`);
+      }
       if (isError) {
         const rawLines = cleanResult.split("\n");
         const errorLines = rawLines.filter(
@@ -1498,6 +1675,14 @@ var ChatLogger = class {
     const statusIcon = params.success ? "\u2713" : "\u274C";
     const statusText = params.success ? "COMPLETED" : "FAILED";
     const cached = params.tokensUsed.cachedPromptTokens || 0;
+    let phaseTag = this.currentPhaseTag;
+    if (params.phaseFileName) {
+      let t = path3.basename(params.phaseFileName).replace(/\.md$/i, "").toLowerCase();
+      if (t.startsWith("instruct")) {
+        t = "00_install";
+      }
+      phaseTag = t;
+    }
     const banner = [
       `### [${timestamp}] ${statusIcon} Phase ${statusText}: ${params.phaseTitle}`,
       `- **Duration**: ${params.durationSeconds}s | **Total Turns**: ${params.turnCount}`,
@@ -1510,9 +1695,10 @@ var ChatLogger = class {
       "---",
       ""
     ].join("\n");
-    await this.append(banner);
+    const targetChatLog = this.resolveLogPath(`logs/${phaseTag}/chat.md`);
+    await this.appendToFile(targetChatLog || this.logPath || this.pipelineLogPath, banner);
     if (this.pipelineLogPath) {
-      const summaryRow = `| ${statusIcon} **${this.currentPhaseTag}** | ${params.phaseTitle} | ${statusText} | ${params.durationSeconds}s | ${params.tokensUsed.totalTokens.toLocaleString()} | [Chat](./${this.currentPhaseTag}/chat.md) \\| [Console](./${this.currentPhaseTag}/console.log) |`;
+      const summaryRow = `| ${statusIcon} **${phaseTag}** | ${params.phaseTitle} | ${statusText} | ${params.durationSeconds}s | ${params.tokensUsed.totalTokens.toLocaleString()} | [Chat](./${phaseTag}/chat.md) \\| [Console](./${phaseTag}/console.log) |`;
       await this.appendToFile(this.pipelineLogPath, summaryRow);
     }
   }
@@ -1530,7 +1716,7 @@ function formatDateTime(d = /* @__PURE__ */ new Date()) {
   const minutes = pad(d.getMinutes());
   return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
-function generateActiveModelSummaryMarkdown(config, extensionVersion = "0.1.0", date = /* @__PURE__ */ new Date()) {
+function generateActiveModelSummaryMarkdown(config, extensionVersion = "0.1.0", date = /* @__PURE__ */ new Date(), engine = "mcp") {
   const timestampStr = formatDateTime(date);
   const providerStr = (config.provider || "anthropic").toUpperCase();
   const modelStr = config.model || "claude-3-7-sonnet-20250219";
@@ -1553,6 +1739,7 @@ Agent: ${agentStr}
 | :--- | :--- |
 | **Provider** | ${providerStr} |
 | **Model** | ${modelStr} |
+| **Execution Engine** | ${engine === "mcp" ? "MCP Server (Live In-Memory)" : "Markdown Skills (Script Generation)"} |
 | **Author** | ${authorStr} |
 | **Agent** | ${agentStr} |
 | **Prompt Caching** | ${cachingStr} |
@@ -1564,7 +1751,7 @@ Agent: ${agentStr}
 ---
 
 ## Agent Document Header Standard
-All agent-authored documents and reports (including \`docs/observations.md\`, \`docs/knowledge.md\`, \`docs/websearch.md\`, \`docs/literature.md\`, \`docs/scientific_report.md\`, and any other generated markdown reports) must reference this specification and place the following metadata block immediately below the title:
+All agent-authored documents and reports (including \`docs/observations.md\`, \`docs/knowledge.md\`, \`docs/websearch.md\`, \`docs/literature.md\`, \`docs/manuscript.md\`, and any other generated markdown reports) must reference this specification and place the following metadata block immediately below the title:
 
 \`\`\`markdown
 Title
@@ -1575,13 +1762,13 @@ Agent: ${agentStr}
 \`\`\`
 `;
 }
-async function writeActiveModelSummaryFile(workspaceRoot, config, extensionVersion = "0.1.0") {
+async function writeActiveModelSummaryFile(workspaceRoot, config, extensionVersion = "0.1.0", engine = "mcp") {
   if (!workspaceRoot)
     return "";
   const docsDir = path4.join(workspaceRoot, "docs");
   await fs4.mkdir(docsDir, { recursive: true });
   const llmPath = path4.join(docsDir, "llm.md");
-  const markdown = generateActiveModelSummaryMarkdown(config, extensionVersion);
+  const markdown = generateActiveModelSummaryMarkdown(config, extensionVersion, /* @__PURE__ */ new Date(), engine);
   try {
     const existing = await fs4.readFile(llmPath, "utf-8");
     const stripCreated = (s) => s.replace(/Created:\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/g, "");
@@ -1678,6 +1865,53 @@ var PipelineOrchestrator = class {
         const reason = String(args?.reason || "").trim();
         return `[Halt Phase] ${pName}${reason ? ": " + reason : ""}`;
       }
+      case "tpa_load": {
+        const src = args?.source || args?.load_local || "";
+        return `[MCP Load] ${path5.basename(String(src)) || src}`;
+      }
+      case "tpa_inspect": {
+        return `[MCP Inspect] ${args?.what || "structure"}`;
+      }
+      case "tpa_summary": {
+        return `[MCP Summary] ${args?.by || "summary"}`;
+      }
+      case "tpa_subset": {
+        return `[MCP Subset] ${args?.subset_expression || ""}`;
+      }
+      case "tpa_normalize": {
+        const methods = Array.isArray(args?.methods) ? args.methods.join(", ") : args?.methods || "";
+        return `[MCP Normalize] ${methods}`;
+      }
+      case "tpa_select_normalization": {
+        return `[MCP Select Normalization] ${args?.method || ""}`;
+      }
+      case "tpa_impute": {
+        return `[MCP Impute] ${args?.algorithm || args?.method || ""}`;
+      }
+      case "tpa_expression": {
+        return `[MCP Expression] ${args?.comparison || ""}`;
+      }
+      case "tpa_enrichment": {
+        return `[MCP Enrichment] ${args?.comparison || ""} (${args?.term || ""})`;
+      }
+      case "tpa_plot": {
+        return `[MCP Plot] ${args?.type || "plot"}`;
+      }
+      case "tpa_export_table": {
+        return `[MCP Export Table] ${args?.file_name || args?.type || ""}`;
+      }
+      case "tpa_export_state": {
+        return `[MCP Export State] ${path5.basename(String(args?.script_path || "pipeline.R"))}`;
+      }
+      case "tpa_extract": {
+        return `[MCP Extract] ${args?.values || "values"}`;
+      }
+      case "tpa_operations": {
+        return `[MCP Audit Operations]`;
+      }
+      case "tpa_health": {
+        return `[MCP Health Check]`;
+      }
       default: {
         const keys = Object.keys(args || {});
         const summary = keys.length > 0 ? ` (${keys.join(", ")})` : "";
@@ -1755,6 +1989,36 @@ var PipelineOrchestrator = class {
       }
     } catch {
     }
+    try {
+      const pipelineLogPath = path5.join(this.workspaceRoot, "logs", "pipeline.md");
+      const pipelineContent = await fs5.readFile(pipelineLogPath, "utf-8");
+      const lines = pipelineContent.split("\n");
+      for (const line of lines) {
+        const match = line.match(
+          /\|\s*([✓❌⏳\?])\s*\*\*([^\*]+)\*\*\s*\|\s*([^\|]+)\|\s*([A-Z]+)\s*\|\s*(\d+)s\s*\|\s*([\d,]+)\s*\|/i
+        );
+        if (match) {
+          const rawTag = match[2].trim().toLowerCase();
+          const statusText = match[4].trim().toUpperCase();
+          const status = statusText === "COMPLETED" ? "completed" : statusText === "FAILED" ? "failed" : "pending";
+          const durationSeconds = parseInt(match[5], 10);
+          const totalTokens = parseInt(match[6].replace(/,/g, ""), 10);
+          const record = {
+            status,
+            durationSeconds,
+            tokenUsage: { totalTokens, promptTokens: 0, completionTokens: 0, cachedPromptTokens: 0 },
+            summary: void 0
+          };
+          const existing = map.get(rawTag) || map.get(`${rawTag.toUpperCase()}.md`);
+          if (!existing || existing.status !== "completed" && status === "completed") {
+            map.set(rawTag, record);
+            map.set(`${rawTag.toUpperCase()}.md`, record);
+            map.set(`${rawTag}.md`, record);
+          }
+        }
+      }
+    } catch {
+    }
     return map;
   }
   async forceReloadFromDisk() {
@@ -1815,7 +2079,7 @@ Model: ${this.client.getConfig().model}
           hasSetupInAnalysis = true;
         }
         const prev = existingMap.get(fileName);
-        const noteRec = notesRecords.get(fileName) || notesRecords.get(path5.basename(fileName));
+        const noteRec = notesRecords.get(fileName) || notesRecords.get(path5.basename(fileName)) || notesRecords.get(fileName.replace(/\.md$/i, "").toLowerCase());
         let title = prev?.title;
         if (!title) {
           try {
@@ -1827,11 +2091,11 @@ Model: ${this.client.getConfig().model}
           } catch {
           }
           if (!title) {
-            title = fileName.replace(/^[0-9]+_/, "").replace(/\.md$/, "").replace(/_/g, " ");
+            title = fileName.replace(/^[0-9]+[a-zA-Z]?_/, "").replace(/\.md$/, "").replace(/_/g, " ");
             title = `Phase: ${title}`;
           }
         }
-        const id = fileName.match(/^([0-9]+)/)?.[1] || String(i + 1).padStart(2, "0");
+        const id = fileName.match(/^([0-9]+[a-zA-Z]?)/)?.[1] || fileName.match(/^([0-9]+)/)?.[1] || String(i + 1).padStart(2, "0");
         const isMaster = fileName.startsWith("00_");
         let resolvedStatus = "pending";
         if (prev?.status && prev.status !== "running") {
@@ -1906,23 +2170,12 @@ Model: ${this.client.getConfig().model}
       agentDir = "prompts";
     }
     const list = [
-      { name: "Analysis Protocol", relPath: `${agentDir}/PROTOCOL.md` }
-    ];
-    try {
-      const agentFiles = await fs5.readdir(path5.join(this.workspaceRoot, agentDir));
-      const tidySkills = agentFiles.filter((f) => f.startsWith("TIDYPROTEOMICS_") && f.endsWith(".md")).sort();
-      for (const sf of tidySkills) {
-        const prettyName = sf.replace(/\.md$/, "").replace(/_/g, " ");
-        list.push({ name: prettyName, relPath: `${agentDir}/${sf}` });
-      }
-    } catch {
-    }
-    list.push(
+      { name: "Analysis Protocol", relPath: `${agentDir}/PROTOCOL.md` },
       { name: "Experiment & Dataset Spec", relPath: "docs/experiment.md" },
       { name: "Shared Memory", relPath: "docs/notes.md" },
       { name: "Active Model Summary", relPath: "docs/llm.md" },
       { name: "Pipeline Summary", relPath: "logs/pipeline.md" }
-    );
+    ];
     try {
       const logsDir = path5.join(this.workspaceRoot, "logs");
       const entries = await fs5.readdir(logsDir, { withFileTypes: true });
@@ -2015,7 +2268,7 @@ Construct and execute code for this phase, capturing output to logs.
       agentFolder = "prompts";
     }
     const list = [
-      { name: "analysis", relPath: "analysis", description: "Phase Prompts (00_INSTALL.md .. 10_SYNTHESIS.md)" },
+      { name: "analysis", relPath: "analysis", description: "Phase Prompts (00_INSTALL.md .. 11_SYNTHESIS.md)" },
       { name: agentFolder, relPath: agentFolder, description: "Protocol, Variables & Skills (Cached Prefix)" },
       { name: "code", relPath: "code", description: "Generated Analysis Scripts" },
       { name: "tools", relPath: "tools", description: "Linter & Execution Helper Utilities" },
@@ -2031,8 +2284,8 @@ Construct and execute code for this phase, capturing output to logs.
       let exists = false;
       let itemCount = 0;
       try {
-        const stat4 = await fs5.stat(full);
-        if (stat4.isDirectory()) {
+        const stat5 = await fs5.stat(full);
+        if (stat5.isDirectory()) {
           exists = true;
           const files = await fs5.readdir(full);
           itemCount = files.filter((f) => !f.startsWith(".")).length;
@@ -2118,6 +2371,8 @@ Construct and execute code for this phase, capturing output to logs.
       return;
     const filesToRemove = /* @__PURE__ */ new Set();
     for (const p of targetPhases) {
+      if (!p.enabled)
+        continue;
       filesToRemove.add(p.fileName);
       filesToRemove.add(path5.basename(p.fileName));
       if (p.isMasterSetup) {
@@ -2126,6 +2381,8 @@ Construct and execute code for this phase, capturing output to logs.
         filesToRemove.add("INSTRUCT.md");
       }
     }
+    if (filesToRemove.size === 0)
+      return;
     const notesPath = path5.join(this.workspaceRoot, "docs", "notes.md");
     try {
       const content = await fs5.readFile(notesPath, "utf-8");
@@ -2160,8 +2417,13 @@ Construct and execute code for this phase, capturing output to logs.
       this.logPipeline(`Phase ID '${phaseId}' not found.`);
       return;
     }
+    this.isRunning = true;
+    this.isFullPipelineRunning = false;
+    this.shouldStop = false;
     for (let i = phaseIndex; i < this.phases.length; i++) {
       const p = this.phases[i];
+      if (i !== phaseIndex && !p.enabled)
+        continue;
       if (i === phaseIndex) {
         p.status = "running";
         p.startTime = (/* @__PURE__ */ new Date()).toISOString();
@@ -2182,9 +2444,6 @@ Construct and execute code for this phase, capturing output to logs.
     }
     await this.pruneNotesFromPhase(phaseIndex);
     await this.notifyState();
-    this.isRunning = true;
-    this.isFullPipelineRunning = false;
-    this.shouldStop = false;
     try {
       await this.executePhase(phaseIndex);
     } catch (err) {
@@ -2196,12 +2455,106 @@ Construct and execute code for this phase, capturing output to logs.
     }
   }
   /**
-   * Run the complete multi-phase pipeline sequentially
+   * Intelligently resume execution from the first incomplete/failed phase (or a specified phase),
+   * running sequentially through all remaining downstream phases.
    */
-  async runFullPipeline() {
+  async resumePipeline(fromPhaseId) {
+    if (this.isRunning) {
+      this.logPipeline("Execution busy: A pipeline or phase is already running. Please wait or stop it first.");
+      return;
+    }
+    if (!this.workspaceRoot || this.phases.length === 0) {
+      this.logPipeline("No analysis tasks found to execute. Please initialize an analysis pipeline first.");
+      return;
+    }
+    let startIndex = -1;
+    if (fromPhaseId) {
+      startIndex = this.phases.findIndex((p) => p.id === fromPhaseId || p.fileName.includes(fromPhaseId));
+      if (startIndex !== -1 && !this.phases[startIndex].enabled) {
+        this.phases[startIndex].enabled = true;
+      }
+    }
+    if (startIndex === -1) {
+      startIndex = this.phases.findIndex((p) => p.enabled && p.status !== "completed");
+    }
+    if (startIndex === -1) {
+      startIndex = this.phases.findIndex((p) => p.enabled);
+    }
+    if (startIndex === -1) {
+      this.logPipeline("No enabled analysis tasks found to execute. Please enable at least one task in the pipeline list.");
+      return;
+    }
+    this.isRunning = true;
+    this.isFullPipelineRunning = true;
+    this.shouldStop = false;
+    const startPhase = this.phases[startIndex];
+    const hasAnyCompleted = this.phases.some((p) => p.status === "completed");
+    const resumeVerb = startIndex === 0 && !hasAnyCompleted ? "Starting" : "Resuming";
+    this.logPipeline(`${resumeVerb} autonomous pipeline at ${(/* @__PURE__ */ new Date()).toLocaleTimeString()} from Phase ${startPhase.id} (${startPhase.title})`);
+    this.logPipeline(`Working Directory: ${this.workspaceRoot}`);
+    for (let i = startIndex; i < this.phases.length; i++) {
+      const p = this.phases[i];
+      if (!p.enabled)
+        continue;
+      p.status = "pending";
+      p.startTime = void 0;
+      p.endTime = void 0;
+      p.durationSeconds = void 0;
+      p.tokenUsage = void 0;
+      p.summary = void 0;
+      p.error = void 0;
+    }
+    await this.pruneNotesFromPhase(startIndex);
+    await this.notifyState();
+    try {
+      for (let i = startIndex; i < this.phases.length; i++) {
+        if (this.shouldStop) {
+          this.logPipeline("Execution stopped by user.");
+          break;
+        }
+        const phase = this.phases[i];
+        if (!phase.enabled) {
+          this.logPipeline(`Skipping disabled phase: ${phase.title}`);
+          continue;
+        }
+        await this.pruneNotesFromPhase(i);
+        const success = await this.executePhase(i);
+        if (!success) {
+          this.logPipeline(`Pipeline paused due to checkpoint failure in ${phase.title}`);
+          break;
+        }
+      }
+    } catch (err) {
+      this.logPipeline(`Full pipeline error: ${err.message}`);
+    } finally {
+      this.isRunning = false;
+      this.isFullPipelineRunning = false;
+      this.shouldStop = false;
+      await this.notifyState();
+    }
+  }
+  /**
+   * Force a complete restart of the pipeline from Phase 0
+   */
+  async restartPipeline() {
+    return this.runFullPipeline(true);
+  }
+  /**
+   * Run the complete multi-phase pipeline sequentially.
+   * If not forced from beginning, automatically resumes from the first incomplete phase.
+   */
+  async runFullPipeline(forceFromBeginning = false) {
     if (this.isRunning) {
       this.logPipeline("Execution busy: A pipeline is already running.");
       return;
+    }
+    if (!forceFromBeginning) {
+      const enabledPhases = this.phases.filter((p) => p.enabled);
+      const hasCompleted = this.phases.some((p) => p.status === "completed");
+      const hasIncomplete = enabledPhases.some((p) => p.status !== "completed");
+      if (hasCompleted || hasIncomplete) {
+        return this.resumePipeline();
+      }
     }
     if (!this.workspaceRoot || this.phases.length === 0) {
       this.logPipeline("No analysis tasks found to execute. Please initialize an analysis pipeline first.");
@@ -2210,6 +2563,18 @@ Construct and execute code for this phase, capturing output to logs.
     this.isRunning = true;
     this.isFullPipelineRunning = true;
     this.shouldStop = false;
+    for (const p of this.phases) {
+      if (!p.enabled)
+        continue;
+      p.status = "pending";
+      p.startTime = void 0;
+      p.endTime = void 0;
+      p.durationSeconds = void 0;
+      p.tokenUsage = void 0;
+      p.summary = void 0;
+      p.error = void 0;
+    }
+    await this.notifyState();
     this.logPipeline(`Starting autonomous run at ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}`);
     this.logPipeline(`Working Directory: ${this.workspaceRoot}`);
     try {
@@ -2330,7 +2695,8 @@ Construct and execute code for this phase, capturing output to logs.
         this.chatLogger,
         () => this.shouldStop
       );
-      const result = await loop.run();
+      const maxTurns = vscode.workspace.getConfiguration("tidyproteomicsagent").get("maxTurns") || 30;
+      const result = await loop.run(maxTurns);
       const durationSeconds = Math.max(1, Math.round((Date.now() - startTimeMs) / 1e3));
       const currentPhase = getActivePhase();
       currentPhase.endTime = (/* @__PURE__ */ new Date()).toISOString();
@@ -2402,7 +2768,17 @@ Model: ${this.client.getConfig().model}
 
 `;
       }
-      await fs5.writeFile(notesPath, current + entry, "utf-8");
+      const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const titlePattern = new RegExp(
+        `(\\n*###\\s*${escapeRegExp(phase.title)}[\\s\\S]*?(?=\\n###|\\n---\\s*\\n###|$)(?:\\n---\\s*\\n)?)`,
+        "i"
+      );
+      if (titlePattern.test(current)) {
+        current = current.replace(titlePattern, entry);
+      } else {
+        current = current.trimEnd() + "\n" + entry;
+      }
+      await fs5.writeFile(notesPath, current, "utf-8");
     } catch (e) {
       this.logPipeline(`Warning: Failed to update docs/notes.md: ${e}`);
     }
@@ -2545,14 +2921,10 @@ var ProviderClient = class {
         signal: AbortSignal.timeout(this.getTimeoutMs())
       });
     } catch (err) {
-      if (err.name === "TimeoutError" || err.message && err.message.includes("timeout")) {
-        throw new Error(`Anthropic API request timed out after ${timeoutSeconds}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`);
-      }
-      throw err;
+      this.handleFetchError(err, "Anthropic", url, timeoutSeconds);
     }
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Anthropic API error (${res.status}): ${errText}`);
+      await this.handleHttpError(res, "Anthropic", url);
     }
     const data = await res.json();
     let textContent = "";
@@ -2690,14 +3062,10 @@ var ProviderClient = class {
         signal: AbortSignal.timeout(this.getTimeoutMs())
       });
     } catch (err) {
-      if (err.name === "TimeoutError" || err.message && err.message.includes("timeout")) {
-        throw new Error(`Gemini API request timed out after ${timeoutSeconds}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`);
-      }
-      throw err;
+      this.handleFetchError(err, "Gemini", url, timeoutSeconds);
     }
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Gemini API error (${res.status}): ${errText}`);
+      await this.handleHttpError(res, "Gemini", url);
     }
     const data = await res.json();
     const candidate = data.candidates?.[0];
@@ -2803,14 +3171,10 @@ var ProviderClient = class {
         signal: AbortSignal.timeout(this.getTimeoutMs())
       });
     } catch (err) {
-      if (err.name === "TimeoutError" || err.message && err.message.includes("timeout")) {
-        throw new Error(`OpenAI API request timed out after ${timeoutSeconds}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`);
-      }
-      throw err;
+      this.handleFetchError(err, "OpenAI", url, timeoutSeconds);
     }
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`OpenAI API error (${res.status}): ${errText}`);
+      await this.handleHttpError(res, "OpenAI", url);
     }
     const data = await res.json();
     const message = data.choices?.[0]?.message;
@@ -2918,14 +3282,10 @@ var ProviderClient = class {
         signal: AbortSignal.timeout(this.getTimeoutMs())
       });
     } catch (err) {
-      if (err.name === "TimeoutError" || err.message && err.message.includes("timeout")) {
-        throw new Error(`OpenRouter API request timed out after ${timeoutSeconds}s. Increase Request Timeout in settings if running large models or heavy synthesis turns.`);
-      }
-      throw err;
+      this.handleFetchError(err, "OpenRouter", url, timeoutSeconds);
     }
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`OpenRouter API error (${res.status}): ${errText}`);
+      await this.handleHttpError(res, "OpenRouter", url);
     }
     const data = await res.json();
     const message = data.choices?.[0]?.message;
@@ -3041,14 +3401,10 @@ var ProviderClient = class {
         signal: AbortSignal.timeout(this.getTimeoutMs())
       });
     } catch (err) {
-      if (err.name === "TimeoutError" || err.message && err.message.includes("timeout")) {
-        throw new Error(`Remote Ollama API request timed out after ${timeoutSeconds}s at ${url}. For local/remote 70B models, increase Request Timeout in settings.`);
-      }
-      throw err;
+      this.handleFetchError(err, "Remote Ollama", url, timeoutSeconds);
     }
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Remote Ollama API error at ${url} (${res.status}): ${errText}`);
+      await this.handleHttpError(res, "Remote Ollama", url);
     }
     const data = await res.json();
     const message = data.choices?.[0]?.message;
@@ -3090,6 +3446,126 @@ var ProviderClient = class {
       truncationDetected: isTruncated
     };
   }
+  /**
+   * Translates low-level fetch/network/timeout errors into actionable diagnostic Error objects.
+   */
+  handleFetchError(err, providerLabel, url, timeoutSeconds) {
+    const isTimeout = err.name === "TimeoutError" || err.name === "AbortError" || /timeout|aborted|ETIMEDOUT/i.test(err.message || "");
+    if (isTimeout) {
+      const e2 = new Error(
+        `${providerLabel} API request timed out after ${timeoutSeconds}s at ${url}. Increase Request Timeout in settings if running large models or heavy synthesis turns.`
+      );
+      e2.isTimeout = true;
+      e2.isRetryable = true;
+      throw e2;
+    }
+    const cause = err.cause;
+    const causeName = cause?.name || "";
+    const causeCode = cause?.code || "";
+    const causeMsg = cause?.message || "";
+    if (causeName === "ConnectTimeoutError" || causeCode === "UND_ERR_CONNECT_TIMEOUT") {
+      const e2 = new Error(
+        `${providerLabel} connection timed out establishing connection to ${url}. Check your internet connection, VPN, or firewall settings (ConnectTimeoutError).`
+      );
+      e2.isNetworkError = true;
+      e2.isRetryable = true;
+      throw e2;
+    }
+    if (causeCode === "ENOTFOUND" || /getaddrinfo ENOTFOUND/i.test(causeMsg)) {
+      const e2 = new Error(
+        `${providerLabel} host lookup failed at ${url}. Unable to resolve host via DNS. Check internet connection or DNS configuration (ENOTFOUND).`
+      );
+      e2.isNetworkError = true;
+      e2.isRetryable = true;
+      throw e2;
+    }
+    if (causeCode === "ECONNREFUSED") {
+      const e2 = new Error(
+        `${providerLabel} connection refused at ${url}. Ensure the server/endpoint is active and reachable (ECONNREFUSED).`
+      );
+      e2.isNetworkError = true;
+      e2.isRetryable = true;
+      throw e2;
+    }
+    if (causeCode === "ECONNRESET") {
+      const e2 = new Error(
+        `${providerLabel} connection reset by peer at ${url}. The connection was unexpectedly closed (ECONNRESET).`
+      );
+      e2.isNetworkError = true;
+      e2.isRetryable = true;
+      throw e2;
+    }
+    if (/CERT_|certificate|SSL|TLS/i.test(causeCode + " " + causeMsg)) {
+      const e2 = new Error(
+        `${providerLabel} SSL/TLS certificate verification failed for ${url} (${causeCode || causeMsg}). Check system clock and SSL proxy settings.`
+      );
+      e2.isNetworkError = true;
+      e2.isRetryable = false;
+      throw e2;
+    }
+    if (err.message === "fetch failed") {
+      const detail = causeMsg || causeCode || "unable to connect";
+      const e2 = new Error(
+        `${providerLabel} network connection failed connecting to ${url} (${detail}). Verify internet access and provider endpoint.`
+      );
+      e2.isNetworkError = true;
+      e2.isRetryable = true;
+      throw e2;
+    }
+    const e = new Error(`${providerLabel} request failed: ${err.message || String(err)}`);
+    e.isNetworkError = true;
+    e.isRetryable = true;
+    throw e;
+  }
+  /**
+   * Formats HTTP error status codes with targeted, actionable diagnostics.
+   */
+  async handleHttpError(res, providerLabel, url) {
+    const rawText = await res.text().catch(() => "");
+    let cleanMessage = rawText.trim();
+    try {
+      const parsed = JSON.parse(rawText);
+      cleanMessage = parsed.error?.message || parsed.message || parsed.error || rawText;
+      if (typeof cleanMessage === "object")
+        cleanMessage = JSON.stringify(cleanMessage);
+    } catch (_) {
+    }
+    let friendly = "";
+    let isRetryable = false;
+    switch (res.status) {
+      case 401:
+        friendly = `${providerLabel} authentication failed (HTTP 401): Invalid or missing API key. Please check your credentials in settings.`;
+        break;
+      case 402:
+        friendly = `${providerLabel} payment required (HTTP 402): Insufficient credits or account balance limit reached.`;
+        break;
+      case 403:
+        friendly = `${providerLabel} access forbidden (HTTP 403): Account lacks permission for this model or region.`;
+        break;
+      case 404:
+        friendly = `${providerLabel} resource not found (HTTP 404): The specified model '${this.config.model}' or endpoint does not exist.`;
+        break;
+      case 429:
+        friendly = `${providerLabel} rate limited (HTTP 429): Request or token quota exceeded. Retrying may succeed.`;
+        isRetryable = true;
+        break;
+      case 500:
+      case 502:
+      case 503:
+      case 504:
+        friendly = `${providerLabel} server error (HTTP ${res.status}): Provider service is temporarily degraded or undergoing maintenance.`;
+        isRetryable = true;
+        break;
+      default:
+        friendly = `${providerLabel} API error (${res.status}): ${cleanMessage || "Unexpected response"}`;
+        break;
+    }
+    const errorMsg = cleanMessage && cleanMessage !== friendly ? `${friendly} [Detail: ${cleanMessage.length > 200 ? cleanMessage.slice(0, 197) + "..." : cleanMessage}]` : friendly;
+    const err = new Error(errorMsg);
+    err.status = res.status;
+    err.isRetryable = isRetryable;
+    throw err;
+  }
 };
 
 // src/tools/ToolRegistry.ts
@@ -3100,6 +3576,44 @@ var path6 = __toESM(require("path"));
 var import_child_process2 = require("child_process");
 var import_util = require("util");
 var execAsync = (0, import_util.promisify)(import_child_process2.exec);
+function parseToolsFromFrontmatter(content) {
+  if (!content) {
+    return void 0;
+  }
+  let frontmatter;
+  const startFmMatch = content.match(/^\s*---\r?\n([\s\S]*?)\r?\n---/);
+  if (startFmMatch) {
+    frontmatter = startFmMatch[1];
+  } else {
+    const embeddedFmMatch = content.match(/(?:^|\n)---\r?\n([\s\S]*?tools:\s*[\s\S]*?)\r?\n---/);
+    if (embeddedFmMatch) {
+      frontmatter = embeddedFmMatch[1];
+    }
+  }
+  if (!frontmatter) {
+    return void 0;
+  }
+  if (/tools:\s*["']?(?:\*|all|ALL)["']?\s*(?:$|\r?\n)/m.test(frontmatter)) {
+    return "all";
+  }
+  const inlineMatch = frontmatter.match(/tools:\s*\[([\s\S]*?)\]/);
+  if (inlineMatch) {
+    return inlineMatch[1].split(",").map((s) => s.trim().replace(/^['"]|['"]$/g, "")).filter((s) => s.length > 0);
+  }
+  const listMatch = frontmatter.match(/tools:\s*\r?\n((?:\s*-\s*[^\r\n]+\r?\n?)+)/);
+  if (listMatch) {
+    return listMatch[1].split(/\r?\n/).map((line) => line.replace(/^\s*-\s*/, "").trim().replace(/^['"]|['"]$/g, "")).filter((s) => s.length > 0);
+  }
+  const singleMatch = frontmatter.match(/tools:\s*([a-zA-Z0-9_-]+)\s*(?:$|\r?\n)/m);
+  if (singleMatch) {
+    const val = singleMatch[1].trim();
+    if (val.toLowerCase() === "all" || val === "*") {
+      return "all";
+    }
+    return [val];
+  }
+  return void 0;
+}
 var ToolRegistry = class {
   constructor(workspaceRoot) {
     this.workspaceRoot = workspaceRoot;
@@ -3107,11 +3621,55 @@ var ToolRegistry = class {
     this.registerDefaultTools();
   }
   tools = /* @__PURE__ */ new Map();
+  mcpToolNames = /* @__PURE__ */ new Set();
+  mcpPhaseListener;
   setWorkspaceRoot(newRoot) {
     this.workspaceRoot = newRoot || "";
   }
-  getDefinitions() {
-    return Array.from(this.tools.values()).map((t) => t.definition);
+  setMcpPhaseListener(listener) {
+    this.mcpPhaseListener = listener;
+  }
+  setActivePhase(phaseName) {
+    if (this.mcpPhaseListener) {
+      this.mcpPhaseListener(phaseName);
+    }
+  }
+  getDefinitions(phaseFileName, phaseContent) {
+    const allDefs = Array.from(this.tools.values()).map((t) => t.definition);
+    if (!phaseFileName && !phaseContent) {
+      return allDefs;
+    }
+    let rawContent = phaseContent;
+    if (!rawContent && phaseFileName) {
+      const candidatePaths = [
+        path6.isAbsolute(phaseFileName) ? phaseFileName : "",
+        this.workspaceRoot ? path6.join(this.workspaceRoot, "analysis", phaseFileName.endsWith(".md") ? phaseFileName : `${phaseFileName}.md`) : "",
+        this.workspaceRoot ? path6.join(this.workspaceRoot, phaseFileName.endsWith(".md") ? phaseFileName : `${phaseFileName}.md`) : "",
+        this.workspaceRoot ? path6.join(this.workspaceRoot, phaseFileName) : "",
+        this.workspaceRoot ? path6.join(this.workspaceRoot, "extension", "templates", "pipelines", "differential_expression", phaseFileName.endsWith(".md") ? phaseFileName : `${phaseFileName}.md`) : "",
+        this.workspaceRoot ? path6.join(this.workspaceRoot, "extension", "templates", "pipelines", "quality_control_only", phaseFileName.endsWith(".md") ? phaseFileName : `${phaseFileName}.md`) : ""
+      ].filter(Boolean);
+      for (const p of candidatePaths) {
+        if (fsSync.existsSync(p)) {
+          try {
+            rawContent = fsSync.readFileSync(p, "utf-8");
+            break;
+          } catch {
+          }
+        }
+      }
+    }
+    const allowedMcpTools = rawContent ? parseToolsFromFrontmatter(rawContent) : void 0;
+    if (allowedMcpTools === void 0 || allowedMcpTools === "all") {
+      return allDefs;
+    }
+    const allowedSet = new Set(allowedMcpTools);
+    return allDefs.filter((def) => {
+      if (!this.mcpToolNames.has(def.name)) {
+        return true;
+      }
+      return allowedSet.has(def.name);
+    });
   }
   async execute(name, args) {
     const handler = this.tools.get(name);
@@ -3155,7 +3713,7 @@ var ToolRegistry = class {
     const normalizedRel = root ? path6.relative(path6.resolve(root), resolved).replace(/\\/g, "/") : filePath.replace(/\\/g, "/");
     const isProtected = ["docs/llm.md", "agent/PROTOCOL.md", "agent/VARIABLES.md"].some(
       (p) => normalizedRel === p || normalizedRel.endsWith("/" + p)
-    ) || normalizedRel.startsWith("agent/TIDYPROTEOMICS_") || normalizedRel.includes("/agent/TIDYPROTEOMICS_");
+    );
     if (isProtected) {
       throw new Error(
         `Security Policy Violation: '${filePath}' is a protected user or extension specification file and cannot be modified by the agent. Record runtime logs in 'docs/notes.md' and biological findings across docs/ (observations.md, knowledge.md, websearch.md, literature.md).`
@@ -3189,8 +3747,10 @@ var ToolRegistry = class {
           if (!effectiveCwd) {
             throw new Error("Cannot execute command: No active workspace directory is configured.");
           }
-          const defaultShell = process.platform === "win32" ? void 0 : process.env.SHELL && fsSync.existsSync(process.env.SHELL) ? process.env.SHELL : fsSync.existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
-          const { stdout, stderr } = await execAsync(args.command, {
+          const defaultShell = process.platform === "win32" ? void 0 : fsSync.existsSync("/bin/bash") ? "/bin/bash" : process.env.SHELL && fsSync.existsSync(process.env.SHELL) ? process.env.SHELL : "/bin/sh";
+          let commandToRun = args.command;
+          commandToRun = commandToRun.replace(/(?:\s*2>&1)?\s*(?:>|>>|\|\s*tee(?:\s+-a)?)\s+logs\/[^\s;&|]+\/console\.log/g, "").replace(/;\s*test\s+["']?(?:\$\{?PIPESTATUS\[0\]\}?|\$\?)["']?\s+-eq\s+0/g, "");
+          const { stdout, stderr } = await execAsync(commandToRun, {
             cwd: effectiveCwd,
             timeout,
             maxBuffer: 10 * 1024 * 1024,
@@ -3220,7 +3780,7 @@ ${error.stderr}
           if (error.message)
             errOutput += `Error message: ${error.message}
 `;
-          return errOutput;
+          throw new Error(errOutput.trim());
         }
       }
     });
@@ -3405,9 +3965,9 @@ ${list || "(empty)"}`;
             }
           } else {
             try {
-              const stat4 = await fs6.stat(fullPath);
-              if (stat4.size > 0) {
-                results.push(`PASS: ${file} (size: ${stat4.size} bytes)`);
+              const stat5 = await fs6.stat(fullPath);
+              if (stat5.size > 0) {
+                results.push(`PASS: ${file} (size: ${stat5.size} bytes)`);
               } else {
                 results.push(`FAIL: ${file} exists but has 0 bytes`);
                 allPassed = false;
@@ -3477,6 +4037,22 @@ Actionable Insights:
 ${args.actionableInsights}`;
       }
     });
+  }
+  registerMcpTools(tools, executor) {
+    this.unregisterMcpTools();
+    for (const def of tools) {
+      this.tools.set(def.name, {
+        definition: def,
+        execute: (args) => executor(def.name, args)
+      });
+      this.mcpToolNames.add(def.name);
+    }
+  }
+  unregisterMcpTools() {
+    for (const name of this.mcpToolNames) {
+      this.tools.delete(name);
+    }
+    this.mcpToolNames.clear();
   }
 };
 
@@ -3757,7 +4333,7 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
     throw new Error(`Literature script '${scriptName}' not found in extension templates.`);
   }
   execRJson(rscript, scriptPath, args) {
-    return new Promise((resolve2) => {
+    return new Promise((resolve3) => {
       (0, import_child_process3.execFile)(
         rscript,
         [scriptPath, ...args],
@@ -3768,22 +4344,22 @@ Extract the study, context, and all molecular assertions with raw_entity_name an
           if (line) {
             try {
               const marker = line.startsWith("@@LITERATURE_JSON@@") ? "@@LITERATURE_JSON@@" : "@@CORPUS_JSON@@";
-              resolve2(JSON.parse(line.slice(marker.length)));
+              resolve3(JSON.parse(line.slice(marker.length)));
               return;
             } catch (err) {
-              resolve2({ ok: false, error: `JSON parse error: ${err.message}`, stderr });
+              resolve3({ ok: false, error: `JSON parse error: ${err.message}`, stderr });
               return;
             }
           }
           const msg = String(stderr || error?.message || "").trim();
-          resolve2({ ok: false, error: msg || "R process finished without output.", stderr });
+          resolve3({ ok: false, error: msg || "R process finished without output.", stderr });
         }
       );
     });
   }
 };
 
-// src/agent/AdvisorService.ts
+// src/agent/AgentService.ts
 var fs9 = __toESM(require("fs/promises"));
 var fsSync3 = __toESM(require("fs"));
 var path9 = __toESM(require("path"));
@@ -3876,6 +4452,8 @@ var ExperimentManager = class {
         analyte: null,
         description: null,
         rawSampleGroups: [],
+        discoveredGroups: [],
+        contrastConfirmed: false,
         sampleRenamingMap: {},
         targetContrasts: [],
         batchConfoundingAuthorized: false,
@@ -3926,11 +4504,28 @@ var ExperimentManager = class {
     if (!description)
       missing.push("DESCRIPTION");
     const targetContrasts = [];
-    const contrastMatches = content.matchAll(/-\s*Contrast:\s*(.*)/gi);
+    const contrastMatches = content.matchAll(/-\s*(?:Confirmed\s*)?Contrast:\s*(.*)/gi);
     for (const m of contrastMatches) {
       const c = m[1].trim();
       if (c && !c.includes("<treatment>") && !c.includes("<control>") && !c.includes("[REQUIRED")) {
         targetContrasts.push(c);
+      }
+    }
+    const secCMatch = content.match(/###\s*(?:3\.C|C)\.?\s*Target [Cc]ontrasts[\s\S]*?(?=###\s*(?:3\.D|D)\.|$|##)/i);
+    if (secCMatch) {
+      const lines = secCMatch[0].split("\n");
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("\u{1F449}") || trimmed.startsWith("<!--") || trimmed.includes("[REQUIRED")) {
+          continue;
+        }
+        const m = trimmed.match(/(?:-\s*(?:Confirmed\s*)?Contrast:\s*)?`?([a-zA-Z0-9_-]+)`?\s*(?:\/|vs\.?|versus)\s*`?([a-zA-Z0-9_-]+)`?/i);
+        if (m) {
+          const pair = `${m[1]} vs ${m[2]}`;
+          if (!targetContrasts.includes(pair)) {
+            targetContrasts.push(pair);
+          }
+        }
       }
     }
     const sampleRenamingMap = {};
@@ -3944,6 +4539,43 @@ var ExperimentManager = class {
         }
       }
     }
+    const rawGroups = [];
+    const secAMatch = content.match(/###\s*(?:3\.A|A)\.?\s*Discovered sample groups[\s\S]*?(?=###\s*(?:3\.B|B)\.|$|##)/i);
+    if (secAMatch) {
+      const rows = secAMatch[0].split("\n");
+      for (const row of rows) {
+        const trimmed = row.trim();
+        if (trimmed.startsWith("|") && !trimmed.includes("---") && !trimmed.includes("Discovered sample group") && !trimmed.includes("Raw Sample Group")) {
+          const parts = trimmed.split("|").map((p) => p.trim()).filter(Boolean);
+          if (parts.length >= 1) {
+            const clean = parts[0].replace(/[`'"]/g, "").trim();
+            if (clean && !rawGroups.includes(clean)) {
+              rawGroups.push(clean);
+            }
+          }
+        }
+      }
+    }
+    const cleanBiologicalGroups = [];
+    const secBMatch = content.match(/###\s*(?:3\.B|B)\.?\s*Sample Group Renaming[\s\S]*?(?=###\s*(?:3\.C|C)\.|$|##)/i);
+    if (secBMatch) {
+      const rows = secBMatch[0].split("\n");
+      for (const row of rows) {
+        const trimmed = row.trim();
+        if (trimmed.startsWith("|") && !trimmed.includes("---") && !trimmed.includes("Proposed clean") && !trimmed.includes("Cleaned Group")) {
+          const parts = trimmed.split("|").map((p) => p.trim()).filter(Boolean);
+          if (parts.length >= 2) {
+            const clean = parts[1].replace(/[`'"]/g, "").trim();
+            if (clean && !cleanBiologicalGroups.includes(clean)) {
+              cleanBiologicalGroups.push(clean);
+            }
+          }
+        }
+      }
+    }
+    const effectiveGroups = cleanBiologicalGroups.length >= 2 ? cleanBiologicalGroups : rawGroups;
+    const secCText = secCMatch ? secCMatch[0] : "";
+    const contrastConfirmed = /Status:\s*CONFIRMED/i.test(secCText) || /###\s*(?:3\.C|C)\.?\s*Target [Cc]ontrasts[^\n]*CONFIRMED/i.test(content) || targetContrasts.length > 0 && !secCText.includes("\u{1F449} [USER ACTION REQUIRED") && !secCText.includes("<treatment>");
     const batchConfoundingAuthorized = /-\s*\*\*Proceed With Potential Batch Confounding\*\*:\s*TRUE/i.test(content);
     return {
       exists: true,
@@ -3951,12 +4583,20 @@ var ExperimentManager = class {
       platform,
       analyte,
       description,
-      rawSampleGroups: [],
+      rawSampleGroups: rawGroups,
+      discoveredGroups: effectiveGroups,
+      contrastConfirmed,
       sampleRenamingMap,
       targetContrasts,
       batchConfoundingAuthorized,
       missingInitialFields: missing
     };
+  }
+  getDiscoveredGroups(spec) {
+    if (spec && spec.discoveredGroups && spec.discoveredGroups.length > 0) {
+      return spec.discoveredGroups;
+    }
+    return [];
   }
   /**
    * Updates Section 1 parameter (PATH_TO_DATA_FILE, PLATFORM, or ANALYTE).
@@ -4035,27 +4675,68 @@ ${table}
     await fs8.writeFile(expPath, content, "utf-8");
   }
   /**
-   * Sets Section 3C target contrasts.
+   * Sets Section 3C target contrasts and marks them confirmed (removing action required tags).
    */
   async setTargetContrasts(contrasts) {
     await this.ensureExperimentDoc();
     const expPath = this.getExperimentPath();
     let content = await fs8.readFile(expPath, "utf-8");
-    const contrastList = contrasts.map((c) => `- Contrast: ${c.replace(/^-\s*Contrast:\s*/i, "").trim()}`).join("\n");
-    const sectionCRegex = /(### C\. Target Contrasts:[\s\S]*?)(?=### D\.|$)/i;
-    const newSectionC = `### C. Target Contrasts:
-\u{1F449} [USER ACTION REQUIRED - DEFINE TARGET CONTRASTS]:
+    const formattedContrasts = contrasts.map((c) => {
+      let clean = c.replace(/^[-\*]\s*(?:Confirmed\s*)?Contrast:\s*/i, "").trim();
+      clean = clean.replace(/[`'"]/g, "").trim();
+      const parts = clean.split(/\s*(?:\/|vs\.?|versus)\s*/i);
+      if (parts.length === 2 && parts[0] && parts[1]) {
+        return `\`${parts[0]}\` / \`${parts[1]}\``;
+      }
+      return clean;
+    });
+    const contrastList = formattedContrasts.join("\n");
+    const newSectionC = `### 3.C Target contrasts
 ${contrastList}
 
+Status: CONFIRMED
+
 `;
+    const sectionCRegex = /(###\s*(?:3\.C|C)\.?\s*Target [Cc]ontrasts[\s\S]*?)(?=###\s*(?:3\.D|D)\.|$|##)/i;
     if (sectionCRegex.test(content)) {
       content = content.replace(sectionCRegex, newSectionC);
     } else {
-      content += `
+      const sectionDRegex = /(###\s*(?:3\.D|D)\.[\s\S]*)/i;
+      if (sectionDRegex.test(content)) {
+        content = content.replace(sectionDRegex, `${newSectionC}$1`);
+      } else {
+        content += `
 
 ${newSectionC}`;
+      }
     }
     await fs8.writeFile(expPath, content, "utf-8");
+  }
+  /**
+   * Confirms whatever contrasts are in Section 3.C, removing pending confirmation tags.
+   */
+  async confirmExistingContrasts() {
+    await this.ensureExperimentDoc();
+    const expPath = this.getExperimentPath();
+    let content = await fs8.readFile(expPath, "utf-8");
+    const spec = await this.readSpec();
+    if (spec.targetContrasts.length > 0) {
+      await this.setTargetContrasts(spec.targetContrasts);
+      return;
+    }
+    const sectionCRegex = /(###\s*(?:3\.C|C)\.?\s*Target [Cc]ontrasts[\s\S]*?)(?=###\s*(?:3\.D|D)\.|$|##)/i;
+    const match = content.match(sectionCRegex);
+    if (match) {
+      let secC = match[1];
+      secC = secC.replace(/👉\s*\[USER ACTION REQUIRED[^\]]*\]:?/gi, "");
+      secC = secC.replace(/\(suggested contrast requiring confirmation\)/gi, "");
+      secC = secC.replace(/Status:\s*PENDING[^\n]*/gi, "");
+      if (!/Status:\s*CONFIRMED/i.test(secC)) {
+        secC = secC.trim() + "\n\nStatus: CONFIRMED\n\n";
+      }
+      content = content.replace(sectionCRegex, secC);
+      await fs8.writeFile(expPath, content, "utf-8");
+    }
   }
   /**
    * Sets Section 3D Proceed With Potential Batch Confounding (TRUE / FALSE).
@@ -4065,12 +4746,22 @@ ${newSectionC}`;
     const expPath = this.getExperimentPath();
     let content = await fs8.readFile(expPath, "utf-8");
     const val = authorized ? "TRUE" : "FALSE";
+    let updated = false;
     if (content.includes("Proceed With Potential Batch Confounding")) {
       content = content.replace(
         /(-\s*\*\*Proceed With Potential Batch Confounding\*\*:\s*)(TRUE|FALSE)/i,
         `$1${val}`
       );
-    } else {
+      updated = true;
+    }
+    if (content.includes("Authorize Unadjusted Exploratory Comparison")) {
+      content = content.replace(
+        /(-\s*\*\*Authorize Unadjusted Exploratory Comparison\*\*:\s*)(TRUE|FALSE)/i,
+        `$1${val}`
+      );
+      updated = true;
+    }
+    if (!updated) {
       content += `
 
 ### D. Confounded Batch & Exploratory Comparison Authorization:
@@ -4079,16 +4770,45 @@ ${newSectionC}`;
     }
     await fs8.writeFile(expPath, content, "utf-8");
   }
+  /**
+   * Unified confirmation: sets target contrast(s) as confirmed in Section 3.C
+   * and authorizes potential batch confounding in Section 3.D.
+   */
+  async confirmContrastAndAuthorizeConfounding(contrasts) {
+    await this.ensureExperimentDoc();
+    let finalContrasts = contrasts && contrasts.length > 0 ? contrasts : [];
+    if (finalContrasts.length === 0) {
+      const spec = await this.readSpec();
+      if (spec.targetContrasts.length > 0) {
+        finalContrasts = spec.targetContrasts;
+      } else {
+        const groups = this.getDiscoveredGroups(spec);
+        if (groups.length >= 2) {
+          finalContrasts = [`${groups[0]} vs ${groups[1]}`];
+        }
+      }
+    }
+    if (finalContrasts.length > 0) {
+      await this.setTargetContrasts(finalContrasts);
+    } else {
+      await this.confirmExistingContrasts();
+    }
+    await this.setBatchConfounding(true);
+    return finalContrasts;
+  }
 };
 
-// src/agent/AdvisorService.ts
-var AdvisorService = class {
-  constructor(workspaceRoot, client, getPipelineState, onStartPipeline, onAdvisorUpdated, extensionUriPath) {
+// src/agent/AgentService.ts
+var AgentService = class {
+  constructor(workspaceRoot, client, getPipelineState, onStartPipeline, onAgentUpdated, extensionUriPath, onResumePipeline, onStopPipeline, onRestartPipeline) {
     this.workspaceRoot = workspaceRoot;
     this.client = client;
     this.getPipelineState = getPipelineState;
     this.onStartPipeline = onStartPipeline;
-    this.onAdvisorUpdated = onAdvisorUpdated;
+    this.onAgentUpdated = onAgentUpdated;
+    this.onResumePipeline = onResumePipeline;
+    this.onStopPipeline = onStopPipeline;
+    this.onRestartPipeline = onRestartPipeline;
     this.workspaceRoot = workspaceRoot || "";
     this.experimentManager = new ExperimentManager(this.workspaceRoot, extensionUriPath);
   }
@@ -4097,6 +4817,31 @@ var AdvisorService = class {
   abortRequested = false;
   experimentManager;
   lastHaltedPhaseId;
+  lastSuggestedContrast;
+  phaseEventsPosted = /* @__PURE__ */ new Set();
+  notifyUpdated() {
+    if (this.onAgentUpdated)
+      this.onAgentUpdated();
+  }
+  async triggerResume(phaseId) {
+    if (this.onResumePipeline) {
+      await this.onResumePipeline(phaseId);
+    } else if (this.onStartPipeline) {
+      await this.onStartPipeline(phaseId);
+    }
+  }
+  async triggerRestart() {
+    if (this.onRestartPipeline) {
+      await this.onRestartPipeline();
+    } else if (this.onStartPipeline) {
+      await this.onStartPipeline(void 0);
+    }
+  }
+  async triggerStop() {
+    if (this.onStopPipeline) {
+      await this.onStopPipeline();
+    }
+  }
   setWorkspaceRoot(newRoot) {
     this.workspaceRoot = newRoot || "";
     this.experimentManager.setWorkspaceRoot(this.workspaceRoot);
@@ -4129,9 +4874,9 @@ var AdvisorService = class {
     }
   }
   /**
-   * Defines agentic tools available to the Advisor for configuring experiment.md and driving execution.
+   * Defines agentic tools available to the Agent for configuring experiment.md and driving execution.
    */
-  getAdvisorTools() {
+  getAgentTools() {
     return [
       {
         name: "update_experiment_parameters",
@@ -4229,6 +4974,61 @@ var AdvisorService = class {
           },
           required: ["reason"]
         }
+      },
+      {
+        name: "resume_pipeline",
+        description: "Resumes execution of the autonomous analysis pipeline from the first incomplete phase or a specified phase.",
+        parameters: {
+          type: "object",
+          properties: {
+            fromPhase: {
+              type: "string",
+              description: "Optional specific phase ID to resume from (e.g. '04_expression'), or omit to resume from current checkpoint."
+            },
+            reason: {
+              type: "string",
+              description: "Reason why the pipeline is resuming"
+            }
+          },
+          required: []
+        }
+      },
+      {
+        name: "restart_pipeline",
+        description: "Restarts the entire autonomous analysis pipeline from Phase 0 from scratch.",
+        parameters: {
+          type: "object",
+          properties: {
+            reason: {
+              type: "string",
+              description: "Reason for restarting the pipeline"
+            }
+          },
+          required: []
+        }
+      },
+      {
+        name: "stop_pipeline",
+        description: "Pauses or stops the currently executing autonomous pipeline.",
+        parameters: {
+          type: "object",
+          properties: {
+            reason: {
+              type: "string",
+              description: "Reason for stopping the pipeline"
+            }
+          },
+          required: []
+        }
+      },
+      {
+        name: "get_pipeline_status",
+        description: "Fetches current pipeline execution status, completed phases, and error details.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: []
+        }
       }
     ];
   }
@@ -4245,7 +5045,7 @@ var AdvisorService = class {
         let promptText = "";
         let chips = [];
         if (firstMissing === "PATH_TO_DATA_FILE") {
-          promptText = "\u{1F44B} **Welcome to TidyProteomicsAgent!**\n\nI am your **Live Advisor**. Before starting the pipeline, let's configure your experiment.\n\n\u{1F449} **Question 1/4**: What is the file path or URL to your proteomics data file? *(e.g. `data/raw/ProteomeDiscoverer_proteins.xlsx` or `data/raw/data.rds`)*";
+          promptText = "\u{1F44B} **Welcome to TidyProteomicsAgent!**\n\nI am your **Live Agent**. Before starting the pipeline, let's configure your experiment.\n\n\u{1F449} **Question 1/4**: What is the file path or URL to your proteomics data file? *(e.g. `data/raw/ProteomeDiscoverer_proteins.xlsx` or `data/raw/data.rds`)*";
           chips = ["data/raw/tidyproteomics_data.rds", "Select File..."];
         } else if (firstMissing === "PLATFORM") {
           promptText = "\u{1F449} **Question 2/4**: Which mass spectrometry search platform generated this data?";
@@ -4263,8 +5063,7 @@ var AdvisorService = class {
           timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
           quickChips: chips
         });
-        if (this.onAdvisorUpdated)
-          this.onAdvisorUpdated();
+        this.notifyUpdated();
         return true;
       }
     } else if (this.messages.length === 0) {
@@ -4275,11 +5074,77 @@ var AdvisorService = class {
         timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
         quickChips: ["\u26A1 Yes, Start Pipeline", "Review docs/experiment.md \u2197"]
       });
-      if (this.onAdvisorUpdated)
-        this.onAdvisorUpdated();
+      this.notifyUpdated();
       return true;
     }
     return false;
+  }
+  /**
+   * Pushes a real-time activity card into the Agent chat when a phase starts execution.
+   */
+  handlePhaseStarted(phase) {
+    const key = `started_${phase.id}_${phase.startTime || Date.now()}`;
+    if (this.phaseEventsPosted.has(key))
+      return;
+    this.phaseEventsPosted.add(key);
+    const title = phase.title || phase.fileName;
+    const msg = {
+      id: "msg_start_" + phase.id + "_" + Date.now(),
+      role: "assistant",
+      content: `\u25B6 **[Starting Phase ${phase.id}]** ${title}`,
+      timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString()
+    };
+    this.messages.push(msg);
+    this.notifyUpdated();
+  }
+  /**
+   * Called when a phase completes successfully.
+   * Pushes a completion summary card into Agent chat.
+   */
+  async handlePhaseCompleted(phase) {
+    if (this.lastHaltedPhaseId === phase.id) {
+      this.lastHaltedPhaseId = void 0;
+    }
+    const key = `completed_${phase.id}_${phase.endTime || Date.now()}`;
+    if (!this.phaseEventsPosted.has(key)) {
+      this.phaseEventsPosted.add(key);
+      const title = phase.title || phase.fileName;
+      const dur = phase.durationSeconds ? `${phase.durationSeconds}s` : "completed";
+      const tokens = phase.tokenUsage?.totalTokens ? `${phase.tokenUsage.totalTokens.toLocaleString()} tokens` : "";
+      const metrics = [dur, tokens].filter(Boolean).join(", ");
+      const msg = {
+        id: "msg_done_" + phase.id + "_" + Date.now(),
+        role: "assistant",
+        content: `\u2713 **[Completed Phase ${phase.id}]** ${title}${metrics ? ` (${metrics})` : ""}`,
+        timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString()
+      };
+      this.messages.push(msg);
+      this.notifyUpdated();
+    }
+    return true;
+  }
+  /**
+   * Pushes an alert card when the entire pipeline finishes.
+   */
+  handlePipelineFinished(state) {
+    this.lastHaltedPhaseId = void 0;
+    const key = `pipeline_finished_${state.endTime || Date.now()}`;
+    if (this.phaseEventsPosted.has(key))
+      return;
+    this.phaseEventsPosted.add(key);
+    const totalToks = state.totalTokens?.totalTokens ? state.totalTokens.totalTokens.toLocaleString() : "0";
+    const msg = {
+      id: "msg_finished_" + Date.now(),
+      role: "assistant",
+      content: `\u{1F389} **Autonomous Pipeline Finished**: All phases completed successfully!
+
+\u2022 Total Tokens: **${totalToks}**
+\u2022 Final Synthesis & Figures compiled in \`docs/\` and \`data/\``,
+      timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
+      quickChips: ["Review docs/manuscript.md \u2197", "\u{1F4CA} Pipeline Status"]
+    };
+    this.messages.push(msg);
+    this.notifyUpdated();
   }
   /**
    * Automatically intercepts a halted or failed pipeline phase and prompts the user in Chat.
@@ -4296,13 +5161,20 @@ var AdvisorService = class {
     const isConfounding = /confound|Proceed With Potential Batch Confounding|Authorize Unadjusted Exploratory Comparison/i.test(errorText);
     const isSampleGrouping = /sample group|recoding|pooling|Section 3\.?B|reassign sample names/i.test(errorText);
     const isContrastNeeded = /contrast|target contrast|disease\/control|Section 3\.?C/i.test(errorText);
-    if (isConfounding) {
+    if (phase.id === "04" && (isConfounding || isContrastNeeded)) {
+      questionPrompt = `\u{1F3AF} **Contrast Confirmation & Confounding Authorization in ${phase.title || phase.fileName}**
+
+Phase 4 requires confirmation of target contrasts in Section 3.C and authorization of exploratory linear modeling in Section 3.D.
+
+Would you like to confirm the target contrast and authorize proceeding?`;
+      chips = ["\u{1F3AF} Confirm Contrast & Proceed", "Review docs/experiment.md \u2197"];
+    } else if (isConfounding) {
       questionPrompt = `\u26A0\uFE0F **Batch Confounding Alert in ${phase.title || phase.fileName}**
 
 The pipeline detected that biological conditions are correlated with technical processing batches. Linear models cannot mathematically separate batch variance from biology.
 
 **Would you like to authorize an exploratory comparison despite potential batch confounding?**`;
-      chips = ["\u26A1 Authorize Confounding & Resume", "No, do not proceed"];
+      chips = ["\u{1F3AF} Confirm Contrast & Proceed", "\u26A1 Authorize Confounding & Resume", "No, do not proceed"];
     } else if (isSampleGrouping) {
       questionPrompt = `\u{1F9EA} **Sample Renaming & Grouping Required in ${phase.title || phase.fileName}**
 
@@ -4312,7 +5184,7 @@ The ingested dataset contains raw sample names with technical batch tags. How wo
       questionPrompt = `\u{1F3AF} **Target Contrast Required in ${phase.title || phase.fileName}**
 
 Before calculating differential expression, what comparison would you like to test? *(e.g., \`Disease vs Control\` or \`Treated vs Vehicle\`)*`;
-      chips = ["Disease vs Control", "Treatment vs Control"];
+      chips = ["\u{1F3AF} Confirm Contrast & Proceed", "Disease vs Control", "Treatment vs Control"];
     } else {
       const firstLine = errorText.split("\n")[0] || "Phase paused.";
       questionPrompt = `\u26A0\uFE0F **Pipeline Paused in ${phase.title || phase.fileName}**
@@ -4329,20 +5201,15 @@ How would you like to resolve this? Tell me what changes to make in \`docs/exper
       timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
       quickChips: chips
     });
-    if (this.onAdvisorUpdated)
-      this.onAdvisorUpdated();
+    this.notifyUpdated();
   }
   /**
-   * Assembles the live context snapshot from the workspace to empower the advisor.
+   * Assembles the live context snapshot from the workspace to empower the agent.
    */
   async buildSystemPrompt() {
     const experiment = await this.readFileSafe(path9.join("docs", "experiment.md"));
     const notes = await this.readFileSafe(path9.join("docs", "notes.md"));
     const llm = await this.readFileSafe(path9.join("docs", "llm.md"));
-    let skill = await this.readFileSafe(path9.join("agent", "TIDYPROTEOMICS_IMPORT_INSPECT.md"));
-    if (!skill) {
-      skill = await this.readFileSafe(path9.join("agent", "TIDYPROTEOMICS_CORE.md"));
-    }
     let pipelineStatusText = "No pipeline state available.";
     if (this.getPipelineState) {
       try {
@@ -4365,7 +5232,7 @@ How would you like to resolve this? Tell me what changes to make in \`docs/exper
     }
     const spec = await this.experimentManager.readSpec();
     return `
-You are the **TidyProteomics Live Advisor**, an expert AI computational biologist and mass spectrometry proteomics specialist integrated directly inside VS Code.
+You are the **TidyProteomics Agent**, an expert AI computational biologist and mass spectrometry proteomics specialist integrated directly inside VS Code.
 You drive the research workflow interactively: you interview the researcher, configure \`docs/experiment.md\` using your tools, answer scientific questions, resolve batch confounding or contrast ambiguities, and start/resume the pipeline.
 
 ### CURRENT WORKSPACE STATE & SPECIFICATION:
@@ -4396,11 +5263,11 @@ ${notes ? notes.slice(-3e3) : "No runtime notes found."}
 ${llm || "Not specified."}
 \`\`\`
 
-${skill ? `#### TidyProteomics Key API Reference:
-${skill.slice(0, 2500)}
-` : ""}
+#### TidyProteomics Execution Engine:
+- **Engine**: Persistent in-memory tidyproteomics R session via Model Context Protocol (MCP).
+- **Live In-Memory Workflow**: Automated ingestion (\`tpa_load\`), QC inspection (\`tpa_inspect\`, \`tpa_summary\`), normalization benchmarking (\`tpa_normalize\`), quantitative imputation (\`tpa_impute\`), differential expression (\`tpa_expression\`), pathway enrichment (\`tpa_enrichment\`), and state export (\`tpa_export_state\`).
 
-### ADVISOR RESPONSIBILITIES & TOOL CALLING:
+### AGENT RESPONSIBILITIES & TOOL CALLING:
 1. **Interactive Setup**: If initial variables are missing, guide the user step-by-step. When the user provides a dataset path, platform, analyte, or description, invoke the corresponding tool (\`update_experiment_parameters\` or \`update_experiment_description\`) to update \`docs/experiment.md\` immediately!
 2. **Launch Permission**: When all 4 initial fields are satisfied, ask the user if they are ready to start. When they confirm (e.g. "yes", "start", "proceed"), call \`start_or_resume_pipeline\`.
 3. **Resolve Phase Errors**:
@@ -4411,11 +5278,11 @@ ${skill.slice(0, 2500)}
 `.trim();
   }
   /**
-   * Sends a user query to the advisor and streams/returns the response.
+   * Sends a user query to the agent and streams/returns the response.
    */
   async sendMessage(userText, onToken) {
     if (this.isBusy) {
-      throw new Error("Advisor is already generating a response.");
+      throw new Error("Agent is already generating a response.");
     }
     this.isBusy = true;
     this.abortRequested = false;
@@ -4427,41 +5294,112 @@ ${skill.slice(0, 2500)}
       content: userText,
       timestamp: userTimestamp
     });
-    if (this.onAdvisorUpdated)
-      this.onAdvisorUpdated();
-    console.log("[AdvisorService] Received user query:", userText);
+    this.notifyUpdated();
+    console.log("[AgentService] Received user query:", userText);
     try {
       const trimmed = userText.trim();
       const lower = trimmed.toLowerCase();
-      const isStartAffirmative = /^(yes|start|run|proceed|ready|start pipeline|run pipeline|yes,? start pipeline|⚡ yes, start pipeline)$/i.test(lower);
+      const isStopIntent = /^(?:stop|pause|abort|halt|cancel)(?:\s+(?:the\s+)?pipeline)?$/i.test(trimmed) || /^(?:please\s+)?(?:stop|pause|abort|halt)\b/i.test(trimmed);
+      if (isStopIntent) {
+        await this.triggerStop();
+        const reply = "\u23F9 **Pipeline Paused**: Execution paused by user.";
+        if (onToken)
+          onToken(reply);
+        const agentMsg2 = {
+          id: "msg_" + Date.now() + "_a",
+          role: "assistant",
+          content: reply,
+          timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
+          quickChips: ["\u25B6 Resume Pipeline", "\u{1F4CA} Pipeline Status"]
+        };
+        this.messages.push(agentMsg2);
+        await this.logAgentTurn(userText, reply);
+        this.notifyUpdated();
+        return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+      }
+      const isRestartIntent = /^(?:restart|start over|re-run all|run from (?:the )?beginning|run from scratch|restart pipeline)$/i.test(trimmed) || /\b(?:restart|re-run all)\s+(?:the\s+)?pipeline\b/i.test(trimmed);
+      if (isRestartIntent) {
+        const reply = "\u{1F504} **Restarting Pipeline**: Re-executing all phases from Phase 0...";
+        if (onToken)
+          onToken(reply);
+        const agentMsg2 = {
+          id: "msg_" + Date.now() + "_a",
+          role: "assistant",
+          content: reply,
+          timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString()
+        };
+        this.messages.push(agentMsg2);
+        await this.triggerRestart();
+        await this.logAgentTurn(userText, reply);
+        this.notifyUpdated();
+        return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+      }
+      const isStatusIntent = /^(?:status|pipeline status|how are we doing\??|what phase are we on\??|current status\??)$/i.test(trimmed);
+      if (isStatusIntent && this.getPipelineState) {
+        const state = await this.getPipelineState();
+        let statusReply = "\u{1F4CA} **Autonomous Pipeline Status**:\n\n";
+        if (state && Array.isArray(state.phases) && state.phases.length > 0) {
+          const phasesList = state.phases.map((p, idx) => {
+            const icon = p.status === "completed" ? "\u2713" : p.status === "failed" ? "\u274C" : p.status === "running" ? "\u25B6" : "\u23F3";
+            let s = `${icon} **Phase ${p.id}**: ${p.title || p.fileName} (${p.status.toUpperCase()})`;
+            if (p.durationSeconds)
+              s += ` - ${p.durationSeconds}s`;
+            if (p.error)
+              s += `
+   \u21B3 *Checkpoint/Error*: ${p.error.split("\n")[0]}`;
+            return s;
+          }).join("\n");
+          statusReply += phasesList;
+          const totalToks = state.totalTokens?.totalTokens || 0;
+          statusReply += `
+
+**Total Tokens**: ${totalToks.toLocaleString()}`;
+        } else {
+          statusReply += "No active pipeline phases found.";
+        }
+        if (onToken)
+          onToken(statusReply);
+        const agentMsg2 = {
+          id: "msg_" + Date.now() + "_a",
+          role: "assistant",
+          content: statusReply,
+          timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
+          quickChips: ["\u25B6 Resume Pipeline", "Review docs/experiment.md \u2197"]
+        };
+        this.messages.push(agentMsg2);
+        await this.logAgentTurn(userText, statusReply);
+        this.notifyUpdated();
+        return { reply: statusReply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+      }
       const isAuthorizeAffirmative = /^(authorize|authorize and resume|authorize confounding|yes,? authorize|yes,? proceed|⚡ authorize confounding & resume)$/i.test(lower);
+      const isConfirmContrastAffirmative = /^(🎯\s*)?confirm contrast(?:\s*(&|and)\s*proceed)?$/i.test(trimmed) || /\bconfirm contrast\b/i.test(lower) && /\bproceed\b/i.test(lower) || /\bconfirm.*contrast.*proceed\b/i.test(lower);
       const preSpec = await this.experimentManager.readSpec();
       if (preSpec.missingInitialFields.length > 0) {
         const step = preSpec.missingInitialFields[0];
         let reply = "";
         let chips = [];
         if (step === "PATH_TO_DATA_FILE") {
-          console.log("[AdvisorService] Saving PATH_TO_DATA_FILE:", trimmed);
+          console.log("[AgentService] Saving PATH_TO_DATA_FILE:", trimmed);
           await this.experimentManager.setParameter("PATH_TO_DATA_FILE", trimmed);
           reply = `\u2705 **Saved Data File**: Configured \`PATH_TO_DATA_FILE: ${trimmed}\` in \`docs/experiment.md\`.
 
 \u{1F449} **Question 2/4**: Which mass spectrometry search platform generated this data?`;
           chips = ["ProteomeDiscoverer", "MaxQuant", "DIA-NN", "Spectronaut", "FragPipe", "tidyproteomics"];
         } else if (step === "PLATFORM") {
-          console.log("[AdvisorService] Saving PLATFORM:", trimmed);
+          console.log("[AgentService] Saving PLATFORM:", trimmed);
           await this.experimentManager.setParameter("PLATFORM", trimmed);
           reply = `\u2705 **Saved Search Platform**: Configured \`PLATFORM: ${trimmed}\` in \`docs/experiment.md\`.
 
 \u{1F449} **Question 3/4**: Is this dataset measuring \`proteins\` or \`peptides\`?`;
           chips = ["proteins", "peptides"];
         } else if (step === "ANALYTE") {
-          console.log("[AdvisorService] Saving ANALYTE:", trimmed);
+          console.log("[AgentService] Saving ANALYTE:", trimmed);
           await this.experimentManager.setParameter("ANALYTE", trimmed);
           reply = `\u2705 **Saved Analyte**: Configured \`ANALYTE: ${trimmed}\` in \`docs/experiment.md\`.
 
 \u{1F449} **Question 4/4**: Could you briefly describe this experiment? *(e.g. biological model, treatment conditions, disease vs control groups, and key hypotheses)*`;
         } else if (step === "DESCRIPTION") {
-          console.log("[AdvisorService] Saving DESCRIPTION");
+          console.log("[AgentService] Saving DESCRIPTION");
           await this.experimentManager.setDescription(trimmed);
           reply = `\u2705 **Saved Experiment Description**: Updated Section 2 in \`docs/experiment.md\`.
 
@@ -4473,45 +5411,46 @@ ${skill.slice(0, 2500)}
         if (reply) {
           if (onToken)
             onToken(reply);
-          const advMsg2 = {
+          const agentMsg2 = {
             id: "msg_" + Date.now() + "_a",
             role: "assistant",
             content: reply,
             timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
             quickChips: chips.length > 0 ? chips : void 0
           };
-          this.messages.push(advMsg2);
-          await this.logAdvisorTurn(userText, reply);
-          if (this.onAdvisorUpdated)
-            this.onAdvisorUpdated();
+          this.messages.push(agentMsg2);
+          await this.logAgentTurn(userText, reply);
+          this.notifyUpdated();
           return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
         }
       }
+      if (isConfirmContrastAffirmative || this.lastHaltedPhaseId && isAuthorizeAffirmative) {
+        const confirmed = await this.experimentManager.confirmContrastAndAuthorizeConfounding();
+        const contrastLabel = confirmed.length > 0 ? ` (\`${confirmed.join(", ")}\`)` : "";
+        const reply = `\u2705 **Confirmed Target Contrast & Authorized Confounding**: Set target contrast${contrastLabel} as confirmed in Section 3.C and set \`Proceed With Potential Batch Confounding: TRUE\` in Section 3.D of \`docs/experiment.md\`.
+
+Resuming differential expression analysis (Phase 04)...`;
+        if (onToken)
+          onToken(reply);
+        const agentMsg2 = {
+          id: "msg_" + Date.now() + "_a",
+          role: "assistant",
+          content: reply,
+          timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString()
+        };
+        this.messages.push(agentMsg2);
+        const resumeId = this.lastHaltedPhaseId || "04";
+        this.lastHaltedPhaseId = void 0;
+        this.lastSuggestedContrast = void 0;
+        await this.triggerResume(resumeId);
+        await this.logAgentTurn(userText, reply);
+        this.notifyUpdated();
+        return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+      }
       if (this.lastHaltedPhaseId) {
-        if (isAuthorizeAffirmative) {
-          await this.experimentManager.setBatchConfounding(true);
-          const reply = "\u2705 **Authorized Batch Confounding**: Updated `docs/experiment.md` (`Proceed With Potential Batch Confounding: TRUE`).\n\nResuming the pipeline now...";
-          if (onToken)
-            onToken(reply);
-          const advMsg2 = {
-            id: "msg_" + Date.now() + "_a",
-            role: "assistant",
-            content: reply,
-            timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString()
-          };
-          this.messages.push(advMsg2);
-          const resumeId = this.lastHaltedPhaseId;
-          this.lastHaltedPhaseId = void 0;
-          if (this.onStartPipeline) {
-            await this.onStartPipeline(resumeId);
-          }
-          await this.logAdvisorTurn(userText, reply);
-          if (this.onAdvisorUpdated)
-            this.onAdvisorUpdated();
-          return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
-        }
         const contrastMatch = trimmed.match(/^([a-zA-Z0-9_-]+)\s*(?:\/|vs\.?|versus)\s*([a-zA-Z0-9_-]+)$/i);
-        if (contrastMatch) {
+        const isContrastPhase = this.lastHaltedPhaseId.includes("04_expression") || !!this.lastSuggestedContrast;
+        if (contrastMatch && isContrastPhase) {
           const contrast = `${contrastMatch[1]} vs ${contrastMatch[2]}`;
           await this.experimentManager.setTargetContrasts([contrast]);
           const reply = `\u2705 **Configured Target Contrast**: Saved \`- Contrast: ${contrast}\` in \`docs/experiment.md\`.
@@ -4519,25 +5458,60 @@ ${skill.slice(0, 2500)}
 Resuming differential expression analysis now...`;
           if (onToken)
             onToken(reply);
-          const advMsg2 = {
+          const agentMsg2 = {
             id: "msg_" + Date.now() + "_a",
             role: "assistant",
             content: reply,
             timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString()
           };
-          this.messages.push(advMsg2);
+          this.messages.push(agentMsg2);
           const resumeId = this.lastHaltedPhaseId;
           this.lastHaltedPhaseId = void 0;
-          if (this.onStartPipeline) {
-            await this.onStartPipeline(resumeId);
-          }
-          await this.logAdvisorTurn(userText, reply);
-          if (this.onAdvisorUpdated)
-            this.onAdvisorUpdated();
+          this.lastSuggestedContrast = void 0;
+          await this.triggerResume(resumeId);
+          await this.logAgentTurn(userText, reply);
+          this.notifyUpdated();
           return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
         }
       }
+      const isQuestion = /\?|whats the issue|why did|why is|how do/i.test(lower);
+      const isResumeKeyword = /^(yes|start|run|proceed|ready|continue|resume|go|go ahead|let'?s go|start pipeline|run pipeline|resume pipeline|yes,? start pipeline|⚡ yes, start pipeline)$/i.test(lower) || /\b(?:please\s+)?(?:proceed|continue)\b/i.test(lower) || /\b(?:start|run|resume)\s+(?:the\s+)?pipeline\b/i.test(lower);
+      const isStartAffirmative = !isQuestion && isResumeKeyword;
       if (isStartAffirmative) {
+        let state;
+        if (this.getPipelineState) {
+          try {
+            state = await this.getPipelineState();
+          } catch {
+          }
+        }
+        if (state && Array.isArray(state.phases) && state.phases.length > 0) {
+          const activePhases = state.phases.filter((p) => p.enabled !== false);
+          const allCompleted = activePhases.length > 0 && activePhases.every((p) => p.status === "completed");
+          if (allCompleted) {
+            this.lastHaltedPhaseId = void 0;
+            const reply = "\u{1F389} All pipeline phases are already completed! To re-run the entire pipeline from scratch, click 'Restart Pipeline' or type 'restart'.";
+            if (onToken)
+              onToken(reply);
+            const agentMsg2 = {
+              id: "msg_" + Date.now() + "_a",
+              role: "assistant",
+              content: reply,
+              timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
+              quickChips: ["\u{1F504} Restart Pipeline", "Review docs/manuscript.md \u2197"]
+            };
+            this.messages.push(agentMsg2);
+            await this.logAgentTurn(userText, reply);
+            this.notifyUpdated();
+            return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+          }
+          if (this.lastHaltedPhaseId) {
+            const haltedPhase = state.phases.find((p) => p.id === this.lastHaltedPhaseId);
+            if (haltedPhase && haltedPhase.status === "completed") {
+              this.lastHaltedPhaseId = void 0;
+            }
+          }
+        }
         const spec = await this.experimentManager.readSpec();
         if (spec.missingInitialFields.length === 0) {
           const cfg2 = this.client.getConfig();
@@ -4545,55 +5519,82 @@ Resuming differential expression analysis now...`;
             const reply2 = "\u26A0\uFE0F **API Key Required**: Please configure an API Key in the **Provider** tab before launching the autonomous pipeline.";
             if (onToken)
               onToken(reply2);
-            const advMsg3 = {
+            const agentMsg3 = {
               id: "msg_" + Date.now() + "_a",
               role: "assistant",
               content: reply2,
               timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
               quickChips: ["Switch to Provider Tab \u2197"]
             };
-            this.messages.push(advMsg3);
-            if (this.onAdvisorUpdated)
-              this.onAdvisorUpdated();
+            this.messages.push(agentMsg3);
+            this.notifyUpdated();
             return { reply: reply2, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
           }
-          const reply = "\u{1F680} **Starting Pipeline Execution**: Everything in `docs/experiment.md` is verified. Triggering the autonomous analysis pipeline now!";
+          let resumeId = this.lastHaltedPhaseId;
+          let resumeTitle = "";
+          if (state && Array.isArray(state.phases)) {
+            if (!resumeId) {
+              const incomplete = state.phases.find((p) => p.enabled !== false && p.status !== "completed");
+              if (incomplete) {
+                resumeId = incomplete.id;
+                resumeTitle = incomplete.title;
+              } else {
+                this.lastHaltedPhaseId = void 0;
+                const reply2 = "\u{1F389} All pipeline phases are already completed! To re-run the entire pipeline from scratch, click 'Restart Pipeline' or type 'restart'.";
+                if (onToken)
+                  onToken(reply2);
+                const agentMsg3 = {
+                  id: "msg_" + Date.now() + "_a",
+                  role: "assistant",
+                  content: reply2,
+                  timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
+                  quickChips: ["\u{1F504} Restart Pipeline", "Review docs/manuscript.md \u2197"]
+                };
+                this.messages.push(agentMsg3);
+                await this.logAgentTurn(userText, reply2);
+                this.notifyUpdated();
+                return { reply: reply2, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+              }
+            } else {
+              const found = state.phases.find((p) => p.id === resumeId);
+              if (found)
+                resumeTitle = found.title;
+            }
+          }
+          const targetDisplay = resumeId ? `Phase ${resumeId}${resumeTitle ? ` (${resumeTitle})` : ""}` : "the autonomous pipeline";
+          const reply = `\u{1F680} **Resuming Pipeline Execution**: Verification passed. Continuing ${targetDisplay}...`;
           if (onToken)
             onToken(reply);
-          const advMsg2 = {
+          const agentMsg2 = {
             id: "msg_" + Date.now() + "_a",
             role: "assistant",
             content: reply,
             timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString()
           };
-          this.messages.push(advMsg2);
-          const resumeId = this.lastHaltedPhaseId;
+          this.messages.push(agentMsg2);
           this.lastHaltedPhaseId = void 0;
-          if (this.onStartPipeline) {
-            await this.onStartPipeline(resumeId);
-          }
-          await this.logAdvisorTurn(userText, reply);
-          if (this.onAdvisorUpdated)
-            this.onAdvisorUpdated();
+          this.lastSuggestedContrast = void 0;
+          await this.triggerResume(resumeId);
+          await this.logAgentTurn(userText, reply);
+          this.notifyUpdated();
           return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
         }
       }
       const cfg = this.client.getConfig();
       if (cfg.provider !== "ollama" && !cfg.apiKey) {
-        const reply = "\u26A0\uFE0F **API Key Required**: To chat with the Live Advisor on open-ended scientific topics, please configure an API Key in the **Provider** tab.";
+        const reply = "\u26A0\uFE0F **API Key Required**: To chat with the Live Agent on open-ended scientific topics, please configure an API Key in the **Provider** tab.";
         if (onToken)
           onToken(reply);
-        const advMsg2 = {
+        const agentMsg2 = {
           id: "msg_" + Date.now() + "_a",
           role: "assistant",
           content: reply,
           timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
           quickChips: ["Switch to Provider Tab \u2197"]
         };
-        this.messages.push(advMsg2);
-        await this.logAdvisorTurn(userText, reply);
-        if (this.onAdvisorUpdated)
-          this.onAdvisorUpdated();
+        this.messages.push(agentMsg2);
+        await this.logAgentTurn(userText, reply);
+        this.notifyUpdated();
         return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
       }
       const systemPrompt = await this.buildSystemPrompt();
@@ -4603,8 +5604,8 @@ Resuming differential expression analysis now...`;
         content: m.content
       }));
       let accumulatedContent = "";
-      const tools = this.getAdvisorTools();
-      console.log(`[AdvisorService] Sending query to ${cfg.provider} (${cfg.model})...`);
+      const tools = this.getAgentTools();
+      console.log(`[AgentService] Sending query to ${cfg.provider} (${cfg.model})...`);
       const response = await this.client.chat({
         system: systemPrompt,
         messages: chatMessages,
@@ -4673,17 +5674,36 @@ Resuming differential expression analysis now...`;
                 pipelineTriggered = true;
                 break;
               }
-              case "start_or_resume_pipeline": {
+              case "start_or_resume_pipeline":
+              case "resume_pipeline": {
                 pipelineTriggered = true;
-                if (tc.args?.phaseId)
-                  resumePhaseId = tc.args.phaseId;
+                const chosen = tc.args?.fromPhase || tc.args?.phaseId;
+                if (chosen)
+                  resumePhaseId = chosen;
                 executedActionSummary += `
-\u2022 Triggering pipeline execution (${tc.args?.reason || "User confirmed"})`;
+\u2022 Resuming autonomous pipeline (${tc.args?.reason || "User requested"})`;
+                break;
+              }
+              case "restart_pipeline": {
+                await this.triggerRestart();
+                executedActionSummary += `
+\u2022 Restarted autonomous pipeline from scratch (${tc.args?.reason || "User requested"})`;
+                break;
+              }
+              case "stop_pipeline": {
+                await this.triggerStop();
+                executedActionSummary += `
+\u2022 Paused autonomous pipeline (${tc.args?.reason || "User requested"})`;
+                break;
+              }
+              case "get_pipeline_status": {
+                executedActionSummary += `
+\u2022 Queried pipeline execution status`;
                 break;
               }
             }
           } catch (toolErr) {
-            console.error(`[AdvisorService] Error executing tool ${tc.name}:`, toolErr);
+            console.error(`[AgentService] Error executing tool ${tc.name}:`, toolErr);
           }
         }
       }
@@ -4716,27 +5736,42 @@ Resuming differential expression analysis now...`;
         finalReply += followUpQuestion;
       }
       if (this.abortRequested) {
-        finalReply += "\n\n*(Advisor response cancelled by user)*";
+        finalReply += "\n\n*(Agent response cancelled by user)*";
       }
-      const advisorMsgId = "msg_" + Date.now() + "_a";
-      const advisorTimestamp = (/* @__PURE__ */ new Date()).toLocaleTimeString();
-      const advMsg = {
-        id: advisorMsgId,
+      const agentMsgId = "msg_" + Date.now() + "_a";
+      const agentTimestamp = (/* @__PURE__ */ new Date()).toLocaleTimeString();
+      const agentMsg = {
+        id: agentMsgId,
         role: "assistant",
         content: finalReply,
-        timestamp: advisorTimestamp,
+        timestamp: agentTimestamp,
         quickChips: followUpChips.length > 0 ? followUpChips : void 0
       };
-      this.messages.push(advMsg);
-      await this.logAdvisorTurn(userText, finalReply, response.usage);
-      if (pipelineTriggered && this.onStartPipeline) {
+      this.messages.push(agentMsg);
+      await this.logAgentTurn(userText, finalReply, response.usage);
+      if (pipelineTriggered) {
+        if (this.getPipelineState) {
+          try {
+            const state = await this.getPipelineState();
+            if (state && Array.isArray(state.phases)) {
+              if (resumePhaseId) {
+                const phaseObj = state.phases.find((p) => p.id === resumePhaseId);
+                if (phaseObj && phaseObj.status === "completed") {
+                  const incomplete = state.phases.find((p) => p.enabled !== false && p.status !== "completed");
+                  resumePhaseId = incomplete ? incomplete.id : void 0;
+                }
+              }
+            }
+          } catch {
+          }
+        }
         this.lastHaltedPhaseId = void 0;
-        this.onStartPipeline(resumePhaseId).catch((err) => {
-          console.error("[AdvisorService] Error running pipeline after advisor resolution:", err);
+        this.lastSuggestedContrast = void 0;
+        this.triggerResume(resumePhaseId).catch((err) => {
+          console.error("[AgentService] Error running pipeline after agent resolution:", err);
         });
       }
-      if (this.onAdvisorUpdated)
-        this.onAdvisorUpdated();
+      this.notifyUpdated();
       return {
         reply: finalReply,
         usage: response.usage
@@ -4746,11 +5781,16 @@ Resuming differential expression analysis now...`;
       this.abortRequested = false;
     }
   }
-  async logAdvisorTurn(userText, advisorReply, usage) {
+  async logAgentTurn(userText, agentReply, usage) {
     if (!this.workspaceRoot)
       return;
     try {
-      const logDir = path9.join(this.workspaceRoot, "logs", "advisor");
+      const legacyLogDir = path9.join(this.workspaceRoot, "logs", "advisor");
+      const logDir = path9.join(this.workspaceRoot, "logs", "agent");
+      if (fsSync3.existsSync(legacyLogDir) && !fsSync3.existsSync(logDir)) {
+        await fs9.rename(legacyLogDir, logDir).catch(() => {
+        });
+      }
       if (!fsSync3.existsSync(logDir)) {
         await fs9.mkdir(logDir, { recursive: true });
       }
@@ -4762,15 +5802,15 @@ Resuming differential expression analysis now...`;
 ### [${d}] User:
 ${userText}
 
-### [${d}] Advisor${tokensInfo}:
-${advisorReply}
+### [${d}] Agent${tokensInfo}:
+${agentReply}
 
 ---
 `;
       if (!fsSync3.existsSync(logFile)) {
-        const header = `# TidyProteomics Live Advisor Chat Trace
+        const header = `# TidyProteomics Agent Chat Trace
 
-This log records consultative dialogues between the user and the TidyProteomics Live Advisor.
+This log records consultative dialogues between the user and the TidyProteomics Agent.
 
 ---
 `;
@@ -4779,8 +5819,330 @@ This log records consultative dialogues between the user and the TidyProteomics 
         await fs9.appendFile(logFile, entry, "utf-8");
       }
     } catch (err) {
-      console.error("[AdvisorService] Error logging advisor turn:", err);
+      console.error("[AgentService] Error logging agent turn:", err);
     }
+  }
+  logAdvisorTurn = (userText, reply, usage) => this.logAgentTurn(userText, reply, usage);
+  getAdvisorTools = () => this.getAgentTools();
+};
+
+// src/agent/providers/ExecutionManager.ts
+var vscode3 = __toESM(require("vscode"));
+
+// src/agent/providers/McpExecutionProvider.ts
+var path10 = __toESM(require("path"));
+var fs10 = __toESM(require("fs"));
+var readline2 = __toESM(require("readline"));
+var import_child_process4 = require("child_process");
+var vscode2 = __toESM(require("vscode"));
+var McpExecutionProvider = class {
+  mode = "mcp";
+  proc = null;
+  rl = null;
+  workspaceRoot = "";
+  msgId = 0;
+  pendingRequests = /* @__PURE__ */ new Map();
+  tools = [];
+  isReady() {
+    return this.proc !== null && this.tools.length > 0;
+  }
+  async initialize(workspaceRoot) {
+    this.workspaceRoot = workspaceRoot;
+    const config = vscode2.workspace.getConfiguration("tidyproteomicsagent");
+    const mcpMode = config.get("mcpMode") || "local";
+    let targetWorkspace = workspaceRoot;
+    if (mcpMode === "docker") {
+      const dockerImage = config.get("dockerImage") || "tidyproteomics-mcp:latest";
+      targetWorkspace = "/workspace";
+      this.proc = (0, import_child_process4.spawn)(
+        "docker",
+        [
+          "run",
+          "-i",
+          "--rm",
+          "-v",
+          `${workspaceRoot}:/workspace`,
+          "-e",
+          "WORKSPACE=/workspace",
+          dockerImage
+        ],
+        {
+          cwd: workspaceRoot,
+          stdio: ["pipe", "pipe", "pipe"]
+        }
+      );
+    } else {
+      let serverRelPath = config.get("mcpServerPath") || path10.resolve(workspaceRoot, "../tidyproteomics/mcp/server.py");
+      const candidatePaths = [
+        path10.isAbsolute(serverRelPath) ? serverRelPath : path10.resolve(workspaceRoot, serverRelPath),
+        path10.resolve(workspaceRoot, "../tidyproteomics/mcp/server.py"),
+        path10.resolve(workspaceRoot, "mcp/server.py"),
+        path10.resolve(process.env.HOME || "", "Local/github/tidyproteomics/mcp/server.py")
+      ];
+      let serverPath = "";
+      for (const p of candidatePaths) {
+        if (fs10.existsSync(p)) {
+          serverPath = p;
+          break;
+        }
+      }
+      if (!serverPath) {
+        throw new Error(
+          `tidyproteomics MCP server script not found. Checked:
+${candidatePaths.join("\n")}
+
+Tip: You can set tidyproteomicsagent.mcpMode to "docker" in VSCode Settings to run containerized without local Python/R dependencies.`
+        );
+      }
+      const pythonBin = config.get("pythonPath") || (fs10.existsSync("/opt/homebrew/bin/python3") ? "/opt/homebrew/bin/python3" : process.env.PYTHON || "python3");
+      this.proc = (0, import_child_process4.spawn)(pythonBin, [serverPath], {
+        cwd: workspaceRoot,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+    }
+    if (!this.proc.stdout || !this.proc.stdin) {
+      throw new Error("Failed to initialize MCP stdio channels.");
+    }
+    this.proc.on("error", (err) => {
+      console.error("[McpExecutionProvider] Process error:", err);
+      for (const { reject } of this.pendingRequests.values()) {
+        reject(new Error(`MCP server failed to spawn: ${err.message}`));
+      }
+      this.pendingRequests.clear();
+    });
+    this.rl = readline2.createInterface({
+      input: this.proc.stdout,
+      terminal: false
+    });
+    this.rl.on("line", (line) => {
+      const trimmed = line.trim();
+      if (!trimmed)
+        return;
+      try {
+        const msg = JSON.parse(trimmed);
+        const id = msg.id;
+        if (id !== void 0 && this.pendingRequests.has(id)) {
+          const { resolve: resolve3, reject } = this.pendingRequests.get(id);
+          this.pendingRequests.delete(id);
+          if (msg.error) {
+            reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+          } else {
+            resolve3(msg.result);
+          }
+        }
+      } catch (err) {
+        console.error("[McpExecutionProvider] Failed to parse message line:", line, err);
+      }
+    });
+    this.proc.on("exit", (code, signal) => {
+      console.warn(`[McpExecutionProvider] Process exited with code ${code}, signal ${signal}`);
+      for (const { reject } of this.pendingRequests.values()) {
+        reject(new Error(`MCP server exited prematurely (code: ${code})`));
+      }
+      this.pendingRequests.clear();
+    });
+    await this.sendRequest("initialize", {
+      protocolVersion: "2024-11-05",
+      clientInfo: { name: "TidyProteomicsAgent", version: "1.0.0" },
+      workspaceRoot: targetWorkspace,
+      rootPath: targetWorkspace
+    });
+    this.sendNotification("notifications/initialized");
+    const toolsResp = await this.sendRequest("tools/list", {});
+    this.tools = toolsResp.tools || [];
+    try {
+      await this.callTool("tpa_set_workspace", { workspace: targetWorkspace, reset: false });
+    } catch (err) {
+      console.warn("[McpExecutionProvider] Notice: tpa_set_workspace error:", err);
+    }
+  }
+  sendRequest(method, params = {}) {
+    return new Promise((resolve3, reject) => {
+      if (!this.proc || !this.proc.stdin) {
+        return reject(new Error("MCP process is not running."));
+      }
+      const id = ++this.msgId;
+      this.pendingRequests.set(id, { resolve: resolve3, reject });
+      const payload = JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n";
+      this.proc.stdin.write(payload);
+    });
+  }
+  sendNotification(method, params = {}) {
+    if (!this.proc || !this.proc.stdin)
+      return;
+    const payload = JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n";
+    this.proc.stdin.write(payload);
+  }
+  async dispose() {
+    if (this.rl) {
+      this.rl.close();
+      this.rl = null;
+    }
+    if (this.proc) {
+      try {
+        this.proc.kill("SIGTERM");
+      } catch (_) {
+      }
+      this.proc = null;
+    }
+    this.pendingRequests.clear();
+  }
+  activePhase = "";
+  setActivePhase(phaseName) {
+    if (!phaseName)
+      return;
+    this.activePhase = path10.basename(phaseName).replace(/\.md$/i, "").toLowerCase();
+  }
+  getRegisteredTools() {
+    return this.tools;
+  }
+  async executeTool(name, args) {
+    const res = await this.callTool(name, args);
+    try {
+      this.mirrorOutputToLogs(name, args, res.content);
+    } catch (_) {
+    }
+    return res.content;
+  }
+  mirrorOutputToLogs(toolName, args, output) {
+    if (!this.workspaceRoot)
+      return;
+    const logsDir = path10.join(this.workspaceRoot, "logs");
+    let targetPhase = this.activePhase;
+    if (!targetPhase) {
+      try {
+        if (fs10.existsSync(logsDir)) {
+          const entries = fs10.readdirSync(logsDir, { withFileTypes: true });
+          const subdirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith(".")).map((e) => path10.join(logsDir, e.name)).sort((a, b) => {
+            try {
+              return fs10.statSync(b).mtimeMs - fs10.statSync(a).mtimeMs;
+            } catch {
+              return 0;
+            }
+          });
+          if (subdirs.length > 0) {
+            targetPhase = path10.basename(subdirs[0]);
+          }
+        }
+      } catch (_) {
+      }
+    }
+    if (!targetPhase)
+      return;
+    try {
+      const targetDir = path10.join(logsDir, targetPhase);
+      if (!fs10.existsSync(targetDir)) {
+        fs10.mkdirSync(targetDir, { recursive: true });
+      }
+      const targetLogFile = path10.join(targetDir, "console.log");
+      const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+      const entry = `
+[${timestamp}] [MCP Tool] ${toolName}(${JSON.stringify(args)})
+${output}
+`;
+      fs10.appendFileSync(targetLogFile, entry, "utf-8");
+    } catch (_) {
+    }
+  }
+  async callTool(name, args = {}) {
+    const res = await this.sendRequest("tools/call", { name, arguments: args });
+    const content = (res.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
+    return {
+      success: !res.isError,
+      content,
+      isError: !!res.isError
+    };
+  }
+};
+
+// src/agent/providers/ExecutionManager.ts
+var ExecutionManager = class {
+  constructor(workspaceRoot, toolRegistry) {
+    this.workspaceRoot = workspaceRoot;
+    this.toolRegistry = toolRegistry;
+    this.currentProvider = new McpExecutionProvider();
+    this.statusBarItem = vscode3.window.createStatusBarItem(
+      vscode3.StatusBarAlignment.Right,
+      100
+    );
+    this.statusBarItem.command = "tidyproteomicsagent.toggleEngine";
+    this.updateStatusBar();
+    this.statusBarItem.show();
+  }
+  currentProvider;
+  statusBarItem;
+  setWorkspaceRoot(newRoot) {
+    this.workspaceRoot = newRoot || "";
+  }
+  async initialize() {
+    try {
+      await this.currentProvider.initialize(this.workspaceRoot);
+      this.syncToolRegistry();
+      this.updateStatusBar();
+    } catch (err) {
+      console.warn(`[ExecutionManager] Failed to initialize MCP provider:`, err);
+      vscode3.window.showErrorMessage(
+        `Failed to connect to TidyProteomics MCP Server: ${err.message || String(err)}`
+      );
+      this.updateStatusBar(false);
+    }
+  }
+  get provider() {
+    return this.currentProvider;
+  }
+  get mode() {
+    return "mcp";
+  }
+  async setMode(_newMode) {
+    await this.initialize();
+  }
+  async toggleEngine() {
+    const ready = this.currentProvider.isReady();
+    if (ready) {
+      const toolsCount = this.currentProvider.getRegisteredTools().length;
+      vscode3.window.showInformationMessage(
+        `TidyProteomics MCP Engine active (${toolsCount} tools registered in memory).`
+      );
+    } else {
+      vscode3.window.showInformationMessage(
+        "TidyProteomics MCP Engine is initializing or reconnecting..."
+      );
+      await this.initialize();
+    }
+  }
+  syncToolRegistry() {
+    if (!this.toolRegistry)
+      return;
+    const mcpTools = this.currentProvider.getRegisteredTools();
+    const toolDefs = mcpTools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      parameters: {
+        type: "object",
+        properties: t.inputSchema?.properties || {},
+        required: t.inputSchema?.required || []
+      }
+    }));
+    this.toolRegistry.registerMcpTools(toolDefs, (name, args) => {
+      return this.currentProvider.executeTool(name, args);
+    });
+    this.toolRegistry.setMcpPhaseListener((phase) => {
+      this.setActivePhase(phase);
+    });
+  }
+  setActivePhase(phaseName) {
+    if (this.currentProvider.setActivePhase) {
+      this.currentProvider.setActivePhase(phaseName);
+    }
+  }
+  updateStatusBar(connected) {
+    const isConn = connected !== void 0 ? connected : this.currentProvider.isReady();
+    this.statusBarItem.text = isConn ? "$(server) TidyProteomics: MCP" : "$(alert) TidyProteomics: Disconnected";
+    this.statusBarItem.tooltip = isConn ? "TidyProteomics MCP Server connected (In-Memory S3 Session). Click for status." : "TidyProteomics MCP Server not connected. Click to retry connection.";
+  }
+  async dispose() {
+    this.statusBarItem.dispose();
+    await this.currentProvider.dispose();
   }
 };
 
@@ -4793,10 +6155,10 @@ var SidebarViewProvider = class {
     this.literatureService = new LiteratureService(
       this.workspaceRoot,
       this._extensionUri.fsPath,
-      () => vscode.workspace.getConfiguration("tidyproteomicsagent").get("rscriptPath")
+      () => vscode4.workspace.getConfiguration("tidyproteomicsagent").get("rscriptPath")
     );
     this.corpusService = this.literatureService;
-    const wsConfig = vscode.workspace.getConfiguration("tidyproteomicsagent");
+    const wsConfig = vscode4.workspace.getConfiguration("tidyproteomicsagent");
     const savedBaseUrl = wsConfig.get("baseUrl") || context.globalState.get("tidyproteomicsagent.baseUrl") || "";
     const savedProvider = wsConfig.get("provider") || context.globalState.get("tidyproteomicsagent.provider") || "anthropic";
     const savedModel = wsConfig.get("model") || context.globalState.get("tidyproteomicsagent.model") || "claude-3-7-sonnet-20250219";
@@ -4827,6 +6189,10 @@ var SidebarViewProvider = class {
       }
     );
     this.tools = new ToolRegistry(this.workspaceRoot);
+    this.executionManager = new ExecutionManager(this.workspaceRoot, this.tools);
+    this.executionManager.initialize().catch((err) => {
+      console.warn("[SidebarViewProvider] Could not initialize ExecutionManager:", err);
+    });
     this.orchestrator = new PipelineOrchestrator(
       this.workspaceRoot,
       this.client,
@@ -4845,50 +6211,64 @@ var SidebarViewProvider = class {
       },
       (log, updateLast) => this.sendLog(log, updateLast)
     );
-    this.advisorService = new AdvisorService(
+    this.agentService = new AgentService(
       this.workspaceRoot,
       this.client,
       async () => this.orchestrator?.getState(),
       async (phaseId) => {
         if (!this.workspaceRoot) {
-          vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder first.");
+          vscode4.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder first.");
           return;
         }
         const cfg = this.client.getConfig();
         if (cfg.provider !== "ollama" && !cfg.apiKey) {
-          vscode.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key in the Provider tab first.");
+          vscode4.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key in the Provider tab first.");
           return;
         }
         await this.syncActiveModelSummary();
         if (phaseId) {
-          vscode.window.showInformationMessage(`TidyProteomicsAgent Advisor: Resuming phase ${phaseId}...`);
-          this.orchestrator?.runSinglePhase(phaseId).catch((err) => {
-            vscode.window.showErrorMessage(`TidyProteomicsAgent: Phase execution error - ${err.message}`);
+          vscode4.window.showInformationMessage(`TidyProteomicsAgent: Resuming pipeline from phase ${phaseId}...`);
+          this.orchestrator?.resumePipeline(phaseId).catch((err) => {
+            vscode4.window.showErrorMessage(`TidyProteomicsAgent: Phase execution error - ${err.message}`);
           });
         } else {
-          vscode.window.showInformationMessage("TidyProteomicsAgent Advisor: Starting pipeline execution...");
-          this.orchestrator?.runFullPipeline().catch((err) => {
-            vscode.window.showErrorMessage(`TidyProteomicsAgent: Pipeline error - ${err.message}`);
+          vscode4.window.showInformationMessage("TidyProteomicsAgent: Starting/resuming pipeline execution...");
+          this.orchestrator?.resumePipeline().catch((err) => {
+            vscode4.window.showErrorMessage(`TidyProteomicsAgent: Pipeline error - ${err.message}`);
           });
         }
       },
       () => {
         if (this._view && this._view.webview) {
           this._view.webview.postMessage({
-            type: "advisorState",
-            isGenerating: this.advisorService.isRunning(),
-            messages: this.advisorService.getMessages()
+            type: "agentState",
+            isGenerating: this.agentService.isRunning(),
+            messages: this.agentService.getMessages()
           });
         }
       },
-      this._extensionUri.fsPath
+      this._extensionUri.fsPath,
+      async (fromPhaseId) => {
+        await this.syncActiveModelSummary();
+        vscode4.window.showInformationMessage(`TidyProteomicsAgent: Resuming pipeline from ${fromPhaseId || "next checkpoint"}...`);
+        await this.orchestrator?.resumePipeline(fromPhaseId);
+      },
+      () => {
+        vscode4.window.showInformationMessage("TidyProteomicsAgent: Pausing pipeline...");
+        this.orchestrator?.stop();
+      },
+      async () => {
+        await this.syncActiveModelSummary();
+        vscode4.window.showInformationMessage("TidyProteomicsAgent: Restarting pipeline from beginning...");
+        await this.orchestrator?.restartPipeline();
+      }
     );
     this.syncActiveModelSummary().catch(() => {
     });
     context.subscriptions.push(
-      vscode.workspace.onDidChangeConfiguration(async (e) => {
+      vscode4.workspace.onDidChangeConfiguration(async (e) => {
         if (e.affectsConfiguration("tidyproteomicsagent")) {
-          const cfg = vscode.workspace.getConfiguration("tidyproteomicsagent");
+          const cfg = vscode4.workspace.getConfiguration("tidyproteomicsagent");
           const updatedProv = cfg.get("provider");
           this.client.updateConfig({
             ...updatedProv ? { provider: updatedProv } : {},
@@ -4897,6 +6277,14 @@ var SidebarViewProvider = class {
             maxTokens: cfg.get("maxTokens"),
             timeoutSeconds: cfg.get("timeoutSeconds")
           });
+          if (e.affectsConfiguration("tidyproteomicsagent.engine")) {
+            const newEngine = cfg.get("engine");
+            if (newEngine === "mcp" || newEngine === "markdown_skill") {
+              this.executionManager.setMode(newEngine).catch((err) => {
+                console.warn("[SidebarViewProvider] Error setting engine mode:", err);
+              });
+            }
+          }
           await this.syncActiveModelSummary();
           this.refreshState().catch(() => {
           });
@@ -4909,21 +6297,45 @@ var SidebarViewProvider = class {
   orchestrator;
   client;
   tools;
+  executionManager;
   literatureService;
   corpusService;
   ingestionRunner;
-  advisorService;
+  agentService;
+  get advisorService() {
+    return this.agentService;
+  }
+  previousPhaseStatuses = /* @__PURE__ */ new Map();
   workspaceRoot;
   customWorkspaceRoot;
   onFolderChangedCallback;
+  getExecutionManager() {
+    return this.executionManager;
+  }
+  async toggleEngine() {
+    await this.executionManager.toggleEngine();
+    await this.syncActiveModelSummary();
+    const state = await this.orchestrator?.getState();
+    if (state)
+      this.sendStateUpdate(state);
+    if (this._view && this._view.webview) {
+      this._view.webview.postMessage({
+        type: "engineUpdate",
+        engine: this.executionManager.mode
+      });
+    }
+  }
+  async dispose() {
+    await this.executionManager.dispose();
+  }
   getExtensionVersion() {
     try {
       if (this.context.extension?.packageJSON?.version) {
         return this.context.extension.packageJSON.version;
       }
-      const pkgPath = path10.join(this._extensionUri.fsPath, "package.json");
-      if (fs10.existsSync(pkgPath)) {
-        const pkg = JSON.parse(fs10.readFileSync(pkgPath, "utf-8"));
+      const pkgPath = path11.join(this._extensionUri.fsPath, "package.json");
+      if (fs11.existsSync(pkgPath)) {
+        const pkg = JSON.parse(fs11.readFileSync(pkgPath, "utf-8"));
         if (pkg.version)
           return pkg.version;
       }
@@ -4939,7 +6351,7 @@ var SidebarViewProvider = class {
       if (this.orchestrator) {
         this.orchestrator.setExtensionVersion(version);
       }
-      await writeActiveModelSummaryFile(this.workspaceRoot, this.client.getConfig(), version);
+      await writeActiveModelSummaryFile(this.workspaceRoot, this.client.getConfig(), version, this.executionManager ? this.executionManager.mode : "mcp");
     } catch (err) {
       console.error("[SidebarViewProvider] Error syncing active model summary:", err);
     }
@@ -4948,22 +6360,22 @@ var SidebarViewProvider = class {
     this.customWorkspaceRoot = folderPath;
     this.workspaceRoot = folderPath;
     this.literatureService.setWorkspaceRoot(folderPath);
-    this.advisorService.setWorkspaceRoot(folderPath);
+    this.agentService.setWorkspaceRoot(folderPath);
   }
   getActiveWorkspaceRoot() {
-    if (this.customWorkspaceRoot && fs10.existsSync(this.customWorkspaceRoot)) {
+    if (this.customWorkspaceRoot && fs11.existsSync(this.customWorkspaceRoot)) {
       return this.customWorkspaceRoot;
     }
-    const folders = vscode.workspace.workspaceFolders;
+    const folders = vscode4.workspace.workspaceFolders;
     if (folders && folders.length > 0) {
-      const activeDoc2 = vscode.window.activeTextEditor?.document;
+      const activeDoc2 = vscode4.window.activeTextEditor?.document;
       if (activeDoc2 && activeDoc2.uri.scheme === "file") {
-        const matchingFolder = vscode.workspace.getWorkspaceFolder(activeDoc2.uri);
+        const matchingFolder = vscode4.workspace.getWorkspaceFolder(activeDoc2.uri);
         if (matchingFolder) {
           const fsPath2 = matchingFolder.uri.fsPath;
           if (fsPath2.endsWith("/extension") || fsPath2.endsWith("\\extension")) {
-            const parent = path10.dirname(fsPath2);
-            if (fs10.existsSync(path10.join(parent, "agent")) || fs10.existsSync(path10.join(parent, "prompts")) || fs10.existsSync(path10.join(parent, "analysis"))) {
+            const parent = path11.dirname(fsPath2);
+            if (fs11.existsSync(path11.join(parent, "agent")) || fs11.existsSync(path11.join(parent, "prompts")) || fs11.existsSync(path11.join(parent, "analysis"))) {
               return parent;
             }
           }
@@ -4972,21 +6384,21 @@ var SidebarViewProvider = class {
       }
       const fsPath = folders[0].uri.fsPath;
       if (fsPath.endsWith("/extension") || fsPath.endsWith("\\extension")) {
-        const parent = path10.dirname(fsPath);
-        if (fs10.existsSync(path10.join(parent, "agent")) || fs10.existsSync(path10.join(parent, "prompts")) || fs10.existsSync(path10.join(parent, "analysis"))) {
+        const parent = path11.dirname(fsPath);
+        if (fs11.existsSync(path11.join(parent, "agent")) || fs11.existsSync(path11.join(parent, "prompts")) || fs11.existsSync(path11.join(parent, "analysis"))) {
           return parent;
         }
       }
       return fsPath;
     }
-    const activeDoc = vscode.window.activeTextEditor?.document;
+    const activeDoc = vscode4.window.activeTextEditor?.document;
     if (activeDoc && activeDoc.uri.scheme === "file") {
-      const docDir = path10.dirname(activeDoc.uri.fsPath);
-      if (fs10.existsSync(path10.join(docDir, "agent")) || fs10.existsSync(path10.join(docDir, "prompts")) || fs10.existsSync(path10.join(docDir, "analysis"))) {
+      const docDir = path11.dirname(activeDoc.uri.fsPath);
+      if (fs11.existsSync(path11.join(docDir, "agent")) || fs11.existsSync(path11.join(docDir, "prompts")) || fs11.existsSync(path11.join(docDir, "analysis"))) {
         return docDir;
       }
-      const parentDir = path10.dirname(docDir);
-      if (fs10.existsSync(path10.join(parentDir, "agent")) || fs10.existsSync(path10.join(parentDir, "prompts")) || fs10.existsSync(path10.join(parentDir, "analysis"))) {
+      const parentDir = path11.dirname(docDir);
+      if (fs11.existsSync(path11.join(parentDir, "agent")) || fs11.existsSync(path11.join(parentDir, "prompts")) || fs11.existsSync(path11.join(parentDir, "analysis"))) {
         return parentDir;
       }
       return docDir;
@@ -5006,7 +6418,12 @@ var SidebarViewProvider = class {
       this.workspaceRoot = newRoot;
       this.tools.setWorkspaceRoot(this.workspaceRoot);
       this.literatureService.setWorkspaceRoot(this.workspaceRoot);
-      this.advisorService.setWorkspaceRoot(this.workspaceRoot);
+      this.agentService.setWorkspaceRoot(this.workspaceRoot);
+      this.executionManager.setWorkspaceRoot(this.workspaceRoot);
+      if (changed) {
+        this.executionManager.initialize().catch(() => {
+        });
+      }
       if (this.orchestrator) {
         if (changed) {
           await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
@@ -5058,6 +6475,8 @@ var SidebarViewProvider = class {
     try {
       if (this.orchestrator) {
         await this.orchestrator.forceReloadFromDisk();
+        const state = await this.orchestrator.getState();
+        this.sendStateUpdate(state);
       }
     } catch (err) {
       console.error("[SidebarViewProvider] Error in forceReload:", err);
@@ -5120,12 +6539,12 @@ var SidebarViewProvider = class {
               await this.context.secrets.delete("tidyproteomicsagent.apiKey");
             }
             try {
-              const wsConfig = vscode.workspace.getConfiguration("tidyproteomicsagent");
-              await wsConfig.update("provider", data.provider, vscode.ConfigurationTarget.Global);
-              await wsConfig.update("model", data.model, vscode.ConfigurationTarget.Global);
-              await wsConfig.update("baseUrl", data.baseUrl, vscode.ConfigurationTarget.Global);
-              await wsConfig.update("maxTokens", maxTokens, vscode.ConfigurationTarget.Global);
-              await wsConfig.update("timeoutSeconds", timeoutSeconds, vscode.ConfigurationTarget.Global);
+              const wsConfig = vscode4.workspace.getConfiguration("tidyproteomicsagent");
+              await wsConfig.update("provider", data.provider, vscode4.ConfigurationTarget.Global);
+              await wsConfig.update("model", data.model, vscode4.ConfigurationTarget.Global);
+              await wsConfig.update("baseUrl", data.baseUrl, vscode4.ConfigurationTarget.Global);
+              await wsConfig.update("maxTokens", maxTokens, vscode4.ConfigurationTarget.Global);
+              await wsConfig.update("timeoutSeconds", timeoutSeconds, vscode4.ConfigurationTarget.Global);
             } catch (_) {
             }
             await this.context.globalState.update("tidyproteomicsagent.provider", data.provider);
@@ -5135,42 +6554,70 @@ var SidebarViewProvider = class {
             await this.context.globalState.update("tidyproteomicsagent.timeoutSeconds", timeoutSeconds);
             await this.syncActiveModelSummary();
             if (!data.silent) {
-              vscode.window.showInformationMessage("TidyProteomicsAgent: Configuration saved!");
+              vscode4.window.showInformationMessage("TidyProteomicsAgent: Configuration saved!");
             }
             const state = await this.orchestrator?.getState();
             if (state)
               this.sendStateUpdate(state);
             break;
           }
+          case "toggleEngine": {
+            await this.toggleEngine();
+            break;
+          }
+          case "setEngine": {
+            if (data.engine === "mcp" || data.engine === "markdown_skill") {
+              await this.executionManager.setMode(data.engine);
+              await this.syncActiveModelSummary();
+              const state = await this.orchestrator?.getState();
+              if (state)
+                this.sendStateUpdate(state);
+              if (this._view && this._view.webview) {
+                this._view.webview.postMessage({
+                  type: "engineUpdate",
+                  engine: this.executionManager.mode
+                });
+              }
+            }
+            break;
+          }
           case "startPipeline": {
             if (!this.workspaceRoot) {
-              vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+              vscode4.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+              return;
+            }
+            if (this.orchestrator?.getIsRunning()) {
+              vscode4.window.showInformationMessage("TidyProteomicsAgent: Pipeline is already running.");
               return;
             }
             const cfg = this.client.getConfig();
             if (cfg.provider !== "ollama" && !cfg.apiKey) {
-              vscode.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key first.");
+              vscode4.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key first.");
               return;
             }
             await this.syncActiveModelSummary();
             this.orchestrator?.runFullPipeline().catch((err) => {
-              vscode.window.showErrorMessage(`TidyProteomicsAgent: Pipeline error - ${err.message}`);
+              vscode4.window.showErrorMessage(`TidyProteomicsAgent: Pipeline error - ${err.message}`);
             });
             break;
           }
           case "runPhase": {
             if (!this.workspaceRoot) {
-              vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+              vscode4.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+              return;
+            }
+            if (this.orchestrator?.getIsRunning()) {
+              vscode4.window.showInformationMessage("TidyProteomicsAgent: Pipeline is already running.");
               return;
             }
             const cfg = this.client.getConfig();
             if (cfg.provider !== "ollama" && !cfg.apiKey) {
-              vscode.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key first.");
+              vscode4.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key first.");
               return;
             }
             await this.syncActiveModelSummary();
             this.orchestrator?.runSinglePhase(data.phaseId).catch((err) => {
-              vscode.window.showErrorMessage(`TidyProteomicsAgent: Phase execution error - ${err.message}`);
+              vscode4.window.showErrorMessage(`TidyProteomicsAgent: Phase execution error - ${err.message}`);
             });
             break;
           }
@@ -5192,106 +6639,154 @@ var SidebarViewProvider = class {
           }
           case "openFile": {
             if (!this.workspaceRoot) {
-              vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+              vscode4.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
               return;
             }
             const targetRelPath = data.relPath || "";
-            const targetPath = path10.isAbsolute(targetRelPath) ? targetRelPath : path10.join(this.workspaceRoot, targetRelPath);
+            const targetPath = path11.isAbsolute(targetRelPath) ? targetRelPath : path11.join(this.workspaceRoot, targetRelPath);
             try {
-              if (!fs10.existsSync(targetPath)) {
-                fs10.mkdirSync(path10.dirname(targetPath), { recursive: true });
-                fs10.writeFileSync(targetPath, "", "utf-8");
+              if (!fs11.existsSync(targetPath)) {
+                fs11.mkdirSync(path11.dirname(targetPath), { recursive: true });
+                fs11.writeFileSync(targetPath, "", "utf-8");
               }
-              const doc = await vscode.workspace.openTextDocument(targetPath);
+              const doc = await vscode4.workspace.openTextDocument(targetPath);
               let selection;
               if (data.line && data.line > 0) {
                 const lineNum = Math.min(data.line - 1, doc.lineCount - 1);
-                selection = new vscode.Range(lineNum, 0, lineNum, 0);
+                selection = new vscode4.Range(lineNum, 0, lineNum, 0);
               } else if (data.searchText) {
                 const text = doc.getText();
                 const idx = text.indexOf(data.searchText);
                 if (idx !== -1) {
                   const pos = doc.positionAt(idx);
-                  selection = new vscode.Range(pos, pos);
+                  selection = new vscode4.Range(pos, pos);
                 }
               }
-              const editor = await vscode.window.showTextDocument(doc, selection ? { selection } : void 0);
+              const editor = await vscode4.window.showTextDocument(doc, selection ? { selection } : void 0);
               if (selection) {
-                editor.revealRange(selection, vscode.TextEditorRevealType.InCenter);
+                editor.revealRange(selection, vscode4.TextEditorRevealType.InCenter);
               }
             } catch (err) {
-              vscode.window.showErrorMessage(`TidyProteomicsAgent: Could not open ${targetRelPath}: ${err.message}`);
+              vscode4.window.showErrorMessage(`TidyProteomicsAgent: Could not open ${targetRelPath}: ${err.message}`);
             }
             break;
           }
+          case "confirmContrastAndProceed":
           case "authorizeConfoundingAndRerun": {
             if (!this.workspaceRoot)
               return;
-            const expPath = path10.join(this.workspaceRoot, "docs", "experiment.md");
+            const expPath = path11.join(this.workspaceRoot, "docs", "experiment.md");
             try {
-              if (fs10.existsSync(expPath)) {
-                let content = await fs10.promises.readFile(expPath, "utf-8");
-                let updated = false;
-                if (content.includes("Proceed With Potential Batch Confounding**: FALSE")) {
+              if (this.agentService) {
+                const expManager = this.agentService.getExperimentManager();
+                await expManager.confirmContrastAndAuthorizeConfounding();
+              } else if (fs11.existsSync(expPath)) {
+                let content = await fs11.promises.readFile(expPath, "utf-8");
+                content = content.replace(
+                  /-\s*\*\*Proceed With Potential Batch Confounding\*\*:\s*FALSE/i,
+                  "- **Proceed With Potential Batch Confounding**: TRUE"
+                );
+                content = content.replace(
+                  /-\s*\*\*Authorize Unadjusted Exploratory Comparison\*\*:\s*FALSE/i,
+                  "- **Authorize Unadjusted Exploratory Comparison**: TRUE"
+                );
+                content = content.replace(/👉\s*\[USER ACTION REQUIRED - DEFINE TARGET CONTRASTS\]:?/gi, "");
+                content = content.replace(/\(suggested contrast requiring confirmation\)/gi, "");
+                if (!content.includes("Status: CONFIRMED")) {
                   content = content.replace(
-                    "Proceed With Potential Batch Confounding**: FALSE",
-                    "Proceed With Potential Batch Confounding**: TRUE"
+                    /(###\s*(?:3\.C|C)\.?\s*Target [Cc]ontrasts[\s\S]*?)(?=###\s*(?:3\.D|D)\.|$|##)/i,
+                    "$1\nStatus: CONFIRMED\n\n"
                   );
-                  updated = true;
-                } else if (content.includes("Authorize Unadjusted Exploratory Comparison**: FALSE")) {
-                  content = content.replace(
-                    "Authorize Unadjusted Exploratory Comparison**: FALSE",
-                    "Authorize Unadjusted Exploratory Comparison**: TRUE"
-                  );
-                  updated = true;
                 }
-                if (updated) {
-                  await fs10.promises.writeFile(expPath, content, "utf-8");
-                  vscode.window.showInformationMessage("TidyProteomicsAgent: Batch confounding authorized in docs/experiment.md. Rerunning phase...");
-                }
+                await fs11.promises.writeFile(expPath, content, "utf-8");
               }
-              const phaseId = data.phaseId;
+              vscode4.window.showInformationMessage("TidyProteomicsAgent: Target contrast confirmed & batch confounding authorized in docs/experiment.md. Resuming Phase 4...");
+              const phaseId = data.phaseId || "04";
               if (phaseId && this.orchestrator) {
                 await this.syncActiveModelSummary();
-                this.orchestrator.runSinglePhase(phaseId).catch((err) => {
-                  vscode.window.showErrorMessage(`TidyProteomicsAgent: Phase execution error - ${err.message}`);
+                this.orchestrator.resumePipeline(phaseId).catch((err) => {
+                  vscode4.window.showErrorMessage(`TidyProteomicsAgent: Pipeline execution error - ${err.message}`);
                 });
               }
             } catch (err) {
-              vscode.window.showErrorMessage(`TidyProteomicsAgent: Could not update docs/experiment.md: ${err.message}`);
+              vscode4.window.showErrorMessage(`TidyProteomicsAgent: Could not update docs/experiment.md: ${err.message}`);
             }
             break;
           }
           case "openPhase": {
             if (!this.workspaceRoot) {
-              vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+              vscode4.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
               return;
             }
             const fileName = data.fileName || "";
-            const targetPath = fileName.includes("/") || fileName.includes("\\") ? path10.join(this.workspaceRoot, fileName) : path10.join(this.workspaceRoot, "analysis", fileName);
+            const targetPath = fileName.includes("/") || fileName.includes("\\") ? path11.join(this.workspaceRoot, fileName) : path11.join(this.workspaceRoot, "analysis", fileName);
             try {
-              const doc = await vscode.workspace.openTextDocument(targetPath);
-              await vscode.window.showTextDocument(doc);
+              const doc = await vscode4.workspace.openTextDocument(targetPath);
+              await vscode4.window.showTextDocument(doc);
             } catch (err) {
-              vscode.window.showErrorMessage(`TidyProteomicsAgent: Could not open ${fileName}: ${err.message}`);
+              vscode4.window.showErrorMessage(`TidyProteomicsAgent: Could not open ${fileName}: ${err.message}`);
             }
             break;
           }
           case "copyPath": {
             if (this.workspaceRoot) {
-              await vscode.env.clipboard.writeText(this.workspaceRoot);
-              vscode.window.showInformationMessage("TidyProteomicsAgent: Workspace path copied to clipboard!");
+              await vscode4.env.clipboard.writeText(this.workspaceRoot);
+              vscode4.window.showInformationMessage("TidyProteomicsAgent: Workspace path copied to clipboard!");
             }
             break;
           }
           case "revealInOS": {
             if (this.workspaceRoot) {
-              await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(this.workspaceRoot));
+              await vscode4.commands.executeCommand("revealFileInOS", vscode4.Uri.file(this.workspaceRoot));
+            }
+            break;
+          }
+          case "getDesignerState": {
+            await this.sendDesignerState();
+            break;
+          }
+          case "applyContrastDesigner": {
+            if (!this.workspaceRoot)
+              return;
+            try {
+              const expManager = this.agentService.getExperimentManager();
+              const treatment = (data.treatment || "").trim();
+              const control = (data.control || "").trim();
+              if (treatment && control) {
+                await expManager.setTargetContrasts([`\`${treatment}\` / \`${control}\``]);
+              } else {
+                await expManager.confirmExistingContrasts();
+              }
+              await expManager.setBatchConfounding(data.allowConfounding === true);
+              if (typeof data.reassignPooling === "boolean") {
+                const expPath = path11.join(this.workspaceRoot, "docs", "experiment.md");
+                if (fs11.existsSync(expPath)) {
+                  let c = await fs11.promises.readFile(expPath, "utf-8");
+                  c = c.replace(
+                    /(-\s*\*\*Reassign Sample Names According to (?:Sample Group Renaming & )?Pooling Map\*\*:\s*)(TRUE|FALSE)/i,
+                    `$1${data.reassignPooling ? "TRUE" : "FALSE"}`
+                  );
+                  await fs11.promises.writeFile(expPath, c, "utf-8");
+                }
+              }
+              vscode4.window.showInformationMessage(
+                `TidyProteomicsAgent: Target contrast applied to docs/experiment.md (${treatment || "selected"} vs ${control || "control"}).`
+              );
+              const phaseId = data.phaseId || "04";
+              if (phaseId && this.orchestrator) {
+                await this.syncActiveModelSummary();
+                this.orchestrator.resumePipeline(phaseId).catch((err) => {
+                  vscode4.window.showErrorMessage(`TidyProteomicsAgent: Pipeline execution error - ${err.message}`);
+                });
+              }
+              await this.sendDesignerState();
+            } catch (err) {
+              vscode4.window.showErrorMessage(`TidyProteomicsAgent: Could not apply contrast: ${err.message}`);
             }
             break;
           }
           case "selectDirectory": {
-            const chosen = await vscode.window.showOpenDialog({
+            const chosen = await vscode4.window.showOpenDialog({
               canSelectFiles: false,
               canSelectFolders: true,
               canSelectMany: false,
@@ -5303,7 +6798,10 @@ var SidebarViewProvider = class {
               this.workspaceRoot = selectedPath;
               this.tools.setWorkspaceRoot(this.workspaceRoot);
               this.literatureService.setWorkspaceRoot(this.workspaceRoot);
-              this.advisorService.setWorkspaceRoot(this.workspaceRoot);
+              this.agentService.setWorkspaceRoot(this.workspaceRoot);
+              this.executionManager.setWorkspaceRoot(this.workspaceRoot);
+              this.executionManager.initialize().catch(() => {
+              });
               if (this.orchestrator) {
                 await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
               }
@@ -5312,29 +6810,29 @@ var SidebarViewProvider = class {
               if (this.onFolderChangedCallback) {
                 this.onFolderChangedCallback(this.workspaceRoot);
               }
-              vscode.window.showInformationMessage(`TidyProteomicsAgent: Active directory set to ${this.workspaceRoot}`);
+              vscode4.window.showInformationMessage(`TidyProteomicsAgent: Active directory set to ${this.workspaceRoot}`);
             }
             break;
           }
           case "rescanWorkspace": {
             await this.onWorkspaceChanged();
-            vscode.window.showInformationMessage("TidyProteomicsAgent: Rescanned workspace folders and phases.");
+            vscode4.window.showInformationMessage("TidyProteomicsAgent: Rescanned workspace folders and phases.");
             break;
           }
           case "createMissingFolders": {
             if (!this.workspaceRoot) {
-              vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+              vscode4.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
               return;
             }
-            const standardDirs = ["analysis", "agent", "code", "data", path10.join("data", "raw"), "docs", "logs", "tools"];
+            const standardDirs = ["analysis", "agent", "code", "data", path11.join("data", "raw"), "docs", "logs", "tools"];
             for (const d of standardDirs) {
-              const fullDir = path10.join(this.workspaceRoot, d);
-              if (!fs10.existsSync(fullDir)) {
-                fs10.mkdirSync(fullDir, { recursive: true });
+              const fullDir = path11.join(this.workspaceRoot, d);
+              if (!fs11.existsSync(fullDir)) {
+                fs11.mkdirSync(fullDir, { recursive: true });
               }
             }
             await this.refreshPhases();
-            vscode.window.showInformationMessage("TidyProteomicsAgent: Standard project folders initialized!");
+            vscode4.window.showInformationMessage("TidyProteomicsAgent: Standard project folders initialized!");
             break;
           }
           case "initWorkspace": {
@@ -5348,7 +6846,7 @@ var SidebarViewProvider = class {
           case "requestState": {
             await this.refreshState();
             this.sendCorpusState();
-            await this.advisorService.checkAndTriggerOnboarding();
+            await this.agentService.checkAndTriggerOnboarding();
             break;
           }
           case "literatureGetState":
@@ -5364,7 +6862,7 @@ var SidebarViewProvider = class {
               this.sendLiteratureState();
               await this.refreshState();
             } catch (err) {
-              vscode.window.showErrorMessage(`TidyProteomicsAgent: ${err.message}`);
+              vscode4.window.showErrorMessage(`TidyProteomicsAgent: ${err.message}`);
             }
             break;
           }
@@ -5373,11 +6871,11 @@ var SidebarViewProvider = class {
             try {
               this.syncLiteratureWorkspace();
               const created = await this.literatureService.createDatabase(data.name);
-              vscode.window.showInformationMessage(`TidyProteomicsAgent: Created literature database '${created.fileName}'`);
+              vscode4.window.showInformationMessage(`TidyProteomicsAgent: Created literature database '${created.fileName}'`);
               this.sendLiteratureState();
               await this.refreshState();
             } catch (err) {
-              vscode.window.showErrorMessage(`TidyProteomicsAgent: ${err.message}`);
+              vscode4.window.showErrorMessage(`TidyProteomicsAgent: ${err.message}`);
             }
             break;
           }
@@ -5412,7 +6910,7 @@ var SidebarViewProvider = class {
           }
           case "literaturePickFolder":
           case "corpusPickFolder": {
-            const chosen = await vscode.window.showOpenDialog({
+            const chosen = await vscode4.window.showOpenDialog({
               canSelectFiles: false,
               canSelectFolders: true,
               canSelectMany: false,
@@ -5423,9 +6921,9 @@ var SidebarViewProvider = class {
               try {
                 this.literatureService.scanIngestFolder(folderPath);
                 this.sendLiteratureState();
-                vscode.window.showInformationMessage(`TidyProteomicsAgent: Found ${this.literatureService.getViewState().queue.length} document(s) for ingestion queue.`);
+                vscode4.window.showInformationMessage(`TidyProteomicsAgent: Found ${this.literatureService.getViewState().queue.length} document(s) for ingestion queue.`);
               } catch (err) {
-                vscode.window.showErrorMessage(`TidyProteomicsAgent: ${err.message}`);
+                vscode4.window.showErrorMessage(`TidyProteomicsAgent: ${err.message}`);
               }
             }
             break;
@@ -5440,12 +6938,12 @@ var SidebarViewProvider = class {
           case "corpusStartIngest": {
             const cfg = this.client.getConfig();
             if (cfg.provider !== "ollama" && !cfg.apiKey) {
-              vscode.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key in the Provider tab before running literature extraction.");
+              vscode4.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key in the Provider tab before running literature extraction.");
               return;
             }
             const activeDb = data.fileName || this.literatureService.getConfig().activeLiterature || this.literatureService.getConfig().activeCorpus;
             if (!activeDb) {
-              vscode.window.showErrorMessage("TidyProteomicsAgent: Please select or create an active literature database first.");
+              vscode4.window.showErrorMessage("TidyProteomicsAgent: Please select or create an active literature database first.");
               return;
             }
             this.sendLiteratureState();
@@ -5458,12 +6956,12 @@ var SidebarViewProvider = class {
                 this._view.webview.postMessage({ type: "corpusStats", result: statsRes, stats });
               }
               if (res.success) {
-                vscode.window.showInformationMessage(`TidyProteomicsAgent: Indexed ${res.processed} document(s) into ${activeDb}!`);
+                vscode4.window.showInformationMessage(`TidyProteomicsAgent: Indexed ${res.processed} document(s) into ${activeDb}!`);
               } else {
-                vscode.window.showWarningMessage(`TidyProteomicsAgent: Ingestion finished with ${res.errors} error(s). See log for details.`);
+                vscode4.window.showWarningMessage(`TidyProteomicsAgent: Ingestion finished with ${res.errors} error(s). See log for details.`);
               }
             }).catch((err) => {
-              vscode.window.showErrorMessage(`TidyProteomicsAgent: Ingestion error - ${err.message}`);
+              vscode4.window.showErrorMessage(`TidyProteomicsAgent: Ingestion error - ${err.message}`);
               this.sendLiteratureState();
             });
             break;
@@ -5471,114 +6969,119 @@ var SidebarViewProvider = class {
           case "literatureAbortIngest":
           case "corpusAbortIngest": {
             this.ingestionRunner.abort();
-            vscode.window.showInformationMessage("TidyProteomicsAgent: Aborting ingestion...");
+            vscode4.window.showInformationMessage("TidyProteomicsAgent: Aborting ingestion...");
             break;
           }
           case "literatureGenerateReport": {
             const activeDb = data.fileName || this.literatureService.getConfig().activeLiterature || this.literatureService.getConfig().activeCorpus;
             if (!activeDb) {
-              vscode.window.showErrorMessage("TidyProteomicsAgent: Please select or create an active literature database first.");
+              vscode4.window.showErrorMessage("TidyProteomicsAgent: Please select or create an active literature database first.");
               return;
             }
             try {
-              vscode.window.showInformationMessage(`TidyProteomicsAgent: Generating accounting report for ${activeDb}...`);
+              vscode4.window.showInformationMessage(`TidyProteomicsAgent: Generating accounting report for ${activeDb}...`);
               const res = await this.literatureService.generateReport(activeDb);
               if (res.ok) {
-                vscode.window.showInformationMessage("TidyProteomicsAgent: Generated docs/literature_database.md");
-                const docPath = path10.join(this.workspaceRoot || "", "docs", "literature_database.md");
-                if (fs10.existsSync(docPath)) {
-                  const doc = await vscode.workspace.openTextDocument(docPath);
-                  await vscode.window.showTextDocument(doc, { preview: false });
+                vscode4.window.showInformationMessage("TidyProteomicsAgent: Generated docs/literature_database.md");
+                const docPath = path11.join(this.workspaceRoot || "", "docs", "literature_database.md");
+                if (fs11.existsSync(docPath)) {
+                  const doc = await vscode4.workspace.openTextDocument(docPath);
+                  await vscode4.window.showTextDocument(doc, { preview: false });
                 }
               } else {
-                vscode.window.showErrorMessage(`TidyProteomicsAgent: Failed to generate report: ${res.error}`);
+                vscode4.window.showErrorMessage(`TidyProteomicsAgent: Failed to generate report: ${res.error}`);
               }
             } catch (err) {
-              vscode.window.showErrorMessage(`TidyProteomicsAgent: Report generation error - ${err.message}`);
+              vscode4.window.showErrorMessage(`TidyProteomicsAgent: Report generation error - ${err.message}`);
             }
             break;
           }
           case "literatureOpenReport": {
-            const docPath = path10.join(this.workspaceRoot || "", "docs", "literature_database.md");
-            if (fs10.existsSync(docPath)) {
-              const doc = await vscode.workspace.openTextDocument(docPath);
-              await vscode.window.showTextDocument(doc, { preview: false });
+            const docPath = path11.join(this.workspaceRoot || "", "docs", "literature_database.md");
+            if (fs11.existsSync(docPath)) {
+              const doc = await vscode4.workspace.openTextDocument(docPath);
+              await vscode4.window.showTextDocument(doc, { preview: false });
             } else {
               const activeDb = this.literatureService.getConfig().activeLiterature || this.literatureService.getConfig().activeCorpus;
               if (activeDb) {
                 const res = await this.literatureService.generateReport(activeDb);
-                if (res.ok && fs10.existsSync(docPath)) {
-                  const doc = await vscode.workspace.openTextDocument(docPath);
-                  await vscode.window.showTextDocument(doc, { preview: false });
+                if (res.ok && fs11.existsSync(docPath)) {
+                  const doc = await vscode4.workspace.openTextDocument(docPath);
+                  await vscode4.window.showTextDocument(doc, { preview: false });
                   return;
                 }
               }
-              vscode.window.showWarningMessage("TidyProteomicsAgent: docs/literature_database.md does not exist yet. Click 'Regenerate' first.");
+              vscode4.window.showWarningMessage("TidyProteomicsAgent: docs/literature_database.md does not exist yet. Click 'Regenerate' first.");
             }
             break;
           }
+          case "agentSendMessage":
           case "advisorSendMessage": {
             const text = String(data.text || "").trim();
             if (!text)
               return;
-            console.log("[SidebarViewProvider] advisorSendMessage:", text);
+            console.log("[SidebarViewProvider] agentSendMessage:", text);
             try {
-              const result = await this.advisorService.sendMessage(text, (chunk) => {
+              const result = await this.agentService.sendMessage(text, (chunk) => {
                 if (this._view && this._view.webview) {
                   this._view.webview.postMessage({
-                    type: "advisorChunk",
+                    type: "agentChunk",
                     chunk
                   });
                 }
               });
               if (this._view && this._view.webview) {
                 this._view.webview.postMessage({
-                  type: "advisorDone",
+                  type: "agentDone",
                   reply: result.reply,
                   usage: result.usage,
-                  messages: this.advisorService.getMessages()
+                  messages: this.agentService.getMessages()
                 });
               }
             } catch (err) {
-              vscode.window.showErrorMessage(`TidyProteomicsAgent Advisor: ${err.message}`);
+              vscode4.window.showErrorMessage(`TidyProteomicsAgent Agent: ${err.message}`);
               if (this._view && this._view.webview) {
                 this._view.webview.postMessage({
-                  type: "advisorError",
+                  type: "agentError",
                   error: err.message || String(err),
-                  messages: this.advisorService.getMessages()
+                  messages: this.agentService.getMessages()
                 });
               }
             }
             break;
           }
+          case "agentClear":
           case "advisorClear": {
-            await this.advisorService.clearMessages();
+            await this.agentService.clearMessages();
             if (this._view && this._view.webview) {
               this._view.webview.postMessage({
-                type: "advisorState",
+                type: "agentState",
                 isGenerating: false,
                 messages: []
               });
             }
             break;
           }
+          case "agentStop":
           case "advisorStop": {
-            this.advisorService.cancel();
+            this.agentService.cancel();
             break;
           }
+          case "agentGetState":
           case "advisorGetState": {
-            await this.advisorService.checkAndTriggerOnboarding();
+            await this.agentService.checkAndTriggerOnboarding();
             if (this._view && this._view.webview) {
               this._view.webview.postMessage({
-                type: "advisorState",
-                isGenerating: this.advisorService.isRunning(),
-                messages: this.advisorService.getMessages()
+                type: "agentState",
+                isGenerating: this.agentService.isRunning(),
+                messages: this.agentService.getMessages()
               });
             }
             break;
           }
+          case "agentPickDataFile":
           case "advisorPickDataFile": {
-            const fileUris = await vscode.window.showOpenDialog({
+            const fileUris = await vscode4.window.showOpenDialog({
               canSelectFiles: true,
               canSelectFolders: false,
               canSelectMany: false,
@@ -5593,32 +7096,32 @@ var SidebarViewProvider = class {
               const selectedUri = fileUris[0];
               let targetPath = selectedUri.fsPath;
               if (this.workspaceRoot && targetPath.startsWith(this.workspaceRoot)) {
-                targetPath = path10.relative(this.workspaceRoot, targetPath);
+                targetPath = path11.relative(this.workspaceRoot, targetPath);
               }
               try {
-                const result = await this.advisorService.sendMessage(targetPath, (chunk) => {
+                const result = await this.agentService.sendMessage(targetPath, (chunk) => {
                   if (this._view && this._view.webview) {
                     this._view.webview.postMessage({
-                      type: "advisorChunk",
+                      type: "agentChunk",
                       chunk
                     });
                   }
                 });
                 if (this._view && this._view.webview) {
                   this._view.webview.postMessage({
-                    type: "advisorDone",
+                    type: "agentDone",
                     reply: result.reply,
                     usage: result.usage,
-                    messages: this.advisorService.getMessages()
+                    messages: this.agentService.getMessages()
                   });
                 }
               } catch (err) {
-                vscode.window.showErrorMessage(`TidyProteomicsAgent Advisor: ${err.message}`);
+                vscode4.window.showErrorMessage(`TidyProteomicsAgent Agent: ${err.message}`);
                 if (this._view && this._view.webview) {
                   this._view.webview.postMessage({
-                    type: "advisorError",
+                    type: "agentError",
                     error: err.message || String(err),
-                    messages: this.advisorService.getMessages()
+                    messages: this.agentService.getMessages()
                   });
                 }
               }
@@ -5627,13 +7130,13 @@ var SidebarViewProvider = class {
           }
         }
       } catch (e) {
-        vscode.window.showErrorMessage(`TidyProteomicsAgent Error: ${e.message}`);
+        vscode4.window.showErrorMessage(`TidyProteomicsAgent Error: ${e.message}`);
       }
     });
   }
   async promptInitWorkspace() {
     if (!this.workspaceRoot) {
-      const chosen2 = await vscode.window.showOpenDialog({
+      const chosen2 = await vscode4.window.showOpenDialog({
         canSelectFiles: false,
         canSelectFolders: true,
         canSelectMany: false,
@@ -5644,7 +7147,10 @@ var SidebarViewProvider = class {
         this.customWorkspaceRoot = this.workspaceRoot;
         this.tools.setWorkspaceRoot(this.workspaceRoot);
         this.literatureService.setWorkspaceRoot(this.workspaceRoot);
-        this.advisorService.setWorkspaceRoot(this.workspaceRoot);
+        this.agentService.setWorkspaceRoot(this.workspaceRoot);
+        this.executionManager.setWorkspaceRoot(this.workspaceRoot);
+        this.executionManager.initialize().catch(() => {
+        });
         if (this.orchestrator) {
           await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
         }
@@ -5668,7 +7174,7 @@ var SidebarViewProvider = class {
         id: "quality_control_only"
       }
     ];
-    const chosen = await vscode.window.showQuickPick(items, {
+    const chosen = await vscode4.window.showQuickPick(items, {
       placeHolder: "Select a pipeline template to initialize this workspace"
     });
     if (chosen) {
@@ -5677,7 +7183,7 @@ var SidebarViewProvider = class {
   }
   async initWorkspace(pipelineId = "differential_expression") {
     if (!this.workspaceRoot) {
-      const chosen = await vscode.window.showOpenDialog({
+      const chosen = await vscode4.window.showOpenDialog({
         canSelectFiles: false,
         canSelectFolders: true,
         canSelectMany: false,
@@ -5688,7 +7194,10 @@ var SidebarViewProvider = class {
         this.customWorkspaceRoot = this.workspaceRoot;
         this.tools.setWorkspaceRoot(this.workspaceRoot);
         this.literatureService.setWorkspaceRoot(this.workspaceRoot);
-        this.advisorService.setWorkspaceRoot(this.workspaceRoot);
+        this.agentService.setWorkspaceRoot(this.workspaceRoot);
+        this.executionManager.setWorkspaceRoot(this.workspaceRoot);
+        this.executionManager.initialize().catch(() => {
+        });
         if (this.orchestrator) {
           await this.orchestrator.setWorkingDirectory(this.workspaceRoot);
         }
@@ -5697,86 +7206,86 @@ var SidebarViewProvider = class {
         }
         await this.syncActiveModelSummary();
       } else {
-        vscode.window.showErrorMessage("TidyProteomicsAgent: Please open or select a workspace folder first.");
+        vscode4.window.showErrorMessage("TidyProteomicsAgent: Please open or select a workspace folder first.");
         return false;
       }
     }
     try {
       const candidatePaths = [
-        path10.join(this._extensionUri.fsPath, "templates"),
-        path10.join(this._extensionUri.fsPath, "extension", "templates"),
-        path10.join(this.context.extensionPath, "templates"),
-        path10.join(this.context.extensionPath, "extension", "templates"),
-        path10.join(__dirname, "..", "templates"),
-        path10.join(__dirname, "..", "..", "templates"),
-        path10.join(__dirname, "templates"),
-        path10.join(this.workspaceRoot, "extension", "templates"),
-        path10.join(this.workspaceRoot, "templates")
+        path11.join(this._extensionUri.fsPath, "templates"),
+        path11.join(this._extensionUri.fsPath, "extension", "templates"),
+        path11.join(this.context.extensionPath, "templates"),
+        path11.join(this.context.extensionPath, "extension", "templates"),
+        path11.join(__dirname, "..", "templates"),
+        path11.join(__dirname, "..", "..", "templates"),
+        path11.join(__dirname, "templates"),
+        path11.join(this.workspaceRoot, "extension", "templates"),
+        path11.join(this.workspaceRoot, "templates")
       ];
-      const templateBase = candidatePaths.find((p) => fs10.existsSync(p));
+      const templateBase = candidatePaths.find((p) => fs11.existsSync(p));
       if (!templateBase) {
-        vscode.window.showErrorMessage(
+        vscode4.window.showErrorMessage(
           "TidyProteomicsAgent: Template directory not found in extension or workspace."
         );
         return false;
       }
-      const standardDirs = ["analysis", "agent", "code", "data", path10.join("data", "raw"), "docs", "logs", "tools"];
+      const standardDirs = ["analysis", "agent", "code", "data", path11.join("data", "raw"), "docs", "logs", "tools"];
       for (const d of standardDirs) {
-        const fullDir = path10.join(this.workspaceRoot, d);
-        if (!fs10.existsSync(fullDir)) {
-          fs10.mkdirSync(fullDir, { recursive: true });
+        const fullDir = path11.join(this.workspaceRoot, d);
+        if (!fs11.existsSync(fullDir)) {
+          fs11.mkdirSync(fullDir, { recursive: true });
         }
       }
       const copyFileSafe = (src, dest, overwrite = false) => {
-        if (fs10.existsSync(src)) {
-          if (overwrite || !fs10.existsSync(dest)) {
-            fs10.mkdirSync(path10.dirname(dest), { recursive: true });
-            fs10.copyFileSync(src, dest);
+        if (fs11.existsSync(src)) {
+          if (overwrite || !fs11.existsSync(dest)) {
+            fs11.mkdirSync(path11.dirname(dest), { recursive: true });
+            fs11.copyFileSync(src, dest);
           }
         }
       };
-      const sharedDir = path10.join(templateBase, "shared");
-      if (fs10.existsSync(sharedDir)) {
-        copyFileSafe(path10.join(sharedDir, "code", "00_install.R"), path10.join(this.workspaceRoot, "code", "00_install.R"), true);
-        copyFileSafe(path10.join(sharedDir, "tools", "lint_tidyproteomics.R"), path10.join(this.workspaceRoot, "tools", "lint_tidyproteomics.R"), true);
-        const agentTemplatesDir = path10.join(sharedDir, "agent");
-        if (fs10.existsSync(agentTemplatesDir)) {
-          const aFiles = fs10.readdirSync(agentTemplatesDir);
+      const sharedDir = path11.join(templateBase, "shared");
+      if (fs11.existsSync(sharedDir)) {
+        copyFileSafe(path11.join(sharedDir, "tools", "lint_tidyproteomics.R"), path11.join(this.workspaceRoot, "tools", "lint_tidyproteomics.R"), true);
+        copyFileSafe(path11.join(sharedDir, "tools", "reactome_pathways.tsv"), path11.join(this.workspaceRoot, "tools", "reactome_pathways.tsv"), true);
+        const agentTemplatesDir = path11.join(sharedDir, "agent");
+        if (fs11.existsSync(agentTemplatesDir)) {
+          const aFiles = fs11.readdirSync(agentTemplatesDir);
           for (const af of aFiles) {
             if (af.endsWith(".md")) {
-              copyFileSafe(path10.join(agentTemplatesDir, af), path10.join(this.workspaceRoot, "agent", af), true);
+              copyFileSafe(path11.join(agentTemplatesDir, af), path11.join(this.workspaceRoot, "agent", af), true);
             }
           }
         }
-        copyFileSafe(path10.join(sharedDir, "docs", "experiment.md"), path10.join(this.workspaceRoot, "docs", "experiment.md"), false);
-        copyFileSafe(path10.join(sharedDir, "docs", "notes.md"), path10.join(this.workspaceRoot, "docs", "notes.md"), false);
-        copyFileSafe(path10.join(sharedDir, "docs", "concept.md"), path10.join(this.workspaceRoot, "docs", "concept.md"), false);
-        copyFileSafe(path10.join(sharedDir, ".gitignore"), path10.join(this.workspaceRoot, ".gitignore"), false);
-        copyFileSafe(path10.join(sharedDir, "logs", ".gitkeep"), path10.join(this.workspaceRoot, "logs", ".gitkeep"), false);
-        copyFileSafe(path10.join(sharedDir, "data", "raw", ".gitkeep"), path10.join(this.workspaceRoot, "data", "raw", ".gitkeep"), false);
-        const literatureToolsDir = path10.join(sharedDir, "tools", "literature");
-        if (fs10.existsSync(literatureToolsDir)) {
-          const lFiles = fs10.readdirSync(literatureToolsDir).filter((f) => f.endsWith(".R"));
+        copyFileSafe(path11.join(sharedDir, "docs", "experiment.md"), path11.join(this.workspaceRoot, "docs", "experiment.md"), false);
+        copyFileSafe(path11.join(sharedDir, "docs", "notes.md"), path11.join(this.workspaceRoot, "docs", "notes.md"), false);
+        copyFileSafe(path11.join(sharedDir, "docs", "concept.md"), path11.join(this.workspaceRoot, "docs", "concept.md"), false);
+        copyFileSafe(path11.join(sharedDir, ".gitignore"), path11.join(this.workspaceRoot, ".gitignore"), false);
+        copyFileSafe(path11.join(sharedDir, "logs", ".gitkeep"), path11.join(this.workspaceRoot, "logs", ".gitkeep"), false);
+        copyFileSafe(path11.join(sharedDir, "data", "raw", ".gitkeep"), path11.join(this.workspaceRoot, "data", "raw", ".gitkeep"), false);
+        const literatureToolsDir = path11.join(sharedDir, "tools", "literature");
+        if (fs11.existsSync(literatureToolsDir)) {
+          const lFiles = fs11.readdirSync(literatureToolsDir).filter((f) => f.endsWith(".R"));
           for (const lf of lFiles) {
-            copyFileSafe(path10.join(literatureToolsDir, lf), path10.join(this.workspaceRoot, "tools", "literature", lf), true);
+            copyFileSafe(path11.join(literatureToolsDir, lf), path11.join(this.workspaceRoot, "tools", "literature", lf), true);
           }
         }
-        const literatureDir = path10.join(this.workspaceRoot, "literature");
-        if (!fs10.existsSync(literatureDir)) {
-          fs10.mkdirSync(literatureDir, { recursive: true });
+        const literatureDir = path11.join(this.workspaceRoot, "literature");
+        if (!fs11.existsSync(literatureDir)) {
+          fs11.mkdirSync(literatureDir, { recursive: true });
         }
       }
-      let pipelineDir = path10.join(templateBase, "pipelines", pipelineId);
-      if (!fs10.existsSync(pipelineDir)) {
-        pipelineDir = path10.join(templateBase, "pipelines", "differential_expression");
+      let pipelineDir = path11.join(templateBase, "pipelines", pipelineId);
+      if (!fs11.existsSync(pipelineDir)) {
+        pipelineDir = path11.join(templateBase, "pipelines", "differential_expression");
       }
-      if (fs10.existsSync(pipelineDir)) {
-        const pFiles = fs10.readdirSync(pipelineDir).filter((f) => f.endsWith(".md"));
+      if (fs11.existsSync(pipelineDir)) {
+        const pFiles = fs11.readdirSync(pipelineDir).filter((f) => f.endsWith(".md"));
         for (const pf of pFiles) {
-          copyFileSafe(path10.join(pipelineDir, pf), path10.join(this.workspaceRoot, "analysis", pf), true);
+          copyFileSafe(path11.join(pipelineDir, pf), path11.join(this.workspaceRoot, "analysis", pf), true);
         }
       } else {
-        vscode.window.showWarningMessage(`TidyProteomicsAgent: Pipeline templates not found in ${templateBase}/pipelines.`);
+        vscode4.window.showWarningMessage(`TidyProteomicsAgent: Pipeline templates not found in ${templateBase}/pipelines.`);
       }
       await this.syncActiveModelSummary();
       await this.refreshPhases();
@@ -5784,44 +7293,44 @@ var SidebarViewProvider = class {
       if (state)
         this.sendStateUpdate(state);
       const pipelineDisplayName = pipelineId === "quality_control_only" ? "Quality Control & Exploration" : "Standard Differential Expression";
-      vscode.window.showInformationMessage(`TidyProteomicsAgent: Workspace initialized with ${pipelineDisplayName} pipeline!`);
-      const targetFocusFile = path10.join(this.workspaceRoot, "docs", "experiment.md");
-      if (fs10.existsSync(targetFocusFile)) {
+      vscode4.window.showInformationMessage(`TidyProteomicsAgent: Workspace initialized with ${pipelineDisplayName} pipeline!`);
+      const targetFocusFile = path11.join(this.workspaceRoot, "docs", "experiment.md");
+      if (fs11.existsSync(targetFocusFile)) {
         try {
-          const doc = await vscode.workspace.openTextDocument(targetFocusFile);
-          await vscode.window.showTextDocument(doc);
+          const doc = await vscode4.workspace.openTextDocument(targetFocusFile);
+          await vscode4.window.showTextDocument(doc);
         } catch (_) {
         }
       }
       return true;
     } catch (err) {
-      vscode.window.showErrorMessage(`TidyProteomicsAgent: Failed to initialize workspace - ${err.message}`);
+      vscode4.window.showErrorMessage(`TidyProteomicsAgent: Failed to initialize workspace - ${err.message}`);
       return false;
     }
   }
   startPipeline() {
     if (!this.workspaceRoot) {
-      vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+      vscode4.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
       return;
     }
     if (this.orchestrator && this.orchestrator.getPhases().length === 0) {
-      vscode.window.showInformationMessage("TidyProteomicsAgent: No analysis tasks found to execute. Please initialize an analysis pipeline first.");
+      vscode4.window.showInformationMessage("TidyProteomicsAgent: No analysis tasks found to execute. Please initialize an analysis pipeline first.");
       return;
     }
     this.syncActiveModelSummary().catch(() => {
     });
     this.orchestrator?.runFullPipeline().catch((err) => {
-      vscode.window.showErrorMessage(`TidyProteomicsAgent: Pipeline error - ${err.message}`);
+      vscode4.window.showErrorMessage(`TidyProteomicsAgent: Pipeline error - ${err.message}`);
     });
   }
   async runSelectedPhase() {
     if (!this.workspaceRoot) {
-      vscode.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
+      vscode4.window.showErrorMessage("TidyProteomicsAgent: Please open a workspace folder in VS Code first.");
       return;
     }
     const cfg = this.client.getConfig();
     if (cfg.provider !== "ollama" && !cfg.apiKey) {
-      vscode.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key first.");
+      vscode4.window.showErrorMessage("TidyProteomicsAgent: Please enter an API key first.");
       return;
     }
     await this.syncActiveModelSummary();
@@ -5829,7 +7338,7 @@ var SidebarViewProvider = class {
       return;
     const phases = this.orchestrator.getPhases();
     if (phases.length === 0) {
-      vscode.window.showInformationMessage("TidyProteomicsAgent: No phases found to run.");
+      vscode4.window.showInformationMessage("TidyProteomicsAgent: No phases found to run.");
       return;
     }
     const current = phases.find((p) => p.status === "running") || phases.find((p) => p.status === "pending" && p.enabled !== false) || phases[0];
@@ -5839,12 +7348,12 @@ var SidebarViewProvider = class {
       phaseId: p.id,
       picked: p.id === current?.id
     }));
-    const chosen = await vscode.window.showQuickPick(items, {
+    const chosen = await vscode4.window.showQuickPick(items, {
       placeHolder: "Select phase to run in isolation"
     });
     if (chosen) {
       this.orchestrator.runSinglePhase(chosen.phaseId).catch((err) => {
-        vscode.window.showErrorMessage(`TidyProteomicsAgent: Error running phase - ${err.message}`);
+        vscode4.window.showErrorMessage(`TidyProteomicsAgent: Error running phase - ${err.message}`);
       });
     }
   }
@@ -5862,12 +7371,54 @@ var SidebarViewProvider = class {
       }
     }
     if (state && Array.isArray(state.phases)) {
-      const failed = state.phases.find((p) => p.status === "failed");
-      if (failed) {
-        this.advisorService.handlePhaseHalted(failed).catch((err) => {
-          console.warn("[SidebarViewProvider] Error handling halted phase in advisor:", err);
-        });
+      let allCompleted = state.phases.length > 0;
+      for (const phase of state.phases) {
+        if (phase.enabled && phase.status !== "completed") {
+          allCompleted = false;
+        }
+        const prevStatus = this.previousPhaseStatuses.get(phase.id);
+        const currentStatus = phase.status;
+        if (prevStatus !== "running" && currentStatus === "running") {
+          this.agentService.handlePhaseStarted(phase);
+        } else if (prevStatus === "running" && currentStatus === "completed") {
+          this.agentService.handlePhaseCompleted(phase).catch(() => {
+          });
+        } else if (currentStatus === "failed") {
+          this.agentService.handlePhaseHalted(phase).catch(() => {
+          });
+        }
+        this.previousPhaseStatuses.set(phase.id, currentStatus);
       }
+      if (allCompleted && state.isRunning === false) {
+        this.agentService.handlePipelineFinished(state);
+      }
+    }
+    this.sendDesignerState().catch(() => {
+    });
+  }
+  async scanArtifacts() {
+    return [];
+  }
+  /**
+   * Broadcasts current study design and discovered sample groups to the webview designer.
+   */
+  async sendDesignerState() {
+    if (!this._view || !this._view.webview || !this.workspaceRoot)
+      return;
+    try {
+      const expManager = this.agentService.getExperimentManager();
+      const spec = await expManager.readSpec();
+      this._view.webview.postMessage({
+        type: "designerState",
+        spec: {
+          discoveredGroups: spec.discoveredGroups || [],
+          rawSampleGroups: spec.rawSampleGroups || [],
+          targetContrasts: spec.targetContrasts || [],
+          contrastConfirmed: spec.contrastConfirmed,
+          batchConfoundingAuthorized: spec.batchConfoundingAuthorized
+        }
+      });
+    } catch (_) {
     }
   }
   syncLiteratureWorkspace() {
@@ -5876,10 +7427,10 @@ var SidebarViewProvider = class {
       this.workspaceRoot = root;
       this.tools.setWorkspaceRoot(root);
       this.literatureService.setWorkspaceRoot(root);
-      this.advisorService.setWorkspaceRoot(root);
+      this.agentService.setWorkspaceRoot(root);
     } else if (root) {
       this.literatureService.setWorkspaceRoot(root);
-      this.advisorService.setWorkspaceRoot(root);
+      this.agentService.setWorkspaceRoot(root);
     }
     return this.workspaceRoot;
   }
@@ -5941,14 +7492,14 @@ var SidebarViewProvider = class {
   _cachedIcons;
   _loadIcons() {
     const icons = {};
-    const mediaDir = path10.join(this._extensionUri.fsPath, "media");
+    const mediaDir = path11.join(this._extensionUri.fsPath, "media");
     try {
-      if (fs10.existsSync(mediaDir)) {
-        const files = fs10.readdirSync(mediaDir);
+      if (fs11.existsSync(mediaDir)) {
+        const files = fs11.readdirSync(mediaDir);
         for (const file of files) {
           if (file.endsWith(".svg")) {
             const key = file.replace(".svg", "");
-            let content = fs10.readFileSync(path10.join(mediaDir, file), "utf-8");
+            let content = fs11.readFileSync(path11.join(mediaDir, file), "utf-8");
             content = content.replace(/<\?xml[^>]*\?>/g, "").trim();
             content = content.replace(/\s(width|height)="[^"]*"/g, "");
             if (key === "robot") {
@@ -6022,38 +7573,188 @@ var SidebarViewProvider = class {
     /* Top Header Bar */
     .header {
       display: flex;
-      align-items: center;
-      justify-content: space-between;
+      flex-direction: column;
+      gap: 7px;
       border-bottom: 1px solid var(--border);
-      padding-bottom: 8px;
+      padding-bottom: 9px;
       margin-bottom: 10px;
       flex: 0 0 auto;
+    }
+    .header-top-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 26px;
     }
     .header-left {
       display: flex;
       align-items: center;
-      gap: 6px;
+      min-width: 0;
+      flex: 1 1 auto;
     }
-    .ws-chip {
+    .header-left h2 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 26px;
+      height: 26px;
       display: inline-flex;
       align-items: center;
-      gap: 4px;
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 2px 8px;
-      font-size: 10px;
-      color: #93c5fd;
-      cursor: pointer;
-      max-width: 140px;
+      gap: 6px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      transition: border-color 0.15s ease, background 0.15s ease;
     }
-    .ws-chip:hover {
-      border-color: var(--primary);
-      background: rgba(59, 130, 246, 0.15);
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 0 0 auto;
+    }
+
+    /* Header Run/Stop Button */
+    .header-run-stop-btn {
+      height: 26px;
+      box-sizing: border-box;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      padding: 0 9px;
+      font-size: 11px;
+      font-weight: 700;
+      border-radius: 4px;
+      line-height: 1;
+      cursor: pointer;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      transition: all 0.15s ease;
+      white-space: nowrap;
+      user-select: none;
+    }
+    .header-btn-run {
+      background: #059669;
+      color: #ffffff;
+    }
+    .header-btn-run:hover:not(:disabled) {
+      background: #10b981;
+      box-shadow: 0 2px 6px rgba(16, 185, 129, 0.35);
+    }
+    .header-btn-stop {
+      background: #dc2626;
+      color: #ffffff;
+    }
+    .header-btn-stop:hover:not(:disabled) {
+      background: #ef4444;
+      box-shadow: 0 2px 6px rgba(239, 68, 68, 0.35);
+    }
+    .header-run-stop-btn:active:not(:disabled) {
+      transform: translateY(1px);
+    }
+    .header-run-stop-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      box-shadow: none;
+      transform: none;
+    }
+    .header-run-stop-btn .btn-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .header-run-stop-btn .btn-icon .svg-icon {
+      width: 10px;
+      height: 10px;
+      vertical-align: middle;
+      fill: currentColor;
+    }
+
+    /* Header Status Badge */
+    .header-status-badge {
+      height: 26px !important;
+      box-sizing: border-box;
+      display: inline-flex !important;
+      align-items: center;
+      justify-content: center;
+      padding: 0 8px;
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      border-radius: 4px;
+      line-height: 1;
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    /* Flexible Segmented Progress Bar */
+    .pipeline-progress-container {
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .progress-bar-track {
+      width: 100%;
+      height: 7px;
+      display: flex;
+      align-items: stretch;
+      gap: 3px;
+      background: rgba(255, 255, 255, 0.04);
+      padding: 1px;
+      border-radius: 4px;
+      box-sizing: border-box;
+      transition: all 0.2s ease;
+    }
+    .progress-bar-track:empty {
+      display: none;
+    }
+    .progress-segment {
+      flex: 1 1 0;
+      min-width: 2px;
+      height: 100%;
+      border-radius: 2px;
+      transition: background-color 0.2s ease, opacity 0.2s ease, transform 0.15s ease;
+      cursor: pointer;
+      position: relative;
+    }
+    .progress-segment:hover {
+      transform: scaleY(1.4);
+      filter: brightness(1.25);
+      z-index: 2;
+    }
+
+    /* Progress Segment States */
+    /* 1. Filled Grey for not yet run */
+    .progress-segment.segment-pending,
+    .progress-segment.segment-queued {
+      background: #52525b;
+      opacity: 0.85;
+    }
+    /* 2. Green for completed */
+    .progress-segment.segment-completed {
+      background: #10b981;
+      box-shadow: 0 0 3px rgba(16, 185, 129, 0.4);
+    }
+    /* 3. Animated Blue for running */
+    .progress-segment.segment-running {
+      background: linear-gradient(90deg, #2563eb 0%, #60a5fa 50%, #2563eb 100%);
+      background-size: 200% 100%;
+      animation: progressShimmer 1.5s linear infinite;
+      box-shadow: 0 0 6px rgba(59, 130, 246, 0.7);
+    }
+    @keyframes progressShimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    /* 4. Red for error */
+    .progress-segment.segment-failed,
+    .progress-segment.segment-error {
+      background: #ef4444;
+      box-shadow: 0 0 4px rgba(239, 68, 68, 0.5);
+    }
+    /* 5. Orange for warning or needs user attention */
+    .progress-segment.segment-warning,
+    .progress-segment.segment-attention {
+      background: #f59e0b;
+      box-shadow: 0 0 4px rgba(245, 158, 11, 0.5);
     }
 
     /* Badges */
@@ -6072,6 +7773,7 @@ var SidebarViewProvider = class {
     .badge-completed { background: var(--success); color: #fff; }
     .badge-failed { background: var(--error); color: #fff; }
     .badge-cached { background: var(--cached); color: #fff; }
+    .badge-warning { background: var(--warning, #f59e0b); color: #fff; }
 
     @keyframes pulse {
       0%, 100% { opacity: 1; }
@@ -6310,6 +8012,14 @@ var SidebarViewProvider = class {
       flex: 1 1 auto;
       min-height: 0;
     }
+
+    .contrast-designer-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      margin: 6px 0;
+    }
     #activePipelineDashboard {
       display: flex;
       flex-direction: column;
@@ -6324,8 +8034,8 @@ var SidebarViewProvider = class {
       min-height: 0;
     }
 
-    /* Live Advisor Chat Styles */
-    .advisor-container {
+    /* Live Agent Chat Styles */
+    .agent-container, .advisor-container {
       display: flex;
       flex-direction: column;
       flex: 1 1 auto;
@@ -6333,7 +8043,7 @@ var SidebarViewProvider = class {
       min-height: 0;
       gap: 8px;
     }
-    .advisor-header {
+    .agent-header, .advisor-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -6343,7 +8053,7 @@ var SidebarViewProvider = class {
       border-radius: 4px;
       flex-shrink: 0;
     }
-    .advisor-suggestions {
+    .agent-suggestions, .advisor-suggestions {
       display: flex;
       gap: 4px;
       overflow-x: auto;
@@ -6351,10 +8061,10 @@ var SidebarViewProvider = class {
       flex-shrink: 0;
       scrollbar-width: none;
     }
-    .advisor-suggestions::-webkit-scrollbar {
+    .agent-suggestions::-webkit-scrollbar, .advisor-suggestions::-webkit-scrollbar {
       display: none;
     }
-    .advisor-chip {
+    .agent-chip, .advisor-chip {
       background: rgba(59, 130, 246, 0.1);
       color: #93c5fd;
       border: 1px solid rgba(59, 130, 246, 0.25);
@@ -6367,12 +8077,12 @@ var SidebarViewProvider = class {
       transition: all 0.15s ease;
       flex-shrink: 0;
     }
-    .advisor-chip:hover {
+    .agent-chip:hover, .advisor-chip:hover {
       background: var(--primary);
       color: #fff;
       border-color: var(--primary);
     }
-    .advisor-thread {
+    .agent-thread, .advisor-thread {
       flex: 1 1 auto;
       min-height: 120px;
       overflow-y: auto;
@@ -6382,15 +8092,15 @@ var SidebarViewProvider = class {
       padding: 4px 2px;
       margin-bottom: 4px;
     }
-    .advisor-msg {
+    .agent-msg, .advisor-msg {
       display: flex;
       gap: 6px;
       max-width: 100%;
     }
-    .advisor-msg.user {
+    .agent-msg.user, .advisor-msg.user {
       flex-direction: row-reverse;
     }
-    .advisor-avatar {
+    .agent-avatar, .advisor-avatar {
       width: 22px;
       height: 22px;
       border-radius: 50%;
@@ -6403,15 +8113,15 @@ var SidebarViewProvider = class {
       flex-shrink: 0;
       margin-top: 2px;
     }
-    .advisor-avatar .svg-icon {
+    .agent-avatar .svg-icon, .advisor-avatar .svg-icon {
       width: 13px;
       height: 13px;
     }
-    .advisor-msg.user .advisor-avatar {
+    .agent-msg.user .agent-avatar, .advisor-msg.user .advisor-avatar {
       background: rgba(16, 185, 129, 0.2);
       color: #34d399;
     }
-    .advisor-bubble {
+    .agent-bubble, .advisor-bubble {
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 6px;
@@ -6423,12 +8133,12 @@ var SidebarViewProvider = class {
       word-break: break-word;
       overflow-wrap: break-word;
     }
-    .advisor-msg.user .advisor-bubble {
+    .agent-msg.user .agent-bubble, .advisor-msg.user .advisor-bubble {
       background: rgba(59, 130, 246, 0.15);
       border-color: rgba(59, 130, 246, 0.35);
       color: #dbeafe;
     }
-    .advisor-msg-title {
+    .agent-msg-title, .advisor-msg-title {
       font-size: 9.5px;
       font-weight: 700;
       color: var(--primary);
@@ -6437,10 +8147,10 @@ var SidebarViewProvider = class {
       justify-content: space-between;
       align-items: center;
     }
-    .advisor-msg.user .advisor-msg-title {
+    .agent-msg.user .agent-msg-title, .advisor-msg.user .advisor-msg-title {
       color: #60a5fa;
     }
-    .advisor-msg-body code {
+    .agent-msg-body code, .advisor-msg-body code {
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 10px;
       background: rgba(0, 0, 0, 0.3);
@@ -6448,7 +8158,7 @@ var SidebarViewProvider = class {
       border-radius: 3px;
       border: 1px solid rgba(255, 255, 255, 0.08);
     }
-    .advisor-msg-body pre {
+    .agent-msg-body pre, .advisor-msg-body pre {
       background: rgba(0, 0, 0, 0.45);
       border: 1px solid var(--border);
       border-radius: 4px;
@@ -6456,26 +8166,26 @@ var SidebarViewProvider = class {
       overflow-x: auto;
       margin: 6px 0;
     }
-    .advisor-msg-body pre code {
+    .agent-msg-body pre code, .advisor-msg-body pre code {
       background: transparent;
       padding: 0;
       border: none;
       font-size: 10px;
     }
-    .advisor-msg-body ul, .advisor-msg-body ol {
+    .agent-msg-body ul, .agent-msg-body ol, .advisor-msg-body ul, .advisor-msg-body ol {
       margin: 4px 0 6px 16px;
       padding: 0;
     }
-    .advisor-msg-body li {
+    .agent-msg-body li, .advisor-msg-body li {
       margin-bottom: 2px;
     }
-    .advisor-msg-chips {
+    .agent-msg-chips, .advisor-msg-chips {
       display: flex;
       flex-wrap: wrap;
       gap: 5px;
       margin-top: 8px;
     }
-    .advisor-msg-chip {
+    .agent-msg-chip, .advisor-msg-chip {
       background: var(--input-bg, #252526);
       color: var(--primary, #3b82f6);
       border: 1px solid rgba(59, 130, 246, 0.4);
@@ -6489,25 +8199,18 @@ var SidebarViewProvider = class {
       align-items: center;
       gap: 4px;
     }
-    .advisor-msg-chip:hover {
+    .agent-msg-chip:hover, .advisor-msg-chip:hover {
       background: rgba(59, 130, 246, 0.2);
       border-color: var(--primary, #3b82f6);
       transform: translateY(-1px);
     }
-    .advisor-pipeline-banner {
-      background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(16, 185, 129, 0.08));
-      border: 1px solid rgba(59, 130, 246, 0.3);
-      border-radius: 6px;
-      padding: 8px 10px;
-      margin-bottom: 8px;
-    }
-    .advisor-input-area {
+    .agent-input-area, .advisor-input-area {
       flex-shrink: 0;
       display: flex;
       flex-direction: column;
       gap: 3px;
     }
-    .advisor-input-wrapper {
+    .agent-input-wrapper, .advisor-input-wrapper {
       background: var(--input-bg);
       border: 1px solid var(--input-border);
       border-radius: 6px;
@@ -6517,10 +8220,10 @@ var SidebarViewProvider = class {
       gap: 6px;
       transition: border-color 0.15s ease;
     }
-    .advisor-input-wrapper:focus-within {
+    .agent-input-wrapper:focus-within, .advisor-input-wrapper:focus-within {
       border-color: var(--input-focus);
     }
-    #advisorInput {
+    #agentInput, #advisorInput {
       width: 100%;
       background: transparent;
       border: none;
@@ -6535,19 +8238,19 @@ var SidebarViewProvider = class {
       box-sizing: border-box;
       padding: 0;
     }
-    .advisor-input-controls {
+    .agent-input-controls, .advisor-input-controls {
       display: flex;
       justify-content: flex-end;
       align-items: center;
       gap: 6px;
     }
-    .advisor-input-hint {
+    .agent-input-hint, .advisor-input-hint {
       font-size: 8.5px;
       color: var(--muted);
       text-align: right;
       padding-right: 2px;
     }
-    .advisor-streaming-cursor {
+    .agent-streaming-cursor, .advisor-streaming-cursor {
       display: inline-block;
       width: 6px;
       height: 11px;
@@ -7129,27 +8832,35 @@ var SidebarViewProvider = class {
 <body>
   <!-- Header Bar -->
   <div class="header">
-    <div class="header-left">
-      <h2>${icons["robot"] || ""} TidyProteomicsAgent</h2>
-      <span class="badge badge-completed" id="pipelineHeaderBadge">IDLE</span>
+    <div class="header-top-row">
+      <div class="header-left">
+        <h2>${icons["robot"] || ""} TidyProteomicsAgent</h2>
+      </div>
+      <div class="header-actions">
+        <button type="button" id="headerRunStopBtn" class="header-run-stop-btn header-btn-run" data-running="false" title="Run Pipeline Tasks">
+          <span class="btn-icon">${icons["play"] || ""}</span>
+          <span class="btn-text">Run</span>
+        </button>
+        <span class="badge badge-completed header-status-badge" id="pipelineHeaderBadge">IDLE</span>
+      </div>
     </div>
-    <div class="ws-chip" id="wsChip" title="Click to view Active Directory">
-      <span>${icons["folder-open"] || ""}</span>
-      <span id="wsChipName">Project</span>
+    <!-- Flexible Segmented Progress Bar -->
+    <div class="pipeline-progress-container" id="pipelineProgressContainer" title="Analysis Phases Progress">
+      <div class="progress-bar-track" id="pipelineProgressBarTrack"></div>
     </div>
   </div>
 
   <!-- Segmented Tab Navigation -->
   <div class="tab-bar">
-    <button type="button" class="tab-btn active" data-tab="pipeline" onclick="window.switchTab && window.switchTab('pipeline')" title="Pipeline execution, phases & live feed">
+    <button type="button" class="tab-btn active" data-tab="chat" onclick="window.switchTab && window.switchTab('chat')" title="TidyProteomics Autonomous Agent & Realtime Event Stream">
+      <span class="tab-icon">${icons["robot"] || icons["chat"] || ""}</span>
+      <span class="tab-label">Agent</span>
+      <span class="tab-indicator" id="chatIndicator"></span>
+    </button>
+    <button type="button" class="tab-btn" data-tab="pipeline" onclick="window.switchTab && window.switchTab('pipeline')" title="Pipeline execution & phases">
       <span class="tab-icon">${icons["rocket-lunch"] || ""}</span>
       <span class="tab-label">Pipeline</span>
       <span class="tab-indicator" id="pipelineIndicator"></span>
-    </button>
-    <button type="button" class="tab-btn" data-tab="chat" onclick="window.switchTab && window.switchTab('chat')" title="Proteomics Live Advisor">
-      <span class="tab-icon">${icons["chat"] || ""}</span>
-      <span class="tab-label">Chat</span>
-      <span class="tab-indicator" id="chatIndicator"></span>
     </button>
     <button type="button" class="tab-btn" data-tab="blackboard" onclick="window.switchTab && window.switchTab('blackboard')" title="Memory notes, protocol & chat log">
       <span class="tab-icon">${icons["ftp"] || ""}</span>
@@ -7173,7 +8884,7 @@ var SidebarViewProvider = class {
   </div>
 
   <!-- TAB 1: PIPELINE -->
-  <div class="tab-pane active" id="pane-pipeline">
+  <div class="tab-pane" id="pane-pipeline" style="display:none;">
     <!-- Loading Container (shown briefly while initializing) -->
     <div id="loadingPipelineContainer" style="text-align:center; padding:15px; color:var(--muted); font-size:11px;">
       Scanning analysis pipeline...
@@ -7197,13 +8908,13 @@ var SidebarViewProvider = class {
         <div style="margin-bottom:8px;">
           <label style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--muted); display:block; margin-bottom:4px;">Pipeline Template</label>
           <select id="pipelineTemplateSelect" style="width:100%; box-sizing:border-box; padding:5px 8px; font-size:11px; background:var(--vscode-input-background, #252526); color:var(--vscode-input-foreground, #cccccc); border:1px solid var(--vscode-input-border, #3c3c3c); border-radius:4px; outline:none;">
-            <option value="differential_expression">Differential Expression (11-Phase Pipeline)</option>
+            <option value="differential_expression">Differential Expression (12-Phase Pipeline)</option>
             <option value="quality_control_only">Quality Control &amp; Exploration (2-Phase QC)</option>
           </select>
         </div>
         <div id="pipelineDescription" style="font-size:10px; color:var(--muted); margin-bottom:12px; background:rgba(255,255,255,0.03); padding:6px 8px; border-radius:4px; border-left:3px solid var(--primary, #007acc); line-height:1.4;">
-          <b>Phases:</b> 00_INSTALL \u2794 01_INSPECT \u2794 02_NORMALIZE \u2794 03_IMPUTE \u2794 04_EXPRESSION \u2794 05_ENRICHMENT \u2794 06_OBSERVATIONS \u2794 07_KNOWLEDGE \u2794 08_WEBSEARCH \u2794 09_LITERATURE \u2794 10_SYNTHESIS.<br>
-          <i>Includes environment readiness, QC inspection, normalization benchmarking, imputation, differential expression, pathway enrichment, primary observations, internal knowledge, web search, literature database interrogation, and final manuscript synthesis report.</i>
+          <b>Phases:</b> 00_INSTALL \u2794 01_INSPECT \u2794 02_NORMALIZE \u2794 03_IMPUTE \u2794 04_EXPRESSION \u2794 05_ENRICHMENT \u2794 06_OBSERVATIONS \u2794 07_KNOWLEDGE \u2794 08_WEBSEARCH \u2794 09_LITERATURE \u2794 10_FIGURES \u2794 11_SYNTHESIS.<br>
+          <i>Includes environment readiness, QC inspection, normalization benchmarking, imputation, differential expression, pathway enrichment, primary observations, internal knowledge, web search, literature database interrogation, discussion figure rendering &amp; statistical digest, and final manuscript synthesis report.</i>
         </div>
         <button type="button" id="initWorkspaceBtn" data-action="initWorkspace" class="btn-primary" style="width:100%; padding:7px 10px; font-size:11px; font-weight:600; display:flex; align-items:center; justify-content:center; gap:6px; cursor:pointer;">
           <span>${icons["sparkles"] || ""}</span> Initialize Working Directory
@@ -7213,20 +8924,8 @@ var SidebarViewProvider = class {
 
     <!-- State C: Active Pipeline Dashboard (shown when analysis/ exists and has tasks) -->
     <div id="activePipelineDashboard" style="display:none;">
-      <!-- Pipeline Execution Controls & Advisor Guidance -->
+      <!-- Pipeline Execution Controls -->
       <div class="section">
-        <div id="advisorPipelineBanner" class="advisor-pipeline-banner">
-          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
-            <div style="display:flex; align-items:center; gap:6px;">
-              <span style="font-size:14px; line-height:1;">\u{1F4AC}</span>
-              <div>
-                <div style="font-weight:600; font-size:11px;">Advisor-Guided Pipeline</div>
-                <div style="font-size:9.5px; color:var(--muted);" id="advisorBannerSubtext">Chat with Advisor to configure and start</div>
-              </div>
-            </div>
-            <button type="button" id="openAdvisorFromPipelineBtn" class="btn-insight-action-primary" style="padding:4px 8px; font-size:10px; cursor:pointer;" title="Switch to Live Advisor">Open Advisor \u2197</button>
-          </div>
-        </div>
         <div style="display:flex; gap:4px; margin-bottom:8px;">
           <button id="stopBtn" class="btn-stop" style="display:none; width:100%;">${icons["stop"] || ""} Stop Pipeline</button>
         </div>
@@ -7245,75 +8944,80 @@ var SidebarViewProvider = class {
           <div style="text-align:center; padding:10px; color:var(--muted);">Loading phases...</div>
         </div>
       </div>
-
-      <!-- Tokens -->
-      <div class="section">
-        <div class="section-header">
-          <h3>${icons["coins"] || ""} Tokens</h3>
-        </div>
-        <table class="tokens-table">
-          <thead>
-            <tr>
-              <th>Prompt</th>
-              <th>Cached ${icons["sparkles"] || ""}</th>
-              <th>Response</th>
-              <th>Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td id="promptTokens">0</td>
-              <td id="cachedTokens" style="color:var(--success);">0</td>
-              <td id="responseTokens">0</td>
-              <td id="totalTokens">0</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <!-- Live Terminal Feed -->
-      <div class="section terminal-section">
-        <div class="section-header">
-          <h3>${icons["terminal"] || ""} Live Feed</h3>
-          <div style="display:flex; gap:4px;">
-            <button class="btn-sm" id="viewChatLogBtn" title="Open master logs/pipeline.md in VS Code">${icons["list"] || ""} Pipeline Log</button>
-            <button class="btn-sm" id="clearLogBtn">Clear</button>
-          </div>
-        </div>
-        <div class="terminal" id="terminalLog">TidyProteomicsAgent ready. Phases discovered from analysis/*.md.</div>
-      </div>
     </div>
   </div>
 
-  <!-- TAB: CHAT ADVISOR -->
-  <div class="tab-pane" id="pane-chat" style="display:none;">
-    <div class="advisor-container">
-      <div class="advisor-header">
+  <!-- TAB: AGENT CONTROL PLANE -->
+  <div class="tab-pane active" id="pane-chat" style="display:flex;">
+    <div class="agent-container advisor-container">
+      <div class="agent-header advisor-header">
         <div style="display:flex; align-items:center; gap:6px;">
-          <span style="font-size:13px; color:var(--primary); display:inline-flex; align-items:center;">${icons["chat"] || ""}</span>
-          <h3 style="margin:0; font-size:12px; font-weight:600;">Live Advisor</h3>
+          <span style="font-size:13px; color:var(--primary); display:inline-flex; align-items:center;">${icons["robot"] || icons["chat"] || ""}</span>
+          <h3 style="margin:0; font-size:12px; font-weight:600;">Autonomous Agent</h3>
         </div>
         <div style="display:flex; align-items:center; gap:6px;">
-          <button type="button" class="btn-sm" id="advisorClearBtn" title="Clear conversation history">Clear</button>
+          <button type="button" class="btn-sm" id="agentClearBtn" title="Clear conversation history">Clear</button>
+        </div>
+      </div>
+
+      <!-- Visual Contrast & Batch Designer Widget -->
+      <div class="contrast-designer-card" id="contrastDesignerCard">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+          <div style="font-weight:600; font-size:11px; display:flex; align-items:center; gap:6px;">
+            <span>\u{1F3AF}</span> Visual Contrast & Study Designer
+          </div>
+          <span class="badge" id="designerStatusBadge" style="font-size:9px; background:var(--primary); color:#fff; padding:2px 6px; border-radius:4px;">INTERACTIVE</span>
+        </div>
+        <div style="font-size:10px; color:var(--muted); margin-bottom:8px;">
+          Assign perturbation vs. reference groups and configure batch handling in <code>docs/experiment.md</code>:
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px;">
+          <div>
+            <label style="font-size:10px; font-weight:600; color:var(--muted); display:block; margin-bottom:2px;">Target (Treatment)</label>
+            <input type="text" id="designerTreatmentInput" list="designerGroupList" placeholder="e.g. knockdown" style="width:100%; box-sizing:border-box; font-size:11px; padding:4px 6px; background:var(--vscode-input-background, #1e1e1e); color:var(--fg); border:1px solid var(--border); border-radius:4px; outline:none;">
+          </div>
+          <div>
+            <label style="font-size:10px; font-weight:600; color:var(--muted); display:block; margin-bottom:2px;">Reference (Control)</label>
+            <input type="text" id="designerControlInput" list="designerGroupList" placeholder="e.g. control" style="width:100%; box-sizing:border-box; font-size:11px; padding:4px 6px; background:var(--vscode-input-background, #1e1e1e); color:var(--fg); border:1px solid var(--border); border-radius:4px; outline:none;">
+          </div>
+          <datalist id="designerGroupList"></datalist>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px; margin-bottom:8px; font-size:11px;">
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input type="checkbox" id="designerConfoundingCheck">
+            <span>Proceed With Potential Batch Confounding</span>
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input type="checkbox" id="designerPoolingCheck" checked>
+            <span>Reassign Sample Names According to Pooling Map</span>
+          </label>
+        </div>
+        <div style="display:flex; gap:6px;">
+          <button type="button" class="btn-primary btn-sm" id="designerApplyBtn" onclick="window.applyContrastFromDesigner && window.applyContrastFromDesigner()" style="flex:1;">
+            Apply Contrast & Resume
+          </button>
+          <button type="button" class="btn-sm" onclick="window.fetchDesignerState && window.fetchDesignerState()" title="Refresh Discovered Groups" style="padding:2px 8px;">
+            \u21BB
+          </button>
         </div>
       </div>
 
       <!-- Quick Action Suggestion Chips -->
-      <div class="advisor-suggestions">
-        <button type="button" class="advisor-chip" data-prompt="What is the current status of the analysis pipeline? Any issues or recommended next steps?">\u{1F4CA} Pipeline Status</button>
-        <button type="button" class="advisor-chip" data-prompt="Review docs/experiment.md and verify if my experimental factors, sample groupings, and contrasts are properly set up.">\u{1F9EA} Check Design</button>
-        <button type="button" class="advisor-chip" data-prompt="Explain any batch confounding warnings or risks detected in the dataset, and what actions I should take.">\u26A0\uFE0F Batch Effects</button>
-        <button type="button" class="advisor-chip" data-prompt="Summarize the key biological findings and observations recorded in docs/notes.md.">\u{1F9EC} Summary</button>
+      <div class="agent-suggestions advisor-suggestions">
+        <button type="button" class="agent-chip advisor-chip" data-prompt="What is the current status of the analysis pipeline? Any issues or recommended next steps?">\u{1F4CA} Pipeline Status</button>
+        <button type="button" class="agent-chip advisor-chip" data-prompt="Review docs/experiment.md and verify if my experimental factors, sample groupings, and contrasts are properly set up.">\u{1F9EA} Check Design</button>
+        <button type="button" class="agent-chip advisor-chip" data-prompt="Explain any batch confounding warnings or risks detected in the dataset, and what actions I should take.">\u26A0\uFE0F Batch Effects</button>
+        <button type="button" class="agent-chip advisor-chip" data-prompt="Summarize the key biological findings and observations recorded in docs/notes.md.">\u{1F9EC} Summary</button>
       </div>
 
       <!-- Messages Thread -->
-      <div class="advisor-thread" id="advisorThread">
-        <div class="advisor-msg assistant">
-          <div class="advisor-avatar">${icons["robot"] || "\u{1F916}"}</div>
-          <div class="advisor-bubble">
-            <div class="advisor-msg-title">TidyProteomics Live Advisor</div>
-            <div class="advisor-msg-body">
-              Hello! I am your live proteomics advisor. I monitor your experimental design in <code>docs/experiment.md</code>, pipeline execution status, and findings in <code>docs/notes.md</code>.
+      <div class="agent-thread advisor-thread" id="agentThread">
+        <div class="agent-msg advisor-msg assistant">
+          <div class="agent-avatar advisor-avatar">${icons["robot"] || "\u{1F916}"}</div>
+          <div class="agent-bubble advisor-bubble">
+            <div class="agent-msg-title advisor-msg-title">TidyProteomics Live Agent</div>
+            <div class="agent-msg-body advisor-msg-body">
+              Hello! I am your live proteomics agent. I monitor your experimental design in <code>docs/experiment.md</code>, pipeline execution status, and findings in <code>docs/notes.md</code>.
               <br><br>
               Feel free to ask questions about:
               <ul>
@@ -7329,19 +9033,19 @@ var SidebarViewProvider = class {
       </div>
 
       <!-- Input Bar -->
-      <div class="advisor-input-area">
-        <div class="advisor-input-wrapper">
-          <textarea id="advisorInput" rows="1" placeholder="Ask the advisor about your analysis, design, or results..."></textarea>
-          <div class="advisor-input-controls">
-            <button type="button" id="advisorStopBtn" class="btn-stop btn-sm" style="display:none;" title="Stop generation">
+      <div class="agent-input-area advisor-input-area">
+        <div class="agent-input-wrapper advisor-input-wrapper">
+          <textarea id="agentInput" rows="1" placeholder="Ask the agent about your analysis, design, or results..."></textarea>
+          <div class="agent-input-controls advisor-input-controls">
+            <button type="button" id="agentStopBtn" class="btn-stop btn-sm" style="display:none;" title="Stop generation">
               ${icons["stop"] || ""} Stop
             </button>
-            <button type="button" id="advisorSendBtn" class="btn-primary btn-sm" title="Send message to Advisor">
+            <button type="button" id="agentSendBtn" class="btn-primary btn-sm" title="Send message to Agent">
               ${icons["play"] || ""} Send
             </button>
           </div>
         </div>
-        <div class="advisor-input-hint">Enter to send \u2022 Shift+Enter for new line</div>
+        <div class="agent-input-hint advisor-input-hint">Enter to send \u2022 Shift+Enter for new line</div>
       </div>
     </div>
   </div>
@@ -7443,7 +9147,7 @@ var SidebarViewProvider = class {
           <option value="65536" ${config.maxTokens === 65536 ? "selected" : ""}>65,536</option>
           <option value="128000" ${config.maxTokens === 128e3 ? "selected" : ""}>128,000 (OpenRouter Frontier / Luna Max)</option>
         </select>
-        <span style="font-size:9px; color:var(--muted); display:block; margin-top:2px;">Prevents tool call JSON truncation during long file generation (e.g. docs/scientific_report.md).</span>
+        <span style="font-size:9px; color:var(--muted); display:block; margin-top:2px;">Prevents tool call JSON truncation during long file generation (e.g. docs/manuscript.md).</span>
       </div>
 
       <div class="form-group">
@@ -7459,6 +9163,17 @@ var SidebarViewProvider = class {
           <option value="1200" ${config.timeoutSeconds === 1200 ? "selected" : ""}>1,200s (20m - Ultra Long / Slow Local Inference)</option>
         </select>
         <span style="font-size:9px; color:var(--muted); display:block; margin-top:2px;">Prevents timeout abortions during complex phases or slow local inference (e.g. 70B models).</span>
+      </div>
+
+      <div class="form-group">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <label id="engineSelectLabel">Execution Engine</label>
+          <span style="font-size:9px; color:var(--muted);">Default: MCP (Live)</span>
+        </div>
+        <select id="engineSelect" disabled style="opacity:0.85;">
+          <option value="mcp" selected>Live MCP Server (In-Memory Session)</option>
+        </select>
+        <span style="font-size:9px; color:var(--muted); display:block; margin-top:2px;">Autonomous execution via persistent in-memory TidyProteomics MCP Server.</span>
       </div>
 
       <div style="margin-top:10px; display:flex; justify-content:space-between; align-items:center;">
@@ -7481,6 +9196,13 @@ var SidebarViewProvider = class {
           <span style="color:var(--muted);">Model:</span>
           <b id="summaryModel" style="font-family:monospace;">${config.model}</b>
         </div>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <span style="color:var(--muted);">Execution Engine:</span>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <b id="summaryEngine" style="font-family:monospace;">MCP (LIVE)</b>
+            <button type="button" id="toggleEngineBtn" data-action="toggleEngine" class="btn-secondary btn-sm" style="padding:1px 6px; font-size:9.5px; height:auto; cursor:pointer;" title="Check TidyProteomics MCP Server connection status">Status</button>
+          </div>
+        </div>
         <div style="display:flex; justify-content:space-between;">
           <span style="color:var(--muted);">Prompt Caching:</span>
           <span id="summaryCaching" class="badge badge-cached">Active ${icons["sparkles"] || ""}</span>
@@ -7498,6 +9220,31 @@ var SidebarViewProvider = class {
           <span id="summaryKeyStatus" class="badge ${config.apiKey ? "badge-completed" : "badge-failed"}">${config.apiKey ? "Configured" : "Missing"}</span>
         </div>
       </div>
+    </div>
+
+    <!-- Tokens -->
+    <div class="section">
+      <div class="section-header">
+        <h3>${icons["coins"] || ""} Tokens</h3>
+      </div>
+      <table class="tokens-table">
+        <thead>
+          <tr>
+            <th>Prompt</th>
+            <th>Cached ${icons["sparkles"] || ""}</th>
+            <th>Response</th>
+            <th>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td id="promptTokens">0</td>
+            <td id="cachedTokens" style="color:var(--success);">0</td>
+            <td id="responseTokens">0</td>
+            <td id="totalTokens">0</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </div>
 
@@ -7730,8 +9477,9 @@ var SidebarViewProvider = class {
         if (tabId === "literature" || tabId === "corpus") {
           vscode.postMessage({ type: "literatureGetState" });
         } else if (tabId === "chat") {
-          vscode.postMessage({ type: "advisorGetState" });
-          const input = document.getElementById("advisorInput");
+          vscode.postMessage({ type: "agentGetState" });
+          vscode.postMessage({ type: "getDesignerState" });
+          const input = document.getElementById("agentInput") || document.getElementById("advisorInput");
           if (input) setTimeout(function () { input.focus(); }, 50);
         }
 
@@ -7748,7 +9496,7 @@ var SidebarViewProvider = class {
     // Restore saved tab or default to 'pipeline'
     try {
       const savedState = vscode.getState();
-      const initialTab = (savedState && savedState.activeTab) ? savedState.activeTab : "pipeline";
+      const initialTab = (savedState && savedState.activeTab) ? savedState.activeTab : "chat";
       switchTab(initialTab);
     } catch (_) {
       switchTab("pipeline");
@@ -7756,6 +9504,8 @@ var SidebarViewProvider = class {
 
     // Elements
     const pipelineHeaderBadge = document.getElementById("pipelineHeaderBadge");
+    const headerRunStopBtn = document.getElementById("headerRunStopBtn");
+    const pipelineProgressBarTrack = document.getElementById("pipelineProgressBarTrack");
     const wsChip = document.getElementById("wsChip");
     const wsChipName = document.getElementById("wsChipName");
 
@@ -7827,7 +9577,15 @@ var SidebarViewProvider = class {
         return;
       }
 
-      // Workspace Chip
+
+      // Progress Segment Click (navigate to Pipeline tab)
+      const progSeg = e.target.closest ? e.target.closest(".progress-segment") : null;
+      if (progSeg) {
+        switchTab("pipeline");
+        return;
+      }
+
+      // Workspace Chip (fallback if present)
       if (e.target.closest && e.target.closest("#wsChip")) {
         switchTab("directory");
         return;
@@ -7844,20 +9602,21 @@ var SidebarViewProvider = class {
         return;
       }
 
-      // Open Advisor from Pipeline Banner
-      const openAdv = e.target.closest ? e.target.closest("#openAdvisorFromPipelineBtn") : null;
-      if (openAdv) {
-        switchTab("chat");
+      // Toggle Engine Button
+      if (e.target.closest && e.target.closest("#toggleEngineBtn, [data-action='toggleEngine']")) {
+        vscode.postMessage({ type: "toggleEngine" });
         return;
       }
 
-      // Dynamic data-actions (runPhase, openPhase, openFile)
+      // Dynamic data-actions (runPhase, openPhase, openFile, confirmContrastAndProceed)
       const target = e.target.closest ? e.target.closest("[data-action]") : null;
       if (target) {
         const action = target.getAttribute("data-action");
         if (action === "runPhase") {
-          const phaseId = target.getAttribute("data-id");
+          const phaseId = target.getAttribute("data-id") || target.getAttribute("data-phase-id");
           if (phaseId) vscode.postMessage({ type: "runPhase", phaseId: phaseId });
+        } else if (action === "openProviderTab") {
+          switchTab("provider");
         } else if (action === "openPhase") {
           const fileName = target.getAttribute("data-file");
           if (fileName) vscode.postMessage({ type: "openPhase", fileName: fileName });
@@ -7865,10 +9624,10 @@ var SidebarViewProvider = class {
           const relPath = target.getAttribute("data-path");
           const searchText = target.getAttribute("data-search");
           if (relPath) vscode.postMessage({ type: "openFile", relPath: relPath, searchText: searchText || "" });
-        } else if (action === "authorizeConfoundingAndRerun") {
+        } else if (action === "confirmContrastAndProceed" || action === "authorizeConfoundingAndRerun") {
           const phaseId = target.getAttribute("data-phase-id");
-          if (phaseId) vscode.postMessage({ type: "authorizeConfoundingAndRerun", phaseId: phaseId });
-        } else if (action === "openAdvisorTab") {
+          if (phaseId) vscode.postMessage({ type: "confirmContrastAndProceed", phaseId: phaseId });
+        } else if (action === "openAdvisorTab" || action === "openAgentTab") {
           switchTab("chat");
         }
         return;
@@ -7887,7 +9646,7 @@ var SidebarViewProvider = class {
           if (selectEl.value === "quality_control_only") {
             descEl.innerHTML = "<b>Phases:</b> 00_INSTALL \u2794 01_INSPECT.<br><i>Includes: Workspace readiness, data import, replicate CV analysis, quantifiable fraction evaluation, and PCA separation.</i>";
           } else {
-            descEl.innerHTML = "<b>Phases:</b> 00_INSTALL \u2794 01_INSPECT \u2794 02_NORMALIZE \u2794 03_IMPUTE \u2794 04_EXPRESSION \u2794 05_ENRICHMENT \u2794 06_OBSERVATIONS \u2794 07_KNOWLEDGE \u2794 08_WEBSEARCH \u2794 09_LITERATURE \u2794 10_SYNTHESIS.<br><i>Includes: Environment readiness, QC inspection, normalization benchmarking, imputation, differential expression, pathway enrichment, primary observations, internal knowledge, web search, literature database interrogation, and final manuscript synthesis report.</i>";
+            descEl.innerHTML = "<b>Phases:</b> 00_INSTALL \u2794 01_INSPECT \u2794 02_NORMALIZE \u2794 03_IMPUTE \u2794 04_EXPRESSION \u2794 05_ENRICHMENT \u2794 06_OBSERVATIONS \u2794 07_KNOWLEDGE \u2794 08_WEBSEARCH \u2794 09_LITERATURE \u2794 10_FIGURES \u2794 11_SYNTHESIS.<br><i>Includes: Environment readiness, QC inspection, normalization benchmarking, imputation, differential expression, pathway enrichment, primary observations, internal knowledge, web search, literature database interrogation, discussion figure rendering &amp; statistical digest, and final manuscript synthesis report.</i>";
           }
         }
       }
@@ -8055,6 +9814,13 @@ var SidebarViewProvider = class {
       });
     }
 
+    const engineSelect = document.getElementById("engineSelect");
+    if (engineSelect) {
+      engineSelect.addEventListener("change", function () {
+        vscode.postMessage({ type: "setEngine", engine: engineSelect.value });
+      });
+    }
+
     // Initial load: do NOT overwrite modelInput.value!
     updateProviderUI(false);
 
@@ -8062,6 +9828,17 @@ var SidebarViewProvider = class {
     if (saveConfigBtn) {
       saveConfigBtn.addEventListener("click", function () {
         sendConfigSave(false);
+      });
+    }
+
+    if (headerRunStopBtn) {
+      headerRunStopBtn.addEventListener("click", function () {
+        const isRunning = headerRunStopBtn.getAttribute("data-running") === "true";
+        if (isRunning) {
+          vscode.postMessage({ type: "stopPipeline" });
+        } else {
+          vscode.postMessage({ type: "startPipeline" });
+        }
       });
     }
 
@@ -8490,7 +10267,7 @@ var SidebarViewProvider = class {
           if (totalTokensEl) totalTokensEl.textContent = total.toLocaleString();
         }
 
-        // Pipeline Running State
+        // Pipeline Running State & Phase Metrics
         const anyRunning = !!state.isRunning || (state.phases && state.phases.some(function(p) { return p && p.status === "running"; }));
         let runningIndex = (typeof state.currentPhaseIndex === "number" && state.currentPhaseIndex >= 0) ? state.currentPhaseIndex : -1;
         if (runningIndex === -1 && state.phases) {
@@ -8503,14 +10280,127 @@ var SidebarViewProvider = class {
           }
         }
 
+        const phaseCount = state.phases ? state.phases.length : 0;
+        const analysisFolder = state.folders ? state.folders.find(function (f) { return f.name === "analysis"; }) : null;
+        const isMissingOrEmpty = state.isAnalysisMissingOrEmpty !== undefined
+          ? state.isAnalysisMissingOrEmpty
+          : (!wsPath || !analysisFolder || !analysisFolder.exists || !analysisFolder.itemCount || analysisFolder.itemCount === 0 || phaseCount === 0);
+
+        // Analyze pipeline task health: warning/needs attention, error/failed, or completed
+        let hasAttention = false;
+        let hasFailed = false;
+        let allCompleted = (state.phases && state.phases.length > 0);
+
+        if (state.phases && state.phases.length > 0) {
+          for (let i = 0; i < state.phases.length; i++) {
+            const p = state.phases[i];
+            if (!p) continue;
+            const rawStatus = (p.status || "pending").toLowerCase();
+            const errText = String(p.error || p.summary || "").trim();
+            const isContrastNeeded = /Section 3.?C|suggested contrast|unconfirmed.*contrast|target contrast/i.test(errText);
+            const isConfounding = /confound|Proceed With Potential Batch Confounding|Authorize Unadjusted Exploratory Comparison/i.test(errText);
+            const isAttentionNeeded = isContrastNeeded || isConfounding || /attention|action required|confirm.*proceed/i.test(errText) || rawStatus === "warning" || rawStatus === "needs_attention";
+
+            if (isAttentionNeeded) {
+              hasAttention = true;
+            } else if (rawStatus === "failed" || rawStatus === "error") {
+              hasFailed = true;
+            }
+
+            if (p.enabled !== false && rawStatus !== "completed" && rawStatus !== "cached") {
+              allCompleted = false;
+            }
+          }
+        } else {
+          allCompleted = false;
+        }
+
+        // 1. Update Header Status Indicator (right-aligned, matching title height)
         if (pipelineHeaderBadge) {
           if (anyRunning) {
             pipelineHeaderBadge.innerHTML = "RUNNING " + (ICONS["sparkles"] || "");
-            pipelineHeaderBadge.className = "badge badge-running";
+            pipelineHeaderBadge.className = "badge badge-running header-status-badge";
+          } else if (hasAttention) {
+            pipelineHeaderBadge.textContent = "ATTENTION";
+            pipelineHeaderBadge.className = "badge badge-warning header-status-badge";
+          } else if (hasFailed) {
+            pipelineHeaderBadge.textContent = "FAILED";
+            pipelineHeaderBadge.className = "badge badge-failed header-status-badge";
+          } else if (allCompleted) {
+            pipelineHeaderBadge.textContent = "COMPLETE";
+            pipelineHeaderBadge.className = "badge badge-completed header-status-badge";
           } else {
             pipelineHeaderBadge.textContent = "IDLE";
-            pipelineHeaderBadge.className = "badge badge-completed";
+            pipelineHeaderBadge.className = "badge badge-completed header-status-badge";
           }
+        }
+
+        // 2. Update Header Run/Stop Button (left of status indicator, matching height)
+        if (headerRunStopBtn) {
+          if (anyRunning) {
+            headerRunStopBtn.setAttribute("data-running", "true");
+            headerRunStopBtn.className = "header-run-stop-btn header-btn-stop";
+            headerRunStopBtn.innerHTML = '<span class="btn-icon">' + (ICONS["stop"] || "") + '</span><span class="btn-text">Stop</span>';
+            headerRunStopBtn.title = "Stop Pipeline Execution";
+            headerRunStopBtn.removeAttribute("disabled");
+          } else {
+            headerRunStopBtn.setAttribute("data-running", "false");
+            headerRunStopBtn.className = "header-run-stop-btn header-btn-run";
+            headerRunStopBtn.innerHTML = '<span class="btn-icon">' + (ICONS["play"] || "") + '</span><span class="btn-text">Run</span>';
+            headerRunStopBtn.title = "Run Pipeline Tasks";
+            if (!wsPath || isMissingOrEmpty) {
+              headerRunStopBtn.setAttribute("disabled", "true");
+              headerRunStopBtn.title = "Initialize pipeline tasks to run";
+            } else {
+              headerRunStopBtn.removeAttribute("disabled");
+            }
+          }
+        }
+
+        // 3. Update Flexible Segmented Progress Bar (full width, color-coded per phase)
+        if (pipelineProgressBarTrack) {
+          let segHtml = "";
+          if (state.phases && state.phases.length > 0) {
+            for (let i = 0; i < state.phases.length; i++) {
+              const p = state.phases[i];
+              if (!p) continue;
+              const rawStatus = (p.status || "pending").toLowerCase();
+              const errText = String(p.error || p.summary || "").trim();
+              const isContrastNeeded = /Section 3.?C|suggested contrast|unconfirmed.*contrast|target contrast/i.test(errText);
+              const isConfounding = /confound|Proceed With Potential Batch Confounding|Authorize Unadjusted Exploratory Comparison/i.test(errText);
+              const isAttentionNeeded = isContrastNeeded || isConfounding || /attention|action required|confirm.*proceed/i.test(errText) || rawStatus === "warning" || rawStatus === "needs_attention";
+
+              let segClass = "segment-pending"; // filled grey for not yet run
+              let statusLabel = "NOT RUN";
+
+              if (rawStatus === "running") {
+                segClass = "segment-running"; // animated blue for running
+                statusLabel = "RUNNING";
+              } else if (rawStatus === "completed" || rawStatus === "cached") {
+                segClass = "segment-completed"; // green for completed
+                statusLabel = "COMPLETED";
+              } else if (isAttentionNeeded) {
+                segClass = "segment-warning"; // orange for warning or needs user attention
+                statusLabel = "NEEDS ATTENTION";
+              } else if (rawStatus === "failed" || rawStatus === "error") {
+                segClass = "segment-failed"; // red for error
+                statusLabel = "ERROR";
+              }
+
+              let taskName = p.fileName || ("Task " + (i + 1));
+              if (taskName.indexOf("/") !== -1) taskName = taskName.substring(taskName.lastIndexOf("/") + 1);
+              if (taskName.indexOf(String.fromCharCode(92)) !== -1) {
+                taskName = taskName.substring(taskName.lastIndexOf(String.fromCharCode(92)) + 1);
+              }
+              if (taskName.toLowerCase().endsWith(".md")) taskName = taskName.slice(0, -3);
+              if (p.isMasterSetup && taskName === "INSTRUCT") taskName = "00_INSTALL";
+
+              const durationInfo = (p.durationSeconds && p.durationSeconds > 0) ? (" \u2022 " + p.durationSeconds + "s") : "";
+              const tooltip = escapeHtml(taskName + " [" + statusLabel + "]" + durationInfo);
+              segHtml += '<div class="progress-segment ' + segClass + '" data-phase-id="' + escapeHtml(p.id) + '" title="' + tooltip + '"></div>';
+            }
+          }
+          pipelineProgressBarTrack.innerHTML = segHtml;
         }
 
         if (pipelineIndicator) {
@@ -8520,12 +10410,6 @@ var SidebarViewProvider = class {
         if (loadingPipelineContainer) {
           loadingPipelineContainer.style.display = "none";
         }
-
-        const phaseCount = state.phases ? state.phases.length : 0;
-        const analysisFolder = state.folders ? state.folders.find(function (f) { return f.name === "analysis"; }) : null;
-        const isMissingOrEmpty = state.isAnalysisMissingOrEmpty !== undefined
-          ? state.isAnalysisMissingOrEmpty
-          : (!wsPath || !analysisFolder || !analysisFolder.exists || !analysisFolder.itemCount || analysisFolder.itemCount === 0 || phaseCount === 0);
 
         if (!wsPath) {
           if (noFolderContainer) noFolderContainer.style.display = "block";
@@ -8551,10 +10435,6 @@ var SidebarViewProvider = class {
 
           if (startPipelineBtn) startPipelineBtn.style.display = "none";
           if (stopBtn) stopBtn.style.display = anyRunning ? "block" : "none";
-          const advSubtext = document.getElementById("advisorBannerSubtext");
-          if (advSubtext) {
-            advSubtext.textContent = anyRunning ? "Pipeline running autonomously..." : "Chat with Advisor to configure and start";
-          }
           if (phaseCountLabel) phaseCountLabel.textContent = phaseCount + " Task" + (phaseCount === 1 ? "" : "s");
 
           // Render Dynamic Analysis Tasks (Tab 1)
@@ -8638,25 +10518,46 @@ var SidebarViewProvider = class {
 
                 const hasExpDoc = /experiment.md/i.test(errorText);
                 const hasNotesDoc = /notes.md/i.test(errorText);
+                const isContrastNeeded = /Section 3.?C|suggested contrast|unconfirmed.*contrast|target contrast/i.test(errorText);
                 const isConfounding = /confound|Proceed With Potential Batch Confounding|Authorize Unadjusted Exploratory Comparison/i.test(errorText);
+                const isLlmApiError = /LLM API Error|API error|fetch failed|network connection failed|ConnectTimeoutError|ENOTFOUND|ECONNREFUSED|ECONNRESET|authentication failed|rate limited|timed? ?out/i.test(errorText);
 
                 let linksHtml = "";
-                if (hasExpDoc) {
-                  const searchPrompt = isConfounding ? "Proceed With Potential Batch Confounding" : "REQUIRED";
-                  linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/experiment.md" data-search="' + searchPrompt + '" title="Open docs/experiment.md and jump directly to relevant section">Edit docs/experiment.md \u2197</button>';
+                let insightTitle = "Action Required";
+                let insightIcon = "\u26A0\uFE0F";
+
+                if (isLlmApiError) {
+                  insightTitle = "LLM API / Network Error";
+                  insightIcon = "\u{1F310}";
+                  linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="runPhase" data-id="' + escapeHtml(p.id) + '" title="Retry running ' + safeTaskName + '">\u{1F504} Retry Phase</button>';
+                  linksHtml += '<button type="button" class="btn-insight-link" data-action="openProviderTab" title="Configure LLM Provider, Model, or API Key">\u2699\uFE0F Settings \u2197</button>';
+                  if (hasNotesDoc) {
+                    linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/notes.md">View docs/notes.md \u2197</button>';
+                  }
+                } else {
+                  if (hasExpDoc) {
+                    const searchPrompt = isContrastNeeded ? "3.C" : (isConfounding ? "Proceed With Potential Batch Confounding" : "REQUIRED");
+                    linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/experiment.md" data-search="' + searchPrompt + '" title="Open docs/experiment.md and jump directly to relevant section">Edit docs/experiment.md \u2197</button>';
+                  }
+                  if (p.id === "04" && (isContrastNeeded || isConfounding)) {
+                    linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="confirmContrastAndProceed" data-phase-id="' + escapeHtml(p.id) + '" title="Confirm target contrast in Section 3.C, authorize batch confounding in Section 3.D, and resume Phase 4">\u{1F3AF} Confirm Contrast &amp; Proceed</button>';
+                  } else if (isContrastNeeded) {
+                    linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="confirmContrastAndProceed" data-phase-id="' + escapeHtml(p.id) + '" title="Confirm target contrast and proceed">\u{1F3AF} Confirm Contrast &amp; Proceed</button>';
+                  } else if (isConfounding) {
+                    linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="confirmContrastAndProceed" data-phase-id="' + escapeHtml(p.id) + '" title="Authorize batch confounding and proceed">\u{1F3AF} Confirm Contrast &amp; Proceed</button>';
+                  }
+                  if (hasNotesDoc) {
+                    linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/notes.md">View docs/notes.md \u2197</button>';
+                  }
+                  if (!isContrastNeeded && !isConfounding) {
+                    linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="openAgentTab" title="Ask Live Agent to resolve this question">\u{1F4AC} Ask Agent \u2197</button>';
+                  }
                 }
-                if (isConfounding) {
-                  linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="authorizeConfoundingAndRerun" data-phase-id="' + escapeHtml(p.id) + '" title="Set Proceed With Potential Batch Confounding to TRUE in docs/experiment.md and automatically rerun this phase">\u26A1 Authorize &amp; Rerun</button>';
-                }
-                if (hasNotesDoc) {
-                  linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/notes.md">View docs/notes.md \u2197</button>';
-                }
-                linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="openAdvisorTab" title="Ask Live Advisor to resolve this question">\u{1F4AC} Ask Advisor \u2197</button>';
 
                 failInsightHtml = '<div class="task-insight-box" title="' + escapeHtml(errorText) + '">' +
                   '<div class="task-insight-header">' +
-                    '<span class="task-insight-icon">\u26A0\uFE0F</span>' +
-                    '<span class="task-insight-title">Action Required</span>' +
+                    '<span class="task-insight-icon">' + insightIcon + '</span>' +
+                    '<span class="task-insight-title">' + insightTitle + '</span>' +
                   '</div>' +
                   '<div class="task-insight-body">' + escapeHtml(shortMsg) + '</div>' +
                   (linksHtml ? ('<div class="task-insight-actions">' + linksHtml + '</div>') : '') +
@@ -8769,20 +10670,26 @@ var SidebarViewProvider = class {
     }
 
     // ==========================================
-    // Live Advisor Chat Client Implementation
+    // Live Agent Chat Client Implementation
     // ==========================================
-    const advisorThread = document.getElementById("advisorThread");
-    const advisorInput = document.getElementById("advisorInput");
-    const advisorSendBtn = document.getElementById("advisorSendBtn");
-    const advisorStopBtn = document.getElementById("advisorStopBtn");
-    const advisorClearBtn = document.getElementById("advisorClearBtn");
+    const agentThread = document.getElementById("agentThread") || document.getElementById("advisorThread");
+    const agentInput = document.getElementById("agentInput") || document.getElementById("advisorInput");
+    const agentSendBtn = document.getElementById("agentSendBtn") || document.getElementById("advisorSendBtn");
+    const agentStopBtn = document.getElementById("agentStopBtn") || document.getElementById("advisorStopBtn");
+    const agentClearBtn = document.getElementById("agentClearBtn") || document.getElementById("advisorClearBtn");
     const chatIndicator = document.getElementById("chatIndicator");
 
-    let isAdvisorGenerating = false;
+    const advisorThread = agentThread;
+    const advisorInput = agentInput;
+    const advisorSendBtn = agentSendBtn;
+    const advisorStopBtn = agentStopBtn;
+    const advisorClearBtn = agentClearBtn;
+
+    let isAgentGenerating = false;
     let currentStreamingMsgElement = null;
     let accumulatedStreamingText = "";
 
-    function formatAdvisorMarkdown(text) {
+    function formatAgentMarkdown(text) {
       if (!text) return "";
       let escaped = escapeHtml(text);
       const BT = String.fromCharCode(96);
@@ -8800,8 +10707,9 @@ var SidebarViewProvider = class {
       escaped = escaped.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
 
       // Convert file links or mentions to clickable buttons
-      escaped = escaped.replace(/\\b(docs\\/(?:experiment|notes|llm|literature_database)\\.md)\\b/g, function (match, p1) {
-        return '<button type="button" class="btn-insight-link" data-action="openFile" data-path="' + p1 + '" style="font-size:10px; padding:1px 5px; margin:0 2px;">' + p1 + ' \u2197</button>';
+      escaped = escaped.replace(/\\b(docs\\/(?:experiment|notes|llm|literature_database|manuscript|scientific_report)\\.md)\\b/g, function (match, p1) {
+        const targetPath = p1 === "docs/scientific_report.md" ? "docs/manuscript.md" : p1;
+        return '<button type="button" class="btn-insight-link" data-action="openFile" data-path="' + targetPath + '" style="font-size:10px; padding:1px 5px; margin:0 2px;">' + p1 + ' \u2197</button>';
       });
 
       // Convert newlines (outside of pre)
@@ -8813,31 +10721,34 @@ var SidebarViewProvider = class {
       }
       return parts.join('');
     }
+    const formatAdvisorMarkdown = formatAgentMarkdown;
 
-    function scrollAdvisorToBottom() {
-      if (advisorThread) {
-        advisorThread.scrollTop = advisorThread.scrollHeight;
+    function scrollAgentToBottom() {
+      if (agentThread) {
+        agentThread.scrollTop = agentThread.scrollHeight;
       }
     }
+    const scrollAdvisorToBottom = scrollAgentToBottom;
 
-    function setAdvisorGenerating(generating) {
-      isAdvisorGenerating = !!generating;
-      if (advisorSendBtn) advisorSendBtn.style.display = isAdvisorGenerating ? "none" : "inline-flex";
-      if (advisorStopBtn) advisorStopBtn.style.display = isAdvisorGenerating ? "inline-flex" : "none";
-      if (chatIndicator) chatIndicator.className = isAdvisorGenerating ? "tab-indicator running" : "tab-indicator";
+    function setAgentGenerating(generating) {
+      isAgentGenerating = !!generating;
+      if (agentSendBtn) agentSendBtn.style.display = isAgentGenerating ? "none" : "inline-flex";
+      if (agentStopBtn) agentStopBtn.style.display = isAgentGenerating ? "inline-flex" : "none";
+      if (chatIndicator) chatIndicator.className = isAgentGenerating ? "tab-indicator running" : "tab-indicator";
     }
+    const setAdvisorGenerating = setAgentGenerating;
 
-    function renderAdvisorState(messages, isGenerating) {
-      setAdvisorGenerating(isGenerating);
-      if (!advisorThread) return;
+    function renderAgentState(messages, isGenerating) {
+      setAgentGenerating(isGenerating);
+      if (!agentThread) return;
 
       if (!messages || messages.length === 0) {
-        advisorThread.innerHTML = '<div class="advisor-msg assistant">' +
-          '<div class="advisor-avatar">' + (ICONS["robot"] || "\u{1F916}") + '</div>' +
-          '<div class="advisor-bubble">' +
-            '<div class="advisor-msg-title">TidyProteomics Live Advisor</div>' +
-            '<div class="advisor-msg-body">' +
-              'Hello! I am your live proteomics advisor. I monitor your experimental design in <code>docs/experiment.md</code>, pipeline execution status, and findings in <code>docs/notes.md</code>.<br><br>' +
+        agentThread.innerHTML = '<div class="agent-msg advisor-msg assistant">' +
+          '<div class="agent-avatar advisor-avatar">' + (ICONS["robot"] || "\u{1F916}") + '</div>' +
+          '<div class="agent-bubble advisor-bubble">' +
+            '<div class="agent-msg-title advisor-msg-title">TidyProteomics Live Agent</div>' +
+            '<div class="agent-msg-body advisor-msg-body">' +
+              'Hello! I am your live proteomics agent. I monitor your experimental design in <code>docs/experiment.md</code>, pipeline execution status, and findings in <code>docs/notes.md</code>.<br><br>' +
               'Feel free to ask questions about sample grouping, confounding warnings, normalization, differential expression, or biological pathways.' +
             '</div>' +
           '</div>' +
@@ -8850,176 +10761,265 @@ var SidebarViewProvider = class {
         const m = messages[i];
         const isUser = m.role === "user";
         const avatar = isUser ? "\u{1F464}" : (ICONS["robot"] || "\u{1F916}");
-        const sender = isUser ? "You" : "TidyProteomics Advisor";
+        const sender = isUser ? "You" : "TidyProteomics Agent";
         const time = m.timestamp ? ' <span style="font-size:8.5px; opacity:0.6; font-weight:normal;">' + escapeHtml(m.timestamp) + '</span>' : '';
-        const body = formatAdvisorMarkdown(m.content);
+        const body = formatAgentMarkdown(m.content);
 
         let chipsHtml = "";
         if (m.quickChips && m.quickChips.length > 0) {
-          chipsHtml = '<div class="advisor-msg-chips">';
+          chipsHtml = '<div class="agent-msg-chips advisor-msg-chips">';
           for (let c = 0; c < m.quickChips.length; c++) {
             const chipText = escapeHtml(m.quickChips[c]);
-            chipsHtml += '<button type="button" class="advisor-msg-chip" data-chip="' + chipText + '">' + chipText + '</button>';
+            chipsHtml += '<button type="button" class="agent-msg-chip advisor-msg-chip" data-chip="' + chipText + '">' + chipText + '</button>';
           }
           chipsHtml += '</div>';
         }
 
-        html += '<div class="advisor-msg ' + (isUser ? 'user' : 'assistant') + '">' +
-          '<div class="advisor-avatar">' + avatar + '</div>' +
-          '<div class="advisor-bubble">' +
-            '<div class="advisor-msg-title">' + sender + time + '</div>' +
-            '<div class="advisor-msg-body">' + body + '</div>' +
+        html += '<div class="agent-msg advisor-msg ' + (isUser ? 'user' : 'assistant') + '">' +
+          '<div class="agent-avatar advisor-avatar">' + avatar + '</div>' +
+          '<div class="agent-bubble advisor-bubble">' +
+            '<div class="agent-msg-title advisor-msg-title">' + sender + time + '</div>' +
+            '<div class="agent-msg-body advisor-msg-body">' + body + '</div>' +
             chipsHtml +
           '</div>' +
         '</div>';
       }
-      advisorThread.innerHTML = html;
-      scrollAdvisorToBottom();
+      agentThread.innerHTML = html;
+      scrollAgentToBottom();
     }
+    const renderAdvisorState = renderAgentState;
 
-    function appendAdvisorChunk(chunk) {
-      if (!advisorThread) return;
+    function appendAgentChunk(chunk) {
+      if (!agentThread) return;
       accumulatedStreamingText += chunk;
 
       if (!currentStreamingMsgElement) {
         const msgDiv = document.createElement("div");
-        msgDiv.className = "advisor-msg assistant";
-        msgDiv.innerHTML = '<div class="advisor-avatar">' + (ICONS["robot"] || "\u{1F916}") + '</div>' +
-          '<div class="advisor-bubble">' +
-            '<div class="advisor-msg-title">TidyProteomics Advisor <span style="font-size:8.5px; opacity:0.6; font-weight:normal;">Thinking...</span></div>' +
-            '<div class="advisor-msg-body"></div>' +
+        msgDiv.className = "agent-msg advisor-msg assistant";
+        msgDiv.innerHTML = '<div class="agent-avatar advisor-avatar">' + (ICONS["robot"] || "\u{1F916}") + '</div>' +
+          '<div class="agent-bubble advisor-bubble">' +
+            '<div class="agent-msg-title advisor-msg-title">TidyProteomics Agent <span style="font-size:8.5px; opacity:0.6; font-weight:normal;">Thinking...</span></div>' +
+            '<div class="agent-msg-body advisor-msg-body"></div>' +
           '</div>';
-        advisorThread.appendChild(msgDiv);
+        agentThread.appendChild(msgDiv);
         currentStreamingMsgElement = msgDiv;
       }
 
-      const bodyEl = currentStreamingMsgElement.querySelector(".advisor-msg-body");
+      const bodyEl = currentStreamingMsgElement.querySelector(".agent-msg-body, .advisor-msg-body");
       if (bodyEl) {
-        bodyEl.innerHTML = formatAdvisorMarkdown(accumulatedStreamingText) + '<span class="advisor-streaming-cursor"></span>';
+        bodyEl.innerHTML = formatAgentMarkdown(accumulatedStreamingText) + '<span class="agent-streaming-cursor advisor-streaming-cursor"></span>';
       }
-      scrollAdvisorToBottom();
+      scrollAgentToBottom();
     }
+    const appendAdvisorChunk = appendAgentChunk;
 
-    function completeAdvisorResponse(fullText, usage, messages) {
+    function completeAgentResponse(fullText, usage, messages) {
       currentStreamingMsgElement = null;
       accumulatedStreamingText = "";
-      setAdvisorGenerating(false);
+      setAgentGenerating(false);
       if (messages && messages.length > 0) {
-        renderAdvisorState(messages, false);
+        renderAgentState(messages, false);
       }
     }
+    const completeAdvisorResponse = completeAgentResponse;
 
-    function showAdvisorError(error) {
+    function showAgentError(error) {
       currentStreamingMsgElement = null;
       accumulatedStreamingText = "";
-      setAdvisorGenerating(false);
-      if (!advisorThread) return;
+      setAgentGenerating(false);
+      if (!agentThread) return;
       const errDiv = document.createElement("div");
-      errDiv.className = "advisor-msg assistant";
-      errDiv.innerHTML = '<div class="advisor-avatar">\u26A0\uFE0F</div>' +
-        '<div class="advisor-bubble" style="border-color:var(--error); background:rgba(239, 68, 68, 0.1);">' +
-          '<div class="advisor-msg-title" style="color:var(--error);">Advisor Error</div>' +
-          '<div class="advisor-msg-body">' + escapeHtml(error) + '</div>' +
+      errDiv.className = "agent-msg advisor-msg assistant";
+      errDiv.innerHTML = '<div class="agent-avatar advisor-avatar">\u26A0\uFE0F</div>' +
+        '<div class="agent-bubble advisor-bubble" style="border-color:var(--error); background:rgba(239, 68, 68, 0.1);">' +
+          '<div class="agent-msg-title advisor-msg-title" style="color:var(--error);">Agent Error</div>' +
+          '<div class="agent-msg-body advisor-msg-body">' + escapeHtml(error) + '</div>' +
         '</div>';
-      advisorThread.appendChild(errDiv);
-      scrollAdvisorToBottom();
+      agentThread.appendChild(errDiv);
+      scrollAgentToBottom();
     }
+    const showAdvisorError = showAgentError;
 
-    function sendAdvisorPrompt(text) {
-      const prompt = (text || (advisorInput ? advisorInput.value : "")).trim();
-      if (!prompt || isAdvisorGenerating) return;
+    function sendAgentPrompt(text) {
+      const prompt = (text || (agentInput ? agentInput.value : "")).trim();
+      if (!prompt || isAgentGenerating) return;
 
-      if (advisorInput) {
-        advisorInput.value = "";
-        advisorInput.style.height = "auto";
+      if (agentInput) {
+        agentInput.value = "";
+        agentInput.style.height = "auto";
       }
 
-      setAdvisorGenerating(true);
+      setAgentGenerating(true);
       accumulatedStreamingText = "";
       currentStreamingMsgElement = null;
 
       // Optimistically append user message
-      if (advisorThread) {
+      if (agentThread) {
         const userDiv = document.createElement("div");
-        userDiv.className = "advisor-msg user";
-        userDiv.innerHTML = '<div class="advisor-avatar">\u{1F464}</div>' +
-          '<div class="advisor-bubble">' +
-            '<div class="advisor-msg-title">You</div>' +
-            '<div class="advisor-msg-body">' + formatAdvisorMarkdown(prompt) + '</div>' +
+        userDiv.className = "agent-msg advisor-msg user";
+        userDiv.innerHTML = '<div class="agent-avatar advisor-avatar">\u{1F464}</div>' +
+          '<div class="agent-bubble advisor-bubble">' +
+            '<div class="agent-msg-title advisor-msg-title">You</div>' +
+            '<div class="agent-msg-body advisor-msg-body">' + formatAgentMarkdown(prompt) + '</div>' +
           '</div>';
-        advisorThread.appendChild(userDiv);
-        scrollAdvisorToBottom();
+        agentThread.appendChild(userDiv);
+        scrollAgentToBottom();
       }
 
-      vscode.postMessage({ type: "advisorSendMessage", text: prompt });
+      vscode.postMessage({ type: "agentSendMessage", text: prompt });
     }
+    const sendAdvisorPrompt = sendAgentPrompt;
 
-    if (advisorSendBtn) {
-      advisorSendBtn.addEventListener("click", function () {
-        sendAdvisorPrompt();
+    if (agentSendBtn) {
+      agentSendBtn.addEventListener("click", function () {
+        sendAgentPrompt();
       });
     }
 
-    if (advisorStopBtn) {
-      advisorStopBtn.addEventListener("click", function () {
-        vscode.postMessage({ type: "advisorStop" });
-        setAdvisorGenerating(false);
+    if (agentStopBtn) {
+      agentStopBtn.addEventListener("click", function () {
+        vscode.postMessage({ type: "agentStop" });
+        setAgentGenerating(false);
       });
     }
 
-    if (advisorClearBtn) {
-      advisorClearBtn.addEventListener("click", function () {
-        vscode.postMessage({ type: "advisorClear" });
+    if (agentClearBtn) {
+      agentClearBtn.addEventListener("click", function () {
+        vscode.postMessage({ type: "agentClear" });
       });
     }
 
-    if (advisorInput) {
-      advisorInput.addEventListener("input", function () {
+    if (agentInput) {
+      agentInput.addEventListener("input", function () {
         this.style.height = "auto";
         this.style.height = Math.min(this.scrollHeight, 120) + "px";
       });
 
-      advisorInput.addEventListener("keydown", function (e) {
+      agentInput.addEventListener("keydown", function (e) {
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
-          sendAdvisorPrompt();
+          sendAgentPrompt();
         }
       });
     }
 
     // Quick suggestion chips and message chips handler
     document.addEventListener("click", function (e) {
-      const chip = e.target.closest ? e.target.closest(".advisor-chip") : null;
+      const chip = e.target.closest ? (e.target.closest(".agent-chip") || e.target.closest(".advisor-chip")) : null;
       if (chip) {
         const prompt = chip.getAttribute("data-prompt");
         if (prompt) {
-          sendAdvisorPrompt(prompt);
+          sendAgentPrompt(prompt);
         }
         return;
       }
 
-      const msgChip = e.target.closest ? e.target.closest(".advisor-msg-chip") : null;
+      const msgChip = e.target.closest ? (e.target.closest(".agent-msg-chip") || e.target.closest(".advisor-msg-chip")) : null;
       if (msgChip) {
         const chipText = msgChip.getAttribute("data-chip");
         if (chipText === "Select File...") {
-          vscode.postMessage({ type: "advisorPickDataFile" });
+          vscode.postMessage({ type: "agentPickDataFile" });
         } else if (chipText === "Review docs/experiment.md \u2197" || chipText === "View docs/experiment.md \u2197") {
           vscode.postMessage({ type: "openFile", relPath: "docs/experiment.md" });
+        } else if (
+          chipText === "Review docs/manuscript.md \u2197" ||
+          chipText === "View docs/manuscript.md \u2197" ||
+          chipText === "Review docs/scientific_report.md \u2197" ||
+          chipText === "View docs/scientific_report.md \u2197"
+        ) {
+          vscode.postMessage({ type: "openFile", relPath: "docs/manuscript.md" });
         } else if (chipText === "Switch to Provider Tab \u2197") {
           switchTab("provider");
+        } else if (chipText === "[Custom Contrast...]" || chipText === "Custom Contrast...") {
+          sendAgentPrompt(chipText);
+          if (agentInput) {
+            agentInput.focus();
+            agentInput.placeholder = "Enter custom ratio (e.g. knockout / control)...";
+          }
         } else if (chipText) {
-          sendAdvisorPrompt(chipText);
+          sendAgentPrompt(chipText);
         }
         return;
       }
     });
+
+    // Visual Contrast & Batch Designer Logic
+    function fetchDesignerState() {
+      vscode.postMessage({ type: "getDesignerState" });
+    }
+    window.fetchDesignerState = fetchDesignerState;
+
+    function renderDesignerState(spec) {
+      if (!spec) return;
+      const dl = document.getElementById("designerGroupList");
+      if (dl && Array.isArray(spec.discoveredGroups)) {
+        dl.innerHTML = spec.discoveredGroups.map(function (g) {
+          return '<option value="' + g + '"></option>';
+        }).join("");
+      }
+      const treatmentIn = document.getElementById("designerTreatmentInput");
+      const controlIn = document.getElementById("designerControlInput");
+      if (spec.targetContrasts && spec.targetContrasts.length > 0 && treatmentIn && controlIn) {
+        var rawContrast = spec.targetContrasts[0].replace(/['"]/g, "").split(String.fromCharCode(96)).join("");
+        var sep = rawContrast.indexOf("/") !== -1 ? "/" : (rawContrast.toLowerCase().indexOf(" vs") !== -1 ? (rawContrast.toLowerCase().indexOf(" vs.") !== -1 ? "vs." : "vs") : "/");
+        var parts = rawContrast.split(sep).map(function (s) { return s.trim(); });
+        if (parts.length >= 2 && !treatmentIn.value && !controlIn.value) {
+          treatmentIn.value = parts[0];
+          controlIn.value = parts[1];
+        }
+      }
+      const confCheck = document.getElementById("designerConfoundingCheck");
+      if (confCheck && typeof spec.batchConfoundingAuthorized === "boolean") {
+        confCheck.checked = spec.batchConfoundingAuthorized;
+      }
+      const badge = document.getElementById("designerStatusBadge");
+      if (badge && spec.contrastConfirmed) {
+        badge.textContent = "CONFIRMED";
+        badge.style.background = "var(--success)";
+      }
+    }
+
+    function applyContrastFromDesigner() {
+      const treatmentIn = document.getElementById("designerTreatmentInput");
+      const controlIn = document.getElementById("designerControlInput");
+      const confCheck = document.getElementById("designerConfoundingCheck");
+      const poolCheck = document.getElementById("designerPoolingCheck");
+
+      const treatment = treatmentIn ? treatmentIn.value.trim() : "";
+      const control = controlIn ? controlIn.value.trim() : "";
+      const allowConfounding = confCheck ? confCheck.checked : false;
+      const reassignPooling = poolCheck ? poolCheck.checked : true;
+
+      if (!treatment || !control) {
+        alert("Please specify both a target condition and a reference/control group.");
+        return;
+      }
+
+      vscode.postMessage({
+        type: "applyContrastDesigner",
+        treatment: treatment,
+        control: control,
+        allowConfounding: allowConfounding,
+        reassignPooling: reassignPooling,
+        phaseId: "04"
+      });
+    }
+    window.applyContrastFromDesigner = applyContrastFromDesigner;
 
     // Message receiver
     window.addEventListener("message", function (event) {
       try {
         const message = event.data;
         if (!message) return;
-        if (message.type === "stateUpdate") {
+        if (message.type === "engineUpdate") {
+          const eng = message.engine;
+          if (eng) {
+            const engEl = document.getElementById("summaryEngine");
+            if (engEl) engEl.textContent = eng.toUpperCase();
+            const engSel = document.getElementById("engineSelect");
+            if (engSel) engSel.value = eng;
+          }
+        } else if (message.type === "stateUpdate") {
           renderState(message.state);
         } else if (message.type === "log") {
           appendLog(message.text, message.updateLast);
@@ -9034,14 +11034,16 @@ var SidebarViewProvider = class {
           renderLiteratureSearchResults(message.result || message);
         } else if (message.type === "literatureProgress" || message.type === "corpusProgress") {
           vscode.postMessage({ type: "literatureGetState" });
-        } else if (message.type === "advisorState") {
-          renderAdvisorState(message.messages, message.isGenerating);
-        } else if (message.type === "advisorChunk") {
-          appendAdvisorChunk(message.chunk);
-        } else if (message.type === "advisorDone") {
-          completeAdvisorResponse(message.reply, message.usage, message.messages);
-        } else if (message.type === "advisorError") {
-          showAdvisorError(message.error);
+        } else if (message.type === "agentState" || message.type === "advisorState") {
+          renderAgentState(message.messages, message.isGenerating);
+        } else if (message.type === "agentChunk" || message.type === "advisorChunk") {
+          appendAgentChunk(message.chunk);
+        } else if (message.type === "agentDone" || message.type === "advisorDone") {
+          completeAgentResponse(message.reply, message.usage, message.messages);
+        } else if (message.type === "agentError" || message.type === "advisorError") {
+          showAgentError(message.error);
+        } else if (message.type === "designerState") {
+          renderDesignerState(message.spec);
         }
       } catch (err) {
         console.error("[TidyProteomicsAgent] Error in webview message handler:", err);
@@ -9050,10 +11052,10 @@ var SidebarViewProvider = class {
 
     // Request initial state proactively
     vscode.postMessage({ type: "requestState" });
-    vscode.postMessage({ type: "advisorGetState" });
+    vscode.postMessage({ type: "agentGetState" });
     setTimeout(function () {
       vscode.postMessage({ type: "requestState" });
-      vscode.postMessage({ type: "advisorGetState" });
+      vscode.postMessage({ type: "agentGetState" });
     }, 200);
   </script>
 </body>
@@ -9064,7 +11066,7 @@ var SidebarViewProvider = class {
 // src/extension.ts
 function activate(context) {
   console.log("TidyProteomicsAgent extension is now active!");
-  const outputChannel = vscode2.window.createOutputChannel("TidyProteomicsAgent");
+  const outputChannel = vscode5.window.createOutputChannel("TidyProteomicsAgent");
   context.subscriptions.push(outputChannel);
   const uncaughtHandler = (err) => {
     const msg = err?.stack || String(err);
@@ -9092,7 +11094,7 @@ function activate(context) {
   });
   const sidebarProvider = new SidebarViewProvider(context.extensionUri, context);
   context.subscriptions.push(
-    vscode2.window.registerWebviewViewProvider(
+    vscode5.window.registerWebviewViewProvider(
       SidebarViewProvider.viewType,
       sidebarProvider
     )
@@ -9108,9 +11110,9 @@ function activate(context) {
     watchers = [];
     const targetFolders = [];
     if (customFolder) {
-      targetFolders.push(vscode2.Uri.file(customFolder));
+      targetFolders.push(vscode5.Uri.file(customFolder));
     } else {
-      const folders = vscode2.workspace.workspaceFolders;
+      const folders = vscode5.workspace.workspaceFolders;
       if (folders && folders.length > 0) {
         targetFolders.push(...folders);
       }
@@ -9121,61 +11123,54 @@ function activate(context) {
     for (const folder of targetFolders) {
       try {
         const folderPath = folder.fsPath || folder.uri?.fsPath || "";
-        if (!folderPath || !fs11.existsSync(folderPath)) {
+        if (!folderPath || !fs12.existsSync(folderPath)) {
           continue;
         }
-        const analysisDir = path11.join(folderPath, "analysis");
-        if (fs11.existsSync(analysisDir)) {
-          const analysisWatcher = vscode2.workspace.createFileSystemWatcher(
-            new vscode2.RelativePattern(vscode2.Uri.file(analysisDir), "*.md")
-          );
-          analysisWatcher.onDidCreate(() => sidebarProvider.refreshPhases().catch(() => {
-          }));
-          analysisWatcher.onDidChange(() => sidebarProvider.refreshPhases().catch(() => {
-          }));
-          analysisWatcher.onDidDelete(() => sidebarProvider.forceReload().catch(() => {
-          }));
-          watchers.push(analysisWatcher);
-        }
-        const agentDir = path11.join(folderPath, "agent");
-        if (fs11.existsSync(agentDir)) {
-          const agentWatcher = vscode2.workspace.createFileSystemWatcher(
-            new vscode2.RelativePattern(vscode2.Uri.file(agentDir), "*.md")
-          );
-          agentWatcher.onDidCreate(() => sidebarProvider.refreshPhases().catch(() => {
-          }));
-          agentWatcher.onDidChange(() => sidebarProvider.refreshPhases().catch(() => {
-          }));
-          agentWatcher.onDidDelete(() => sidebarProvider.refreshPhases().catch(() => {
-          }));
-          watchers.push(agentWatcher);
-        }
-        const promptsDir = path11.join(folderPath, "prompts");
-        if (fs11.existsSync(promptsDir)) {
-          const promptsWatcher = vscode2.workspace.createFileSystemWatcher(
-            new vscode2.RelativePattern(vscode2.Uri.file(promptsDir), "*.md")
-          );
-          promptsWatcher.onDidCreate(() => sidebarProvider.refreshPhases().catch(() => {
-          }));
-          promptsWatcher.onDidChange(() => sidebarProvider.refreshPhases().catch(() => {
-          }));
-          promptsWatcher.onDidDelete(() => sidebarProvider.refreshPhases().catch(() => {
-          }));
-          watchers.push(promptsWatcher);
-        }
-        const docsDir = path11.join(folderPath, "docs");
-        if (fs11.existsSync(docsDir)) {
-          const notesWatcher = vscode2.workspace.createFileSystemWatcher(
-            new vscode2.RelativePattern(vscode2.Uri.file(docsDir), "notes.md")
-          );
-          notesWatcher.onDidCreate(() => sidebarProvider.forceReload().catch(() => {
-          }));
-          notesWatcher.onDidChange(() => sidebarProvider.forceReload().catch(() => {
-          }));
-          notesWatcher.onDidDelete(() => sidebarProvider.forceReload().catch(() => {
-          }));
-          watchers.push(notesWatcher);
-        }
+        const folderUri = folder.uri || vscode5.Uri.file(folderPath);
+        const analysisWatcher = vscode5.workspace.createFileSystemWatcher(
+          new vscode5.RelativePattern(folderUri, "analysis/*.md")
+        );
+        analysisWatcher.onDidCreate(() => sidebarProvider.refreshPhases().catch(() => {
+        }));
+        analysisWatcher.onDidChange(() => sidebarProvider.refreshPhases().catch(() => {
+        }));
+        analysisWatcher.onDidDelete(() => {
+          sidebarProvider.forceReload().catch(() => {
+          });
+          sidebarProvider.refreshPhases().catch(() => {
+          });
+        });
+        watchers.push(analysisWatcher);
+        const agentWatcher = vscode5.workspace.createFileSystemWatcher(
+          new vscode5.RelativePattern(folderUri, "agent/*.md")
+        );
+        agentWatcher.onDidCreate(() => sidebarProvider.refreshPhases().catch(() => {
+        }));
+        agentWatcher.onDidChange(() => sidebarProvider.refreshPhases().catch(() => {
+        }));
+        agentWatcher.onDidDelete(() => sidebarProvider.refreshPhases().catch(() => {
+        }));
+        watchers.push(agentWatcher);
+        const promptsWatcher = vscode5.workspace.createFileSystemWatcher(
+          new vscode5.RelativePattern(folderUri, "prompts/*.md")
+        );
+        promptsWatcher.onDidCreate(() => sidebarProvider.refreshPhases().catch(() => {
+        }));
+        promptsWatcher.onDidChange(() => sidebarProvider.refreshPhases().catch(() => {
+        }));
+        promptsWatcher.onDidDelete(() => sidebarProvider.refreshPhases().catch(() => {
+        }));
+        watchers.push(promptsWatcher);
+        const notesWatcher = vscode5.workspace.createFileSystemWatcher(
+          new vscode5.RelativePattern(folderUri, "docs/notes.md")
+        );
+        notesWatcher.onDidCreate(() => sidebarProvider.forceReload().catch(() => {
+        }));
+        notesWatcher.onDidChange(() => sidebarProvider.forceReload().catch(() => {
+        }));
+        notesWatcher.onDidDelete(() => sidebarProvider.forceReload().catch(() => {
+        }));
+        watchers.push(notesWatcher);
       } catch (e) {
         const folderPath = folder.fsPath || folder.uri?.fsPath || "";
         console.error("[TidyProteomicsAgent] Failed to initialize file watchers for folder:", folderPath, e);
@@ -9187,7 +11182,7 @@ function activate(context) {
   };
   updateWatchers();
   context.subscriptions.push(
-    vscode2.workspace.onDidChangeWorkspaceFolders(() => {
+    vscode5.workspace.onDidChangeWorkspaceFolders(() => {
       updateWatchers();
       sidebarProvider.onWorkspaceChanged().catch(() => {
       });
@@ -9205,25 +11200,25 @@ function activate(context) {
     }
   });
   context.subscriptions.push(
-    vscode2.commands.registerCommand("tidyproteomicsagent.startPipeline", () => {
+    vscode5.commands.registerCommand("tidyproteomicsagent.startPipeline", () => {
       sidebarProvider.startPipeline();
     })
   );
   context.subscriptions.push(
-    vscode2.commands.registerCommand("tidyproteomicsagent.runCurrentPhase", () => {
+    vscode5.commands.registerCommand("tidyproteomicsagent.runCurrentPhase", () => {
       sidebarProvider.runSelectedPhase().catch((err) => {
-        vscode2.window.showErrorMessage(`TidyProteomicsAgent: ${err.message || String(err)}`);
+        vscode5.window.showErrorMessage(`TidyProteomicsAgent: ${err.message || String(err)}`);
       });
     })
   );
   context.subscriptions.push(
-    vscode2.commands.registerCommand("tidyproteomicsagent.refreshTasks", () => {
+    vscode5.commands.registerCommand("tidyproteomicsagent.refreshTasks", () => {
       sidebarProvider.forceReload();
     })
   );
   context.subscriptions.push(
-    vscode2.commands.registerCommand("tidyproteomicsagent.resetState", async () => {
-      const confirm = await vscode2.window.showWarningMessage(
+    vscode5.commands.registerCommand("tidyproteomicsagent.resetState", async () => {
+      const confirm = await vscode5.window.showWarningMessage(
         "Are you sure you want to reset the pipeline state in docs/notes.md?",
         { modal: true },
         "Yes",
@@ -9231,15 +11226,26 @@ function activate(context) {
       );
       if (confirm === "Yes") {
         await sidebarProvider.resetAllState();
-        vscode2.window.showInformationMessage("TidyProteomicsAgent: Pipeline state reset.");
+        vscode5.window.showInformationMessage("TidyProteomicsAgent: Pipeline state reset.");
       }
     })
   );
   context.subscriptions.push(
-    vscode2.commands.registerCommand("tidyproteomicsagent.initWorkspace", async () => {
+    vscode5.commands.registerCommand("tidyproteomicsagent.initWorkspace", async () => {
       await sidebarProvider.promptInitWorkspace();
     })
   );
+  context.subscriptions.push(
+    vscode5.commands.registerCommand("tidyproteomicsagent.toggleEngine", async () => {
+      await sidebarProvider.toggleEngine();
+    })
+  );
+  context.subscriptions.push({
+    dispose: () => {
+      sidebarProvider.dispose().catch(() => {
+      });
+    }
+  });
 }
 function deactivate() {
 }

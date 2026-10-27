@@ -62,13 +62,18 @@ main <- function() {
   explicit_contrast <- if (length(args) >= 4 && nzchar(trimws(args[4]))) trimws(args[4]) else NULL
 
   get_available_contrasts <- function(obj) {
-    nm <- names(unclass(obj))
-    slot_hits <- nm[grep("^ana", nm)]
-    if (length(slot_hits) > 0) {
-      names(unclass(obj)[[slot_hits[1]]])
-    } else {
-      character(0)
+    u <- unclass(obj)
+    if (!is.null(u$analysis) && is.list(u$analysis)) {
+      return(names(u$analysis))
     }
+    if (!is.null(u$analyses) && is.list(u$analyses)) {
+      return(names(u$analyses))
+    }
+    slot_hits <- grep("^analys[ie]s$", names(u), value = TRUE)
+    if (length(slot_hits) > 0 && is.list(u[[slot_hits[1]]])) {
+      return(names(u[[slot_hits[1]]]))
+    }
+    character(0)
   }
 
   contrast_names <- if (!is.null(explicit_contrast)) {
@@ -128,10 +133,11 @@ main <- function() {
   contrast_results <- list()
   all_tables <- list()
 
-  for (c_name in contrast_names) {
-    c_parts <- strsplit(c_name, "/")[[1]]
+  for (raw_c_name in contrast_names) {
+    c_parts <- strsplit(raw_c_name, "[/-]")[[1]]
     t_group <- c_parts[1]
     c_group <- if (length(c_parts) > 1) c_parts[2] else "control"
+    c_name <- paste0(t_group, "/", c_group)
     contrast_tag <- paste0(t_group, "-", c_group)
 
     # Export full unthresholded expression analysis using rlang::inject to avoid NSE failure
@@ -251,6 +257,10 @@ main <- function() {
       md_table <- paste(knitr::kable(tbl_clean, format = "pipe", digits = 3), collapse = "\n")
     }
 
+    if (nrow(matched_display) > 0) {
+      all_tables[[contrast_tag]] <- matched_display %>% dplyr::mutate(contrast = contrast_tag)
+    }
+
     contrast_results[[contrast_tag]] <- list(
       contrast = contrast_tag,
       candidates_tested = num_tested,
@@ -263,11 +273,69 @@ main <- function() {
     )
   }
 
+  # Construct complete human-readable and file-backed markdown report
+  md_report_lines <- c(
+    sprintf("## Literature Candidate Proteomic Interrogation: %s", module_name),
+    sprintf("- **Date**: %s", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
+    sprintf("- **Proteomics Data**: `%s`", rds_path),
+    sprintf("- **Candidates Tested**: %d (%s)", length(candidate_symbols), paste(candidate_symbols, collapse = ", ")),
+    ""
+  )
+
+  for (c_tag in names(contrast_results)) {
+    c_res <- contrast_results[[c_tag]]
+    pct_det <- if (c_res$candidates_tested > 0) (c_res$candidates_detected / c_res$candidates_tested) * 100 else 0
+    md_report_lines <- c(
+      md_report_lines,
+      sprintf("### Contrast: %s", c_tag),
+      sprintf("- **Candidates Detected**: %d / %d (%.1f%%)", c_res$candidates_detected, c_res$candidates_tested, pct_det),
+      sprintf("- **Nominal Subthreshold Shifts ($p \\le 0.05$)**: %d", c_res$subthreshold_p05_count),
+      sprintf("- **Strict FDR Significant ($q \\le 0.05, |\\log_2\\text{FC}| \\ge 1.0$)**: %d", c_res$strict_sig_count)
+    )
+
+    if (!is.null(c_res$fgsea)) {
+      fg <- c_res$fgsea
+      md_report_lines <- c(
+        md_report_lines,
+        sprintf("- **FGSEA Module Enrichment**: NES = %.3f, p = %.3e, padj = %.3e (Size = %d)", 
+                fg$NES, fg$pval, fg$padj, fg$size),
+        sprintf("- **Leading Edge Genes**: %s", if (nzchar(fg$leadingEdge)) fg$leadingEdge else "none")
+      )
+    }
+
+    md_report_lines <- c(
+      md_report_lines,
+      "",
+      "#### Candidate Regulation Table",
+      if (nzchar(c_res$markdown_table)) c_res$markdown_table else "*(No candidates detected in this contrast)*",
+      ""
+    )
+  }
+
+  full_md_report <- paste(md_report_lines, collapse = "\n")
+
+  # Write dedicated markdown summary file to docs/literature_candidates.md (and data/ fallback)
+  out_dir <- if (dir.exists("docs")) "docs" else if (dir.exists("data")) "data" else "."
+  out_md_path <- file.path(out_dir, "literature_candidates.md")
+  tryCatch(writeLines(full_md_report, out_md_path), error = function(e) NULL)
+
+  # Write combined expression table to data/literature_candidate_expression.csv if data/ exists
+  if (dir.exists("data") && length(all_tables) > 0) {
+    tryCatch({
+      combined_df <- dplyr::bind_rows(all_tables)
+      readr::write_csv(combined_df, "data/literature_candidate_expression.csv")
+    }, error = function(e) NULL)
+  }
+
+  # Print human-readable report directly to stdout
+  cat("\n", full_md_report, "\n\n", sep = "")
+
   emit(list(
     ok = TRUE,
     module_name = module_name,
     candidates = candidate_symbols,
     rds_path = rds_path,
+    output_markdown = out_md_path,
     contrasts = contrast_results
   ))
 }

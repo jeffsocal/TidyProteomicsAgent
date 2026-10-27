@@ -10,7 +10,7 @@ Unlike standard conversational agents (e.g. Cline) that accumulate all file insp
 
 1. **Persistent Global Frame (Cached Prefix)**:
    - System Directives & Quality Gates (`agent/PROTOCOL.md`)
-   - Modular Skill / API Conventions (`agent/TIDYPROTEOMICS_*.md` loaded on-demand per phase)
+   - TidyProteomics MCP Server (`tpa_*` tools dynamically scoped per phase)
    - Marked with provider-level **Prompt Caching** (e.g. Anthropic Ephemeral Caching or Gemini Context Caching) for fast, low-cost execution.
 
 2. **Shared Blackboard (Persistent Disk State)**:
@@ -30,12 +30,31 @@ Unlike standard conversational agents (e.g. Cline) that accumulate all file insp
      - `07_KNOWLEDGE.md`: Internal knowledge contextualization, first-layer conclusions & web search keyphrases (`docs/knowledge.md`)
      - `08_WEBSEARCH.md`: Web search corroboration, second-layer conclusions & literature strategy (`docs/websearch.md`)
      - `09_LITERATURE.md`: Literature Knowledge Database interrogation, reverse-interrogation & third-layer conclusions (`docs/literature.md`)
-     - `10_SYNTHESIS.md`: Publication-grade manuscript compilation from `docs/*` (`docs/scientific_report.md`)
+     - `10_FIGURES.md`: Multi-panel discussion figure compilation & hypothesis verification
+     - `11_SYNTHESIS.md`: Publication-grade manuscript compilation from `docs/*` (`docs/manuscript.md`)
    - Tool calls, command executions, and self-correction retries stay local to the active phase.
    - Upon meeting phase checkpoints, the local trajectory is **completely discarded from memory**.
    - Subsequent phases start with a pristine, unpolluted context window reading only disk state!
 
 ---
+
+
+---
+
+## High-Value Proteomics Features
+
+1. **Visual Contrast & Batch Designer (Agent Tab)**:
+   - Interactive UI widget embedded in the Agent sidebar view.
+   - Live auto-complete for discovered sample groups, visual selection of treatment vs control, and toggles for batch confounding and sample pooling.
+   - Click "Apply Contrast & Resume" to atomically update Section 3 of `docs/experiment.md` and resume single-phase execution.
+
+2. **Automated ProteomeXchange SDRF Generation (`tpa_export_sdrf`)**:
+   - Converts `data$experiments` and metadata into PRIDE/MassIVE-compliant `data/sdrf.tsv` format (`source name`, `characteristics[organism]`, `characteristics[cell line]`, `characteristics[biological replicate]`, `factor value[phenotype / perturbation]`, `comment[data file]`).
+   - Integrated as both an MCP tool (`tpa_export_sdrf`) and a standalone R script (`tools/generate_sdrf.R`).
+
+3. **Multi-Assay Normalization Sensitivity Comparison (`tpa_normalization_sensitivity`)**:
+   - Benchmarks differential expression consistency across candidate normalizations (`median`, `linear`, `limma`, `loess`, `randomforest`).
+   - Quantifies pairwise Jaccard significance concordance, Log2 fold-change Pearson correlation ($R$), and extracts consensus robust candidate lists.
 
 ## Architecture Overview
 

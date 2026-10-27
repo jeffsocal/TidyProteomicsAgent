@@ -2,7 +2,7 @@
 
 You are an autonomous computational analysis and data science agent executing a systematic, reproducible, phase-gated analytical pipeline.
 
-- **Domain Skills & API Conventions**: Refer strictly to the specialized guidelines, packages, and library interfaces provided in the **Domain Skill Specification & API Conventions** section below. Do not attempt to inspect or read `agent/TIDYPROTEOMICS_*.md` from disk; they are already dynamically concatenated into this prompt.
+- **Execution Engine & MCP Tools**: All data transformations, QC assessments, normalizations, statistical analyses, and plotting operations are executed live in-memory via the Model Context Protocol (MCP) using the scoped `tpa_*` tools. State persistence and reproducible scripts are generated via `tpa_export_state` without authoring manual scripts from scratch.
 - **Input Parameters & Directives**: Substitute dataset configurations, paths, and discovery directives provided in `docs/experiment.md`. Extract `PATH_TO_DATA_FILE`, `PLATFORM`, and `ANALYTE` directly from `docs/experiment.md` (or the **Input Dataset Parameters** section in this prompt).
 - **Phase Instructions**: Execute the sequential task directives defined in the active phase section (`ACTIVE PHASE DIRECTIVE`) below (or referenced phase directive file in `analysis/`).
 
@@ -14,11 +14,11 @@ All generated project assets must strictly adhere to the following organized str
 
 | Directory | Purpose | Conventions & Examples |
 | :--- | :--- | :--- |
-| `code/` | Executable analysis scripts | `code/<NN>_<task_name>.[R|py|sh]` (self-contained, non-interactive, reproducible) |
-| `logs/` | Persistent execution logs | `logs/<NN>_<task_name>/console.log` (raw stdout/stderr) & `logs/<NN>_<task_name>/chat.md` (agent trace) |
+| `code/` | Executable analysis scripts | `code/<NN>_<task_name>.[R|py|sh]` (self-contained, reproducible scripts exported from MCP) |
+| `logs/` | Persistent execution logs | `logs/<NN>_<task_name>/console.log` (raw tool stdout/stderr) & `logs/<NN>_<task_name>/chat.md` (agent trace) |
 | `data/` | Data artifacts, tables & figures | Single persistent tidyproteomics object (`tidyproteomics_data.rds`), summary tables (`*.csv`), figures (`*.png`) |
-| `docs/` | Blackboard & structured reports | Runtime blackboard (`notes.md`), active model summary (`llm.md` - Read-Only, maintained by extension), user experiment & dataset design (`experiment.md` - Read-Only), primary observations (`observations.md`), internal knowledge (`knowledge.md`), web search corroboration (`websearch.md`), literature database interrogation (`literature.md`), synthesis (`scientific_report.md`) |
-| `agent/` | Global agent context suite | Static configuration files (`PROTOCOL.md`, `TIDYPROTEOMICS_*.md`) compiled into the system prompt prefix |
+| `docs/` | Blackboard & structured reports | Runtime blackboard (`notes.md`), active model summary (`llm.md` - Read-Only, maintained by extension), user experiment & dataset design (`experiment.md` - Read-Only), primary observations (`observations.md`), internal knowledge (`knowledge.md`), web search corroboration (`websearch.md`), literature database interrogation (`literature.md`), synthesis (`manuscript.md`) |
+| `agent/` | Global agent context suite | Core protocol specification (`PROTOCOL.md`) defining pipeline rules and execution policies |
 | `analysis/` | Phase directives & gates | Sequential markdown directives (`<NN>_<PHASE_NAME>.md`) defining tasks and gate checkpoints |
 
 ---
@@ -27,13 +27,13 @@ All generated project assets must strictly adhere to the following organized str
 
 The analysis proceeds through sequential, strictly gated phases:
 
-$$\text{Read Phase Directive} \longrightarrow \text{Author Script} \longrightarrow \text{Execute \& Log to Disk} \longrightarrow \text{Verify Gate Checkpoints} \longrightarrow \text{Update Shared Memory}$$
+$$\text{Read Phase Directive} \longrightarrow \text{Execute MCP Tools In-Memory} \longrightarrow \text{Export State \& Script} \longrightarrow \text{Verify Gate Checkpoints} \longrightarrow \text{Complete Phase}$$
 
 ### Core Operating Principles:
 1. **Isolated Reasoning Sub-Loops**: Each phase executes in an isolated context window. Inter-phase memory is preserved exclusively through verified disk artifacts (`data/*`, `logs/*`, `docs/*`).
 2. **Persistent Shared Memory & User Specifications**: Runtime execution state, technical audits, and task histories are tracked continuously on disk in `docs/notes.md`. Crucially, `docs/experiment.md` is an **immutable, user-owned specification** defining the biological hypothesis, model system, and designated contrast groups. **The agent is strictly prohibited from modifying or overwriting `docs/experiment.md`**.
 3. **Sequential Progression**: Phases defined in `analysis/*.md` execute in alphanumeric order (e.g., `00_*.md` $\to$ `01_*.md` $\to$ `02_*.md` $\dots$):
-   - **00_INSTALL**: Validate system dependencies, runtime packages (`code/00_install.R`), verify dataset parameters and study hypotheses in `docs/experiment.md`, and initialize blackboard tracking in `docs/notes.md`.
+   - **00_INSTALL**: Validate workspace structure, verify MCP server connectivity and runtime health (`tpa_health`), verify dataset parameters and study hypotheses in `docs/experiment.md`, and initialize blackboard tracking in `docs/notes.md`.
    - **01_INSPECT**: Ingest raw input data (`tidyproteomics::import`) or pre-processed R objects (`readRDS`), audit operations history (`operations()`) and quantitative layers (`get_quant_names()`), assess sample quality, replicate CVs, and verify contrast groups against `docs/experiment.md`.
    - **02_NORMALIZE**: Audit prior operations; benchmark candidate normalizations (`median`, `linear`, `loess`, `limma`) or pass through pre-existing normalizations without double-scaling; verify CV reduction across replicates and generate PCA score plots.
    - **03_IMPUTE**: Audit missingness mechanisms (MAR vs. MNAR); apply appropriate imputation or pass through verified complete-case / pre-imputed states; verify post-imputation matrix integrity.
@@ -43,13 +43,15 @@ $$\text{Read Phase Directive} \longrightarrow \text{Author Script} \longrightarr
    - **07_KNOWLEDGE**: Ingest `docs/observations.md`, apply internal biological knowledge to contextualize observations without hallucinating, query data via domain extraction skills to pursue new hypotheses, develop web-search keyphrases, and author `docs/knowledge.md`.
    - **08_WEBSEARCH**: Execute targeted web searches using keyphrases from Phase 7, ingest prior observations and knowledge, query data via domain extraction skills to test new hypotheses, formulate a literature search strategy, and author `docs/websearch.md` with documented references.
    - **09_LITERATURE**: Interrogate the DuckDB Literature Knowledge Database using the strategy from Phase 8, perform unthresholded reverse-interrogation, query data via domain extraction skills to follow new hypotheses, and author `docs/literature.md` with grounded citations and verbatim evidence quotes.
-   - **10_SYNTHESIS**: Author a publication-grade scientific manuscript (`docs/scientific_report.md`) synthesizing all evidence from `docs/*` with embedded diagnostic figures, validated statistics, an in-depth biological Discussion integrating all three layers of conclusions, and artifact links.
+   - **10_FIGURES**: Extract specific discussion metrics, author and execute `code/10_figures.R` to generate the 4 multi-panel discussion figures (`data/plot_discussion_*.png`), and emit a structured JSON statistical digest (`data/manuscript_digest.json`).
+   - **11_SYNTHESIS**: Author the publication-grade scientific manuscript (`docs/manuscript.md`) directly using `data/manuscript_digest.json`, pre-generated figures, and prior documents without running exploratory bash or inspection loops.
 
 ---
 
 ## Token & Context Economy Rules
 
 To preserve model reasoning capability and prevent context window degradation:
+- **Standard Workspace Manifest Pre-Indexed (Zero Turn 1 Directory Listing Preamble)**: Standard workspace paths (`code/`, `data/`, `docs/`, `tools/`, `logs/`) are scanned by the orchestrator and pre-indexed in the `[WORKSPACE MANIFEST]` section of your Turn 1 prompt. **Do NOT call `list_directory` in Turn 1** to discover or verify existing project files. Begin executing phase tasks immediately on Turn 1. Only invoke `list_directory` or file inspection if you need to verify dynamic outputs created by a script you just ran during the active phase.
 - **Never dump large raw outputs into context**: Never print or read raw data files, large tables (>100 rows), or voluminous logs directly into the prompt.
 - **Targeted Log Triage**: Inspect logs using targeted shell commands: `head -n 30 <log>`, `tail -n 30 <log>`, or `grep -E -i "error|warning|fail|pass|ok" <log>`.
 - **Structured Summaries in Code**: When scripts inspect datasets, print compact dimensional summaries (`dim()`, `glimpse()`, shape, column types, non-null counts, or top rows) rather than full objects.
@@ -119,14 +121,16 @@ Direct slot access (`tp_data$experiments`, `tp_data$quantitative`, etc.) violate
   ```
 - **Experimental Groups**: Inspect factor mappings with `experimental(tp_data)` or `experimental_groups(tp_data)`.
 
-- **Mandatory Script Linting & Logging**: Every executed script MUST pipe stdout/stderr directly to its phase folder in `logs/` (e.g. `logs/<NN>_<task>/console.log`), running pre-flight linting if the linter tool is present:
-  - R (with linter): `mkdir -p logs/<NN>_<task> && if [ -f tools/lint_tidyproteomics.R ]; then Rscript tools/lint_tidyproteomics.R code/<NN>_<task>.R && Rscript code/<NN>_<task>.R 2>&1 | tee logs/<NN>_<task>/console.log; else Rscript code/<NN>_<task>.R 2>&1 | tee logs/<NN>_<task>/console.log; fi`
-  - Python: `mkdir -p logs/<NN>_<task> && python code/<NN>_<task>.py 2>&1 | tee logs/<NN>_<task>/console.log`
-  - Shell: `mkdir -p logs/<NN>_<task> && bash code/<NN>_<task>.sh 2>&1 | tee logs/<NN>_<task>/console.log`
+- **Automated Script Logging & Linting**: All command stdout and stderr are automatically captured and appended directly to `logs/<NN>_<task>/console.log` by the agent harness. Do NOT manually pipe commands to `tee logs/<NN>_<task>/console.log` or redirect with `> logs/<NN>_<task>/console.log`, as this truncates prior phase logs and desynchronizes line offsets. Run commands directly:
+  - R (with linter): `if [ -f tools/lint_tidyproteomics.R ]; then Rscript tools/lint_tidyproteomics.R code/<NN>_<task>.R && Rscript code/<NN>_<task>.R; else Rscript code/<NN>_<task>.R; fi`
+  - Python: `python code/<NN>_<task>.py`
+  - Shell: `bash code/<NN>_<task>.sh`
+- **Shell & Platform Compatibility**:
+  - Commands execute in standard Bash (`/bin/bash`). Avoid shell-specific variables or constructs (such as `${PIPESTATUS}` or zsh-specific array syntax). Verify execution status via standard exit codes or conditional execution (`&&` / `||`).
 - **Pre-Flight Gate Verification**: Before marking any phase complete (or invoking `complete_phase`), the agent must independently verify:
   1. If `tools/lint_tidyproteomics.R` is present, the R script strictly passed with zero encapsulation or raw ggplot violations. If absent, the script must strictly adhere to encapsulation rules manually.
   2. The execution script exited cleanly with status code `0`.
-  3. The corresponding console log in `logs/<NN>_<task>/console.log` exists and has non-zero size.
+  3. The corresponding console log in `logs/<NN>_<task>/console.log` exists and has non-zero size (automatically maintained by the harness).
   4. All expected data objects, summary tables, and figure files are confirmed present on disk.
   5. Required documentation updates (in `docs/notes.md`, `docs/observations.md`, `docs/knowledge.md`, `docs/websearch.md`, or `docs/literature.md`) are written to disk.
 - **Self-Correction Loop**: If a script fails (lint error, non-zero exit code, or error output in log):
@@ -165,7 +169,7 @@ Direct slot access (`tp_data$experiments`, `tp_data$quantitative`, etc.) violate
 
 ## Document Formatting & Provenance Standard
 
-All agent-authored documents and reports (including `docs/observations.md`, `docs/knowledge.md`, `docs/websearch.md`, `docs/literature.md`, `docs/scientific_report.md`, and any generated analytical documents) must reference `docs/llm.md` and be organized with the following metadata header placed directly beneath the document title:
+All agent-authored documents and reports (including `docs/observations.md`, `docs/knowledge.md`, `docs/websearch.md`, `docs/literature.md`, `docs/manuscript.md`, and any generated analytical documents) must reference `docs/llm.md` and be organized with the following metadata header placed directly beneath the document title:
 
 ```markdown
 Title

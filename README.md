@@ -18,7 +18,7 @@ The diagram below illustrates the core execution architecture:
 ┌────────────────────────────────────────────────────────────────────────┐
 │                   PERSISTENT GLOBAL FRAME (Cached)                     │
 │  - System Directives (agent/PROTOCOL.md)                               │
-│  - Modular Skill Segments (agent/TIDYPROTEOMICS_*.md)                  │
+│  - TidyProteomics MCP Server (Live In-Memory Analysis Session)         │
 │  - Curated Biology Context (agent/BIOLOGY.md - Optional)               │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
@@ -49,8 +49,8 @@ The diagram below illustrates the core execution architecture:
 ### Three Architectural Pillars
 
 1. **Persistent Global Frame (Cached Prefix)**:
-   - System Directives & Protocol Guidelines (`agent/PROTOCOL.md`)
-   - Modular Domain Skill Segments (`agent/TIDYPROTEOMICS_*.md` dynamically loaded per phase)
+   - System Directives & Quality Gates (`agent/PROTOCOL.md`)
+   - TidyProteomics MCP Server with dynamically phase-scoped tools (`tpa_*`)
    - Configured with provider-level **Prompt Caching** (e.g. Anthropic Ephemeral Caching or Gemini Context Caching) for rapid turnarounds and significant token cost reduction (often >80% prompt token cache hits).
 
 2. **Shared Blackboard (Persistent Disk State)**:
@@ -70,7 +70,7 @@ The diagram below illustrates the core execution architecture:
 ## Features
 
 - **Built-in Pipeline Templates**:
-  - 🧬 **Standard Differential Expression (11 Phases)**: Full modular workflow from environment readiness (`00_INSTALL`), data inspection (`01_INSPECT`), normalization benchmarking (`02_NORMALIZE`), missingness assessment & imputation (`03_IMPUTE`), differential expression (`04_EXPRESSION`), functional annotation & pathway enrichment (`05_ENRICHMENT`), primary data observations (`06_OBSERVATIONS`), internal knowledge contextualization (`07_KNOWLEDGE`), web search corroboration (`08_WEBSEARCH`), literature database interrogation (`09_LITERATURE`), to publication-grade manuscript synthesis (`10_SYNTHESIS`).
+  - 🧬 **Standard Differential Expression (12 Phases)**: Full modular workflow from environment readiness (`00_INSTALL`), data inspection (`01_INSPECT`), normalization benchmarking (`02_NORMALIZE`), missingness assessment & imputation (`03_IMPUTE`), differential expression (`04_EXPRESSION`), functional annotation & pathway enrichment (`05_ENRICHMENT`), primary data observations (`06_OBSERVATIONS`), internal knowledge contextualization (`07_KNOWLEDGE`), web search corroboration (`08_WEBSEARCH`), literature database interrogation (`09_LITERATURE`), discussion figure rendering & statistical digest (`10_FIGURES`), to publication-grade manuscript synthesis (`11_SYNTHESIS`).
   - 📊 **Quality Control & Exploration (2 Phases)**: Rapid exploratory data analysis, replicate CV evaluation, quantifiable fraction verification, and PCA separation.
 - **One-Click Workspace Initialization**:
   - Open any empty directory in VS Code and initialize the complete study structure (`analysis/`, `code/`, `agent/`, `data/`, `docs/`, `logs/`, `tools/`, and `.gitignore`) with a single click.
@@ -126,7 +126,7 @@ TidyProteomicsAgent/
     ├── media/                         # Extension icons and UI assets
     ├── dist/                          # Compiled production bundle
     └── templates/                     # Workspace scaffolding templates
-        ├── shared/                    # Boilerplate: 00_install.R, linter, protocols, .gitignore
+        ├── shared/                    # Boilerplate: linter, protocols, .gitignore
         └── pipelines/                 # Pipeline phases: differential_expression/, quality_control_only/
 ```
 

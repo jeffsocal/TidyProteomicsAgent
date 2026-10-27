@@ -80,29 +80,33 @@ for (idx in double_bracket_indices) {
   }
 }
 
-# 3. Check for raw ggplot() or ggplot2::ggplot() function calls
-ggplot_calls <- which(pd$token == "SYMBOL_FUNCTION_CALL" & pd$text == "ggplot")
-if (length(ggplot_calls) > 0) {
-  for (idx in ggplot_calls) {
-    line_num <- pd$line1[idx]
-    line_text <- trimws(raw_lines[line_num])
-    violations <- c(violations, sprintf(
-      "Line %d: Raw ggplot() call detected:\n    %s\n  --> FORBIDDEN: Do not construct custom ggplot graphs.\n  --> USE CANONICAL PLOTTING METHODS with built-in saving:\n      * tp_data |> plot_counts(destination = 'png')\n      * tp_data |> plot_pca(destination = 'png')\n      * tp_data |> plot_volcano(destination = 'png')\n      * tp_data |> plot_expression(..., destination = 'png')",
-      line_num, line_text
-    ))
-  }
-}
+is_10_figures <- grepl("(^|/)10_figures\\.R$", script_path)
 
-# 4. Check for ggsave() calls
-ggsave_calls <- which(pd$token == "SYMBOL_FUNCTION_CALL" & pd$text == "ggsave")
-if (length(ggsave_calls) > 0) {
-  for (idx in ggsave_calls) {
-    line_num <- pd$line1[idx]
-    line_text <- trimws(raw_lines[line_num])
-    violations <- c(violations, sprintf(
-      "Line %d: ggsave() call detected:\n    %s\n  --> FORBIDDEN: Do not use ggsave(). tidyproteomics plot functions save internally via destination = 'png'.\n  --> When destination = 'png', plot functions return the tidyproteomics data object, not a ggplot object.",
-      line_num, line_text
-    ))
+# 3. Check for raw ggplot() or ggplot2::ggplot() function calls (exempted for Phase 10 discussion figures)
+if (!is_10_figures) {
+  ggplot_calls <- which(pd$token == "SYMBOL_FUNCTION_CALL" & pd$text == "ggplot")
+  if (length(ggplot_calls) > 0) {
+    for (idx in ggplot_calls) {
+      line_num <- pd$line1[idx]
+      line_text <- trimws(raw_lines[line_num])
+      violations <- c(violations, sprintf(
+        "Line %d: Raw ggplot() call detected:\n    %s\n  --> FORBIDDEN: Do not construct custom ggplot graphs.\n  --> USE CANONICAL PLOTTING METHODS with built-in saving:\n      * tp_data |> plot_counts(destination = 'png')\n      * tp_data |> plot_pca(destination = 'png')\n      * tp_data |> plot_volcano(destination = 'png')\n      * tp_data |> plot_heatmap(..., destination = 'png')\n      * tp_data |> plot_expression(..., destination = 'png')\n      * tp_data |> plot_programs(..., destination = 'png')\n      * tp_data |> plot_forest(..., destination = 'png')",
+        line_num, line_text
+      ))
+    }
+  }
+
+  # 4. Check for ggsave() calls
+  ggsave_calls <- which(pd$token == "SYMBOL_FUNCTION_CALL" & pd$text == "ggsave")
+  if (length(ggsave_calls) > 0) {
+    for (idx in ggsave_calls) {
+      line_num <- pd$line1[idx]
+      line_text <- trimws(raw_lines[line_num])
+      violations <- c(violations, sprintf(
+        "Line %d: ggsave() call detected:\n    %s\n  --> FORBIDDEN: Do not use ggsave(). tidyproteomics plot functions save internally via destination = 'png'.\n  --> When destination = 'png', plot functions return the tidyproteomics data object, not a ggplot object.",
+        line_num, line_text
+      ))
+    }
   }
 }
 

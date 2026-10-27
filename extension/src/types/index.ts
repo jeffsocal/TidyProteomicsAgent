@@ -16,6 +16,7 @@ export interface ChatMessage {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   tool_name?: string;
+  turn?: number;
 }
 
 export interface TokenUsage {
@@ -182,10 +183,12 @@ export interface ToolDefinition {
   };
 }
 
-export interface AdvisorMessage {
+export interface AgentMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   timestamp: string;
 }
+
+export type AdvisorMessage = AgentMessage;
 

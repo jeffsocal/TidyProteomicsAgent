@@ -82,52 +82,45 @@ export function activate(context: vscode.ExtensionContext) {
           continue;
         }
 
-        // Scope analysis watcher directly to analysis/ directory if present
-        const analysisDir = path.join(folderPath, "analysis");
-        if (fs.existsSync(analysisDir)) {
-          const analysisWatcher = vscode.workspace.createFileSystemWatcher(
-            new vscode.RelativePattern(vscode.Uri.file(analysisDir), "*.md")
-          );
-          analysisWatcher.onDidCreate(() => sidebarProvider.refreshPhases().catch(() => { }));
-          analysisWatcher.onDidChange(() => sidebarProvider.refreshPhases().catch(() => { }));
-          analysisWatcher.onDidDelete(() => sidebarProvider.forceReload().catch(() => { }));
-          watchers.push(analysisWatcher);
-        }
+        const folderUri = (folder as any).uri || vscode.Uri.file(folderPath);
 
-        // Scope agent/prompts watchers directly to their folders if present
-        const agentDir = path.join(folderPath, "agent");
-        if (fs.existsSync(agentDir)) {
-          const agentWatcher = vscode.workspace.createFileSystemWatcher(
-            new vscode.RelativePattern(vscode.Uri.file(agentDir), "*.md")
-          );
-          agentWatcher.onDidCreate(() => sidebarProvider.refreshPhases().catch(() => { }));
-          agentWatcher.onDidChange(() => sidebarProvider.refreshPhases().catch(() => { }));
-          agentWatcher.onDidDelete(() => sidebarProvider.refreshPhases().catch(() => { }));
-          watchers.push(agentWatcher);
-        }
+        // Scope analysis watcher directly to analysis/*.md (works even if analysis/ folder is created later)
+        const analysisWatcher = vscode.workspace.createFileSystemWatcher(
+          new vscode.RelativePattern(folderUri, "analysis/*.md")
+        );
+        analysisWatcher.onDidCreate(() => sidebarProvider.refreshPhases().catch(() => { }));
+        analysisWatcher.onDidChange(() => sidebarProvider.refreshPhases().catch(() => { }));
+        analysisWatcher.onDidDelete(() => {
+          sidebarProvider.forceReload().catch(() => { });
+          sidebarProvider.refreshPhases().catch(() => { });
+        });
+        watchers.push(analysisWatcher);
 
-        const promptsDir = path.join(folderPath, "prompts");
-        if (fs.existsSync(promptsDir)) {
-          const promptsWatcher = vscode.workspace.createFileSystemWatcher(
-            new vscode.RelativePattern(vscode.Uri.file(promptsDir), "*.md")
-          );
-          promptsWatcher.onDidCreate(() => sidebarProvider.refreshPhases().catch(() => { }));
-          promptsWatcher.onDidChange(() => sidebarProvider.refreshPhases().catch(() => { }));
-          promptsWatcher.onDidDelete(() => sidebarProvider.refreshPhases().catch(() => { }));
-          watchers.push(promptsWatcher);
-        }
+        // Scope agent/prompts watchers directly to their folders
+        const agentWatcher = vscode.workspace.createFileSystemWatcher(
+          new vscode.RelativePattern(folderUri, "agent/*.md")
+        );
+        agentWatcher.onDidCreate(() => sidebarProvider.refreshPhases().catch(() => { }));
+        agentWatcher.onDidChange(() => sidebarProvider.refreshPhases().catch(() => { }));
+        agentWatcher.onDidDelete(() => sidebarProvider.refreshPhases().catch(() => { }));
+        watchers.push(agentWatcher);
 
-        // Scope docs watcher directly to docs/ directory if present
-        const docsDir = path.join(folderPath, "docs");
-        if (fs.existsSync(docsDir)) {
-          const notesWatcher = vscode.workspace.createFileSystemWatcher(
-            new vscode.RelativePattern(vscode.Uri.file(docsDir), "notes.md")
-          );
-          notesWatcher.onDidCreate(() => sidebarProvider.forceReload().catch(() => { }));
-          notesWatcher.onDidChange(() => sidebarProvider.forceReload().catch(() => { }));
-          notesWatcher.onDidDelete(() => sidebarProvider.forceReload().catch(() => { }));
-          watchers.push(notesWatcher);
-        }
+        const promptsWatcher = vscode.workspace.createFileSystemWatcher(
+          new vscode.RelativePattern(folderUri, "prompts/*.md")
+        );
+        promptsWatcher.onDidCreate(() => sidebarProvider.refreshPhases().catch(() => { }));
+        promptsWatcher.onDidChange(() => sidebarProvider.refreshPhases().catch(() => { }));
+        promptsWatcher.onDidDelete(() => sidebarProvider.refreshPhases().catch(() => { }));
+        watchers.push(promptsWatcher);
+
+        // Scope docs watcher directly to docs/notes.md
+        const notesWatcher = vscode.workspace.createFileSystemWatcher(
+          new vscode.RelativePattern(folderUri, "docs/notes.md")
+        );
+        notesWatcher.onDidCreate(() => sidebarProvider.forceReload().catch(() => { }));
+        notesWatcher.onDidChange(() => sidebarProvider.forceReload().catch(() => { }));
+        notesWatcher.onDidDelete(() => sidebarProvider.forceReload().catch(() => { }));
+        watchers.push(notesWatcher);
       } catch (e) {
         const folderPath = ((folder as any).fsPath || (folder as any).uri?.fsPath || "") as string;
         console.error("[TidyProteomicsAgent] Failed to initialize file watchers for folder:", folderPath, e);
@@ -208,6 +201,19 @@ export function activate(context: vscode.ExtensionContext) {
       await sidebarProvider.promptInitWorkspace();
     })
   );
+
+  // Command: Toggle Engine (MCP vs. Markdown Skill)
+  context.subscriptions.push(
+    vscode.commands.registerCommand("tidyproteomicsagent.toggleEngine", async () => {
+      await sidebarProvider.toggleEngine();
+    })
+  );
+
+  context.subscriptions.push({
+    dispose: () => {
+      sidebarProvider.dispose().catch(() => {});
+    },
+  });
 }
 
 export function deactivate() { }

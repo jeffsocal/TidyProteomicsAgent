@@ -39,13 +39,17 @@ export class AgentLoop {
     return { ...this.totalUsage };
   }
 
-  public async run(maxTurns = 25): Promise<LoopResult> {
+  public async run(maxTurns = 30): Promise<LoopResult> {
     const startTimeMs = Date.now();
+
+    // Set active phase on tools for log mirroring and phase scoping
+    this.tools.setActivePhase(this.phaseName);
 
     // 1. Initialize the isolated sub-loop conversation with the dynamic phase directive
     this.messages.push({
       role: "user",
       content: this.context.phasePrompt,
+      turn: 0,
     });
 
     if (this.chatLogger) {
@@ -58,16 +62,15 @@ export class AgentLoop {
         provider: cfg.provider,
         systemPromptFiles: [
           "agent/PROTOCOL.md",
-          "docs/experiment.md",
-          ...(this.context.loadedSkillFiles && this.context.loadedSkillFiles.length > 0
-            ? this.context.loadedSkillFiles
-            : ["agent/TIDYPROTEOMICS_CORE.md"]),
         ],
         inputPromptFiles: [
           this.phaseName.includes("/") ? this.phaseName : `analysis/${this.phaseName}`,
-          "docs/notes.md",
-          "docs/llm.md",
+          ...(this.context.phaseSkillFiles && this.context.phaseSkillFiles.length > 0
+            ? this.context.phaseSkillFiles
+            : []),
           "docs/experiment.md",
+          "Executive Blackboard (Active State & Prior Summary)",
+          "docs/llm.md",
         ],
       });
     }
@@ -119,7 +122,7 @@ export class AgentLoop {
           response = await this.client.chat({
             system: this.context.systemPrompt,
             messages: this.messages,
-            tools: this.tools.getDefinitions(),
+            tools: this.tools.getDefinitions(this.phaseName, this.context?.phaseContent),
             onToken: (text) => {
               this.onProgress({ type: "text", data: text });
             },
@@ -128,16 +131,28 @@ export class AgentLoop {
           break; // Success!
         } catch (err: any) {
           lastError = err;
-          const isTimeout =
+          const isRetryable =
+            err.isRetryable === true ||
+            err.isTimeout === true ||
+            err.isNetworkError === true ||
             err.name === "TimeoutError" ||
             err.name === "AbortError" ||
-            /timeout|aborted|ETIMEDOUT|ECONNRESET/i.test(err.message || "");
+            (err.status === 429) ||
+            (err.status >= 500 && err.status <= 504) ||
+            /timeout|aborted|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|ConnectTimeoutError|fetch failed|rate limit|temporar/i.test(
+              err.message || ""
+            ) ||
+            (err.cause &&
+              /timeout|aborted|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|ConnectTimeoutError/i.test(
+                (err.cause.name || "") + " " + (err.cause.code || "") + " " + (err.cause.message || "")
+              ));
 
-          if (isTimeout && attempt <= maxRetries && (!this.isCancelled || !this.isCancelled())) {
+          if (isRetryable && attempt <= maxRetries && (!this.isCancelled || !this.isCancelled())) {
             const backoffMs = attempt * 3000;
+            const shortReason = err.message ? (err.message.length > 80 ? err.message.slice(0, 77) + "..." : err.message) : "Network/API glitch";
             this.onProgress({
               type: "thought",
-              data: `Turn ${turn} timed out on attempt ${attempt}/${maxRetries + 1} (${err.message}). Retrying in ${backoffMs / 1000}s...`,
+              data: `Turn ${turn} connection/API glitch on attempt ${attempt}/${maxRetries + 1} (${shortReason}). Retrying in ${backoffMs / 1000}s...`,
             });
             await new Promise((r) => setTimeout(r, backoffMs));
             continue;
@@ -194,6 +209,7 @@ export class AgentLoop {
         role: "assistant",
         content: response.content,
         tool_calls: response.tool_calls,
+        turn,
       });
 
       // Log assistant response to llm_chat.log
@@ -239,13 +255,32 @@ export class AgentLoop {
             data: { name: tc.name, result: result.content, isError: result.isError },
           });
 
-          // Protect conversation context from massive raw dumps (keep head and tail checkpoints)
+          // Protect conversation context from runaway dumps (preserve full context for intentional file reads)
           let toolMessageContent = result.content;
-          const MAX_TOOL_CHARS = 24000;
-          if (toolMessageContent && toolMessageContent.length > MAX_TOOL_CHARS) {
-            const head = toolMessageContent.slice(0, 12000);
-            const tail = toolMessageContent.slice(-10000);
-            const omitted = toolMessageContent.length - 22000;
+          let maxChars = 24000;
+          if (tc.name === "read_file") {
+            // read_file is intentional and bounded by startLine/maxLines; give generous headroom
+            maxChars = 60000;
+          } else if (tc.name === "execute_command") {
+            // Guard against runaway stdout while keeping substantial head and tail diagnostics
+            maxChars = 32000;
+          } else if ([
+            "list_directory",
+            "check_checkpoint_gate",
+            "tpa_health",
+            "tpa_operations",
+            "tpa_export_state",
+            "file_exists",
+          ].includes(tc.name)) {
+            maxChars = 8000;
+          }
+
+          if (toolMessageContent && toolMessageContent.length > maxChars) {
+            const headChars = Math.floor(maxChars * 0.55);
+            const tailChars = Math.floor(maxChars * 0.35);
+            const head = toolMessageContent.slice(0, headChars);
+            const tail = toolMessageContent.slice(-tailChars);
+            const omitted = toolMessageContent.length - (headChars + tailChars);
             toolMessageContent = `${head}\n\n... [Output truncated: ${omitted.toLocaleString()} characters omitted to preserve context economy. See complete output in workspace/logs/ or inspect with 'read_file'] ...\n\n${tail}`;
           }
 
@@ -255,6 +290,7 @@ export class AgentLoop {
             tool_call_id: tc.id,
             tool_name: tc.name,
             content: toolMessageContent,
+            turn,
           });
 
           // Log tool result to phase chat log

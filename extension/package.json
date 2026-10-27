@@ -19,7 +19,8 @@
     "onCommand:tidyproteomicsagent.runCurrentPhase",
     "onCommand:tidyproteomicsagent.resetState",
     "onCommand:tidyproteomicsagent.refreshTasks",
-    "onCommand:tidyproteomicsagent.initWorkspace"
+    "onCommand:tidyproteomicsagent.initWorkspace",
+    "onCommand:tidyproteomicsagent.toggleEngine"
   ],
   "contributes": {
     "viewsContainers": {
@@ -64,6 +65,11 @@
         "command": "tidyproteomicsagent.initWorkspace",
         "title": "TidyProteomicsAgent: Initialize Analysis Pipeline",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "tidyproteomicsagent.toggleEngine",
+        "title": "TidyProteomicsAgent: MCP Server Status",
+        "icon": "$(server)"
       }
     ],
     "configuration": {
@@ -101,6 +107,11 @@
           "default": 32768,
           "description": "Maximum completion/output tokens per turn (e.g. 16384, 32768, 65536, 128000)"
         },
+        "tidyproteomicsagent.maxTurns": {
+          "type": "number",
+          "default": 30,
+          "description": "Maximum tool execution turns per phase before halting (default: 30)"
+        },
         "tidyproteomicsagent.timeoutSeconds": {
           "type": "number",
           "default": 600,
@@ -115,6 +126,33 @@
           "type": "string",
           "default": "analysis",
           "description": "Relative path to phase analysis prompts directory"
+        },
+        "tidyproteomicsagent.engine": {
+          "type": "string",
+          "enum": [
+            "mcp"
+          ],
+          "default": "mcp",
+          "description": "Execution engine: 'mcp' for persistent in-memory R session via JSON-RPC stdio MCP server."
+        },
+        "tidyproteomicsagent.mcpServerPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to tidyproteomics MCP server entrypoint (server.py). Auto-detects if left blank."
+        },
+        "tidyproteomicsagent.mcpMode": {
+          "type": "string",
+          "enum": [
+            "local",
+            "docker"
+          ],
+          "default": "local",
+          "description": "MCP execution mode: 'local' runs Python/R on host OS; 'docker' launches containerized server via Docker with workspace volume mounted."
+        },
+        "tidyproteomicsagent.dockerImage": {
+          "type": "string",
+          "default": "tidyproteomics-mcp:latest",
+          "description": "Docker image tag to use when mcpMode is set to 'docker' (default: 'tidyproteomics-mcp:latest')"
         }
       }
     }

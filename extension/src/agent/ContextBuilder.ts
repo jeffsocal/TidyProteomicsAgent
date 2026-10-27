@@ -7,7 +7,9 @@ export interface ContextBundle {
   phasePrompt: string;
   blackboardState: string;
   staticPrefixForCache: string;
+  phaseContent?: string;
   loadedSkillFiles?: string[];
+  phaseSkillFiles?: string[];
 }
 
 export class ContextBuilder {
@@ -35,61 +37,18 @@ export class ContextBuilder {
    * Resolves the list of skill names required for a phase.
    * Checks YAML frontmatter in the phase directive first, then applies intelligent phase defaults.
    */
-  public getSkillsForPhase(phaseFileName: string, phaseContent: string): string[] {
-    // 1. Check for YAML frontmatter with skills list
-    const match = phaseContent.match(/^---\s*[\r\n]+([\s\S]*?)[\r\n]+---/);
-    if (match) {
-      const frontmatter = match[1];
-      const skillsMatch = frontmatter.match(/skills:\s*[\r\n]+((?:\s*-\s*[\w_]+[\r\n]+)+)/);
-      if (skillsMatch) {
-        return skillsMatch[1]
-          .split(/[\r\n]+/)
-          .map((s) => s.replace(/^\s*-\s*/, "").trim())
-          .filter(Boolean);
-      }
-    }
-
-    // 2. Intelligent phase-to-skill mapping
-    const baseName = path.basename(phaseFileName).toUpperCase();
-    if (baseName.includes("INSTALL") || (baseName.includes("SETUP") && !baseName.includes("DATA"))) {
-      return ["TIDYPROTEOMICS_CORE"];
-    }
-    if (baseName.includes("INSPECT") || baseName.includes("DATA_QUALITY")) {
-      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_IMPORT_INSPECT"];
-    }
-    if (baseName.includes("NORMALIZE")) {
-      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_NORMALIZE_IMPUTE"];
-    }
-    if (baseName.includes("IMPUTE")) {
-      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_NORMALIZE_IMPUTE"];
-    }
-    if (baseName.includes("EXPRESSION")) {
-      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_EXPRESSION"];
-    }
-    if (baseName.includes("ENRICHMENT")) {
-      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_ENRICHMENT"];
-    }
-    if (
-      baseName.includes("OBSERVATION") ||
-      baseName.includes("KNOWLEDGE") ||
-      baseName.includes("WEBSEARCH") ||
-      baseName.includes("LITERATURE")
-    ) {
-      return ["TIDYPROTEOMICS_CORE", "TIDYPROTEOMICS_EXTRACT_QUERY"];
-    }
-    if (baseName.includes("SYNTHESIS")) {
-      return ["TIDYPROTEOMICS_CORE"];
-    }
-
-    return ["TIDYPROTEOMICS_CORE"];
+  public getSkillsForPhase(_phaseFileName: string, _phaseContent: string): string[] {
+    // Skills are superseded by dynamic MCP tool definitions
+    return [];
   }
 
   /**
-   * Builds the isolated context bundle for a specific phase.
-   * Persistent elements (rules, skills, variables, instructions) form the static prefix.
-   * Dynamic elements (blackboard docs/notes.md, experiment.md) and the phase file form the prompt.
+   * Builds the prompt context for a phase using persistent MCP in-memory tool calling.
    */
-  public async buildPhaseContext(phaseFileName: string): Promise<ContextBundle> {
+  public async buildPhaseContext(
+    phaseFileName: string,
+    _overrideMode?: string
+  ): Promise<ContextBundle> {
     // 1. Persistent rules and instructions (load unified PROTOCOL.md with legacy fallback)
     let agentDir = this.promptsDir;
     let protocol = await this.readFileSafe(path.join(agentDir, "PROTOCOL.md"));
@@ -98,6 +57,12 @@ export class ContextBuilder {
       if (fallback) {
         agentDir = "prompts";
         protocol = fallback;
+      } else {
+        const tplFallback = await this.readFileSafe(path.join("extension", "templates", "shared", "agent", "PROTOCOL.md"));
+        if (tplFallback) {
+          agentDir = path.join("extension", "templates", "shared", "agent");
+          protocol = tplFallback;
+        }
       }
     }
 
@@ -107,94 +72,85 @@ export class ContextBuilder {
       protocol = `${clinerules}\n\n${instruct}`.trim();
     }
 
-    // 2. Read phase directive early to extract skill declarations
+    // 2. Read phase directive
     let phasePath = phaseFileName;
     if (!phaseFileName.includes("/") && !phaseFileName.includes("\\")) {
       phasePath = path.join(this.analysisDir, phaseFileName);
+      const contentCheck = await this.readFileSafe(phasePath);
+      if (!contentCheck) {
+        const tplPhase = path.join("extension", "templates", "pipelines", "differential_expression", phaseFileName);
+        const tplContent = await this.readFileSafe(tplPhase);
+        if (tplContent) {
+          phasePath = tplPhase;
+        }
+      }
     }
     const phaseContent = await this.readFileSafe(phasePath);
-
-    // 3. Modular skill resolution (TIDYPROTEOMICS_*.md segments)
-    const skillNames = this.getSkillsForPhase(phaseFileName, phaseContent);
-    const loadedSkillFiles: string[] = [];
-    const skillParts: string[] = [];
-
-    for (const sName of skillNames) {
-      const fName = sName.endsWith(".md") ? sName : `${sName}.md`;
-      const content = await this.readFileSafe(path.join(agentDir, fName));
-      if (content) {
-        loadedSkillFiles.push(path.join(agentDir, fName));
-        skillParts.push(content);
-      }
-    }
-
-    if (skillParts.length === 0) {
-      const coreContent = await this.readFileSafe(path.join(agentDir, "TIDYPROTEOMICS_CORE.md"));
-      if (coreContent) {
-        loadedSkillFiles.push(path.join(agentDir, "TIDYPROTEOMICS_CORE.md"));
-        skillParts.push(coreContent);
-      }
-    }
-
-    const skill = skillParts.join("\n\n---\n\n").trim();
-
     const experiment = await this.readFileSafe(path.join("docs", "experiment.md"));
-    // Read legacy agent/VARIABLES.md if present, otherwise use docs/experiment.md
-    let variables = await this.readFileSafe(path.join(agentDir, "VARIABLES.md"));
-    if (!variables) {
-      variables = experiment || "No dataset parameters provided. See docs/experiment.md.";
-    }
-    const biology = await this.readFileSafe(path.join(agentDir, "BIOLOGY.md"));
 
-    const biologySection = biology
-      ? `\n\n# CURATED DOMAIN BIOLOGICAL CONTEXT\n${biology}`
-      : "";
-
-    // Static prefix - perfectly cacheable across all turns in this phase!
+    // 1. Invariant Persistent System Frame - strictly static across all phases 00 through 10
+    // Locks PROTOCOL.md to guarantee 100% prefix prompt cache hits across the entire pipeline
+    // (docs/experiment.md is decoupled into Turn 1 phasePrompt so metadata/contrast updates never bust prompt cache)
     const staticPrefixForCache = `
 # AUTONOMOUS ANALYSIS PROTOCOL & QUALITY GATES
 ${protocol}
-
-# INPUT DATASET PARAMETERS & EXPERIMENT SPECIFICATION
-${variables}
-${biologySection}
-
-# DOMAIN SKILL SPECIFICATION & API CONVENTIONS
-${skill}
-`.trim();
-
-    // 4. Blackboard / Inter-Phase Shared State
-    const notes = await this.readFileSafe(path.join("docs", "notes.md"));
-    const llm = await this.readFileSafe(path.join("docs", "llm.md"));
-
-    const blackboardState = `
-## CURRENT RUNTIME STATE (Shared Memory)
-### docs/notes.md:
-${notes || "No prior execution notes found. Initialize if this is Phase 0 or Phase 1."}
-
-### docs/llm.md (ACTIVE MODEL & AGENT SPECIFICATION - READ ONLY):
-${llm || "No active model summary found."}
-
-### docs/experiment.md (USER EXPERIMENT & DATASET SPECIFICATION):
-${experiment || "No user experiment design provided. Note: Sections 1 & 2 are strictly user-maintained. The agent may append or update Section 3 to scaffold sample grouping, renaming, and contrast suggestions for user confirmation."}
-${this.buildLiteratureSection()}
 `.trim();
 
     const systemPrompt = staticPrefixForCache;
 
+    // 2. Lean Executive Blackboard (Active Data State, Confirmed Study Design, Prior Phase Summary)
+    const executiveBlackboard = await this.buildExecutiveBlackboard(phaseFileName, "mcp");
+    const llm = await this.readFileSafe(path.join("docs", "llm.md"));
+
+    const blackboardState = `
+## CURRENT RUNTIME STATE (Shared Memory)
+${executiveBlackboard}
+
+### docs/llm.md (ACTIVE MODEL & AGENT SPECIFICATION - READ ONLY):
+${llm || "No active model summary found."}
+${this.buildLiteratureSection()}
+`.trim();
+
+    // 3. Workspace Directory Manifest (Pre-populate manifest to eliminate Turn 1 list_directory calls)
+    const workspaceManifest = await this.buildWorkspaceManifest();
+
+    const engineSection = `
+### EXECUTION ENGINE: TIDYPROTEOMICS MCP (Live In-Memory Session)
+- **Live Tool Calling Enabled**: The persistent tidyproteomics MCP server is CONNECTED and maintains the S3 dataset in memory. All analysis operations are executed via live \`tpa_*\` MCP tools.
+- **Direct Tools Available**: You have direct access to live \`tpa_*\` MCP tools dynamically scoped for this phase.
+- **Standard MCP-First Workflow**:
+  1. **Phase 1 Ingestion**: Ingest the dataset directly via \`tpa_load(source = "<URL_OR_PATH>", platform = "<PLATFORM>", analyte = "proteins")\`. Remote HTTPS URLs are automatically downloaded to \`data/raw/\` and imported into memory.
+  2. **Phase 2+ State Continuity**: In subsequent phases, the dataset is already held in memory from prior phases. If reloading is needed, call \`tpa_load(source = "data/tidyproteomics_data.rds")\`.
+  3. **In-Memory Transformation**: Execute subsetting, normalization benchmarking, imputation, and contrast testing directly using the corresponding \`tpa_*\` MCP tools. All tool executions and outputs are automatically recorded to \`logs/<phase>/console.log\`.
+  4. **Phase Checkpoint Gates & Artifact Generation**: When completing each phase, invoke \`tpa_export_state(rds_path = "data/tidyproteomics_data.rds", script_path = "code/<NN>_<phase>.R")\`. This automatically saves the data object to \`data/tidyproteomics_data.rds\` and writes the reproducible script to \`code/<NN>_<phase>.R\`, fully satisfying all checkpoint gates.
+  5. **No Redundant Script Authoring**: Do NOT author manual R scripts from scratch or run redundant R scripts via 'execute_command' when live 'tpa_*' MCP tools perform the tasks in memory. 'tpa_export_state' produces the required reproducible script automatically.
+  6. **Strict Tool Discipline (No Ad-Hoc Python or Shell Data Munging)**: Do NOT invoke Python, pandas, openpyxl, Rscript, or shell scripts via 'execute_command' to inspect, parse, or manipulate dataset files or raw tables. All study metadata, raw acquisition files, sample IDs, condition groups, and replicate layouts MUST be inspected through \`tpa_inspect(what = "experiments")\` and \`tpa_summary()\`.
+`.trim();
+
     const normalizedPhaseName = path.basename(phaseFileName).replace(/\.md$/, "").toUpperCase();
 
     const phasePrompt = `
-${blackboardState}
+${workspaceManifest ? `${workspaceManifest}\n\n---\n\n` : ""}${blackboardState}
+
+---
+
+## EXPERIMENT SPECIFICATION & DATASET PARAMETERS (docs/experiment.md)
+${experiment || "No dataset parameters provided. See docs/experiment.md."}
 
 ---
 
 ## ACTIVE PHASE DIRECTIVE (${phaseFileName})
 ${phaseContent}
 
+${engineSection}
+
 ### Execution Instructions:
 - Adhere strictly to the guidelines and gate checkpoints for this phase.
-- Execute code and commands to make real progress.
+- Standard Workspace Manifest Pre-Indexed: Key workspace files across code/, data/, docs/, tools/, and logs/ are pre-indexed in [WORKSPACE MANIFEST] above. Do NOT waste Turn 1 calling 'list_directory' to inspect existing files; proceed immediately to phase execution tasks.
+- Execute phase tasks directly using the available \`tpa_*\` MCP tools.
+- MCP-First Workflow: Do NOT author manual R scripts from scratch or run redundant R scripts via 'execute_command' when live 'tpa_*' MCP tools can perform the transformations in memory. Use 'tpa_export_state' to export the persisted data object and reproducible script ('code/<phase>.R') automatically upon completing in-memory tasks.
+- Strict Tool Discipline: Never run ad-hoc Python, pandas, or shell scripts via 'execute_command' to inspect data tables, read Excel sheets, or parse sample metadata. Rely strictly on \`tpa_inspect(what = "experiments")\` for sample, replicate, and file mappings, and \`tpa_summary()\` for quality distributions. 'execute_command' is strictly reserved for environment checks (Phase 0), AST linting ('tools/lint_tidyproteomics.R'), and literature CLI tools ('tools/literature/*').
+- Document Editing Discipline: In docs/experiment.md, never overwrite or modify Sections 1 & 2 (user hypotheses and dataset parameters). Update Section 3 (Sample Grouping, Recoding & Contrast Designations) using 'replace_file_content' or 'write_file'. Do NOT execute Python or shell scripts (e.g. pathlib, sed, awk) via 'execute_command' to modify documents.
 - For scripts and documents under 150 lines, always write or overwrite the full file using 'write_file'.
 - When authoring or updating any report or document (e.g. in docs/), reference 'docs/llm.md' and place the metadata header immediately beneath the title:
   Title
@@ -202,9 +158,9 @@ ${phaseContent}
   Created: YYYY-MM-DD HH:MM
   Author: PROVIDER | LLM-MODEL
   Agent: TidyProteomicsAgent vX.X.X
-- In docs/experiment.md: Never overwrite or modify Sections 1 & 2 (user hypotheses and dataset parameters). You are authorized and instructed to append or update Section 3 (Sample Grouping, Recoding & Contrast Designations) to scaffold discovered sample groups, renaming/pooling tables, and suggested contrast pairs for user review.
+- Standardized Note Ownership: Do not directly append phase completion headers or raw execution blocks to docs/notes.md from manual file commands. The orchestration framework automatically records a single, clean markdown summary upon complete_phase(phaseName = "${normalizedPhaseName}", summary = "...").
 - Once all checkpoints for this phase are satisfied and verified, invoke complete_phase(phaseName = "${normalizedPhaseName}", summary = "...").
-- If a mandatory pre-flight gate, configuration prerequisite, or checkpoint fails and requires user intervention (such as unconfigured placeholders or ambiguous/confounded contrasts in docs/experiment.md), scaffold concrete suggestions directly into Section 3 of docs/experiment.md, then immediately invoke fail_phase(phaseName = "${normalizedPhaseName}", reason = "...", actionableInsights = "...") to halt execution and present actionable insights to the user.
+- If a mandatory pre-flight gate, configuration prerequisite, or checkpoint fails and requires user intervention (such as unconfigured placeholders or unconfirmed contrasts in docs/experiment.md Section 3.C), scaffold concrete suggestions directly into Section 3 of docs/experiment.md, then immediately invoke fail_phase(phaseName = "${normalizedPhaseName}", reason = "...", actionableInsights = "...") to halt execution and present actionable insights to the user.
 `.trim();
 
     return {
@@ -212,8 +168,228 @@ ${phaseContent}
       phasePrompt,
       blackboardState,
       staticPrefixForCache,
-      loadedSkillFiles
+      phaseContent,
+      loadedSkillFiles: [],
+      phaseSkillFiles: [],
     };
+  }
+
+    public async buildWorkspaceManifest(): Promise<string> {
+    if (!this.workspaceRoot) return "";
+
+    const targetDirs = ["code", "data", "docs", "tools", "logs"];
+    const lines: string[] = ["[WORKSPACE MANIFEST]"];
+
+    for (const dirName of targetDirs) {
+      const fullDir = path.join(this.workspaceRoot, dirName);
+      try {
+        const stat = await fs.stat(fullDir);
+        if (stat.isDirectory()) {
+          const entries = await fs.readdir(fullDir);
+          const cleanFiles = entries
+            .filter((f) => !f.startsWith(".") && f !== "node_modules")
+            .sort();
+
+          if (cleanFiles.length > 0) {
+            let displayList: string;
+            if (cleanFiles.length <= 15) {
+              displayList = cleanFiles.join(", ");
+            } else {
+              const head = cleanFiles.slice(0, 12).join(", ");
+              displayList = `${head}, ... (${cleanFiles.length} files total)`;
+            }
+            lines.push(`${dirName}/: ${displayList}`);
+          } else {
+            lines.push(`${dirName}/: (empty)`);
+          }
+        }
+      } catch {
+        // Directory doesn't exist yet
+      }
+    }
+
+    if (lines.length === 1) return "";
+    return lines.join("\n");
+  }
+
+  /**
+   * Builds a lean, rolling Executive Blackboard for Turn 1 injection.
+   * Replaces raw multi-KB docs/notes.md with a lightweight summary containing ONLY:
+   * 1. Active Data State (number of proteins, active assay, imputation status)
+   * 2. Confirmed Study Design (sample groups, contrast pair)
+   * 3. Prior Phase Summary (ONLY the immediately preceding phase summary)
+   */
+  public async buildExecutiveBlackboard(currentPhaseFileName: string, activeMode: "mcp" | "markdown_skill" = "mcp"): Promise<string> {
+    const notesContent = await this.readFileSafe(path.join("docs", "notes.md"));
+    const experimentContent = await this.readFileSafe(path.join("docs", "experiment.md"));
+
+    // --- 1. Active Data State ---
+    let proteinCount = "Not yet loaded (pre-ingestion)";
+    let activeAssay = "raw (unnormalized)";
+    let imputationStatus = "Unimputed / pending Phase 3";
+
+    if (notesContent) {
+      // Find latest protein count mentioned across phase records
+      const proteinMatches = [...notesContent.matchAll(/(\b\d[\d,]*)\s+(?:human\s+)?proteins\b/gi)];
+      if (proteinMatches.length > 0) {
+        proteinCount = proteinMatches[proteinMatches.length - 1][1] + " proteins";
+      }
+
+      // Check normalization/assay method
+      if (/\brandomforest\b/i.test(notesContent)) {
+        activeAssay = "randomforest";
+      } else if (/\bloess\b/i.test(notesContent)) {
+        activeAssay = "loess";
+      } else if (/\blinear\b/i.test(notesContent)) {
+        activeAssay = "linear";
+      } else if (/\bmedian\b/i.test(notesContent)) {
+        activeAssay = "median";
+      } else if (/\blimma\b/i.test(notesContent)) {
+        activeAssay = "limma";
+      }
+
+      // Check imputation status
+      if (/imput(?:ed|ation)|zero missing|0%\s+missing/i.test(notesContent)) {
+        if (/column[\s/-]?min(?:imum)?/i.test(notesContent)) {
+          imputationStatus = "Imputed (column-minimum, 0% missing)";
+        } else if (/half[\s/-]?min(?:imum)?/i.test(notesContent)) {
+          imputationStatus = "Imputed (half-minimum, 0% missing)";
+        } else if (/upstream.*imput/i.test(notesContent)) {
+          imputationStatus = "Preserved upstream imputation (0% missing)";
+        } else if (/0%\s+missing|zero\s+missing/i.test(notesContent)) {
+          imputationStatus = "Complete cases / 0% missing";
+        } else {
+          imputationStatus = "Imputed (post-Phase 3)";
+        }
+      }
+    }
+
+    // --- 2. Confirmed Study Design ---
+    let contrastPair = "Pending Phase 1 confirmation";
+    let sampleGroups: string[] = [];
+
+    if (experimentContent) {
+      // Contrast pair from Section 3.C
+      const contrastMatch = experimentContent.match(/###\s*3\.C[^\n]*\n+([^\n\r#]+)/i);
+      if (contrastMatch) {
+        const raw = contrastMatch[1].replace(/[`*]/g, "").trim();
+        if (raw && !raw.includes("[REQUIRED:")) {
+          contrastPair = raw;
+        }
+      }
+
+      // Sample groups from Section 3.B (clean pooling map) or 3.A (discovered sample groups)
+      const discoveredGroups = new Set<string>();
+      const match3B = experimentContent.match(/###\s*3\.B[^\n]*\n([\s\S]*?)(?=\n###|$)/i);
+      if (match3B) {
+        const lines3B = match3B[1].split("\n").filter((l) => l.trim().startsWith("|"));
+        for (const line of lines3B) {
+          const cols = line.split("|").map((c) => c.trim().replace(/[`*]/g, ""));
+          if (cols.length >= 3) {
+            const val = cols[2];
+            if (val && !val.includes("---") && !/proposed|clean|label|current/i.test(val)) {
+              discoveredGroups.add(val);
+            }
+          }
+        }
+      }
+
+      if (discoveredGroups.size === 0) {
+        const match3A = experimentContent.match(/###\s*3\.A[^\n]*\n([\s\S]*?)(?=\n###|$)/i);
+        if (match3A) {
+          const lines3A = match3A[1].split("\n").filter((l) => l.trim().startsWith("|"));
+          for (const line of lines3A) {
+            const cols = line.split("|").map((c) => c.trim().replace(/[`*]/g, ""));
+            if (cols.length >= 2) {
+              const val = cols[1];
+              if (val && !val.includes("---") && !/discovered|sample|group/i.test(val)) {
+                discoveredGroups.add(val);
+              }
+            }
+          }
+        }
+      }
+
+      if (discoveredGroups.size > 0) {
+        sampleGroups = Array.from(discoveredGroups);
+      }
+    }
+    if (sampleGroups.length === 0) {
+      sampleGroups = ["Pending discovery in Phase 1"];
+    }
+
+    // --- 3. Prior Phase Summary (ONLY immediately preceding phase) ---
+    let priorPhaseTitle = "Prior Phase";
+    let priorPhaseStatus = "COMPLETED";
+    let priorPhaseSummary = "No prior phase executed. Initializing pipeline.";
+
+    if (notesContent) {
+      const sections = notesContent.split(/\n(?=###\s+)/);
+      const parsedRecords: { title: string; fileName: string; status: string; summary: string }[] = [];
+
+      for (const sec of sections) {
+        const fileMatch = sec.match(/- \*\*File\*\*:\s*`([^`]+)`/);
+        if (!fileMatch) continue;
+        const fileName = fileMatch[1].trim();
+
+        const titleMatch = sec.match(/###\s+([^-\n\r]+?)\s*-\s*(COMPLETED|FAILED)/i);
+        const title = titleMatch ? titleMatch[1].trim() : fileName;
+        const status = titleMatch ? titleMatch[2].toUpperCase() : "COMPLETED";
+
+        const summaryMatch = sec.match(/- \*\*Summary\*\*:\s*\n([\s\S]*?)(?:\n---|\n###|$)/);
+        const summary = summaryMatch ? summaryMatch[1].trim() : "";
+
+        if (summary) {
+          parsedRecords.push({ title, fileName, status, summary });
+        }
+      }
+
+      if (parsedRecords.length > 0) {
+        // If current phase file is known, find the record right before it, otherwise take the last completed record
+        const curBase = path.basename(currentPhaseFileName).toLowerCase();
+        let targetIdx = parsedRecords.length - 1;
+
+        for (let i = 0; i < parsedRecords.length; i++) {
+          if (path.basename(parsedRecords[i].fileName).toLowerCase() === curBase) {
+            targetIdx = i - 1;
+            break;
+          }
+        }
+
+        if (targetIdx >= 0 && targetIdx < parsedRecords.length) {
+          const rec = parsedRecords[targetIdx];
+          priorPhaseTitle = rec.title;
+          priorPhaseStatus = rec.status;
+          priorPhaseSummary = rec.summary;
+        } else if (targetIdx === -1) {
+          // Current phase is the very first recorded one
+          priorPhaseTitle = "Prior Phase";
+          priorPhaseStatus = "N/A";
+          priorPhaseSummary = "No prior phase executed. Initializing pipeline.";
+        } else {
+          const rec = parsedRecords[parsedRecords.length - 1];
+          priorPhaseTitle = rec.title;
+          priorPhaseStatus = rec.status;
+          priorPhaseSummary = rec.summary;
+        }
+      }
+    }
+
+    const engineLabel = "Live MCP Server (In-Memory Session)";
+
+    return `
+### EXECUTIVE BLACKBOARD (Active Memory):
+- **Active Execution Engine**: ${engineLabel}
+- **Active Data State**:
+  - Quantified Proteins: ${proteinCount}
+  - Active Assay / Normalization: ${activeAssay}
+  - Imputation Status: ${imputationStatus}
+- **Confirmed Study Design**:
+  - Active Sample Groups: ${sampleGroups.join(", ")}
+  - Confirmed Contrast Pair: ${contrastPair}
+- **Prior Phase Summary (${priorPhaseTitle} - ${priorPhaseStatus})**:
+${priorPhaseSummary.split("\n").map(line => `  ${line}`).join("\n")}
+`.trim();
   }
 
   /**

@@ -15,7 +15,8 @@ export function formatDateTime(d = new Date()): string {
 export function generateActiveModelSummaryMarkdown(
   config: LLMConfig,
   extensionVersion = "0.1.0",
-  date = new Date()
+  date = new Date(),
+  engine = "mcp"
 ): string {
   const timestampStr = formatDateTime(date);
   const providerStr = (config.provider || "anthropic").toUpperCase();
@@ -48,6 +49,7 @@ Agent: ${agentStr}
 | :--- | :--- |
 | **Provider** | ${providerStr} |
 | **Model** | ${modelStr} |
+| **Execution Engine** | ${engine === "mcp" ? "MCP Server (Live In-Memory)" : "Markdown Skills (Script Generation)"} |
 | **Author** | ${authorStr} |
 | **Agent** | ${agentStr} |
 | **Prompt Caching** | ${cachingStr} |
@@ -59,7 +61,7 @@ Agent: ${agentStr}
 ---
 
 ## Agent Document Header Standard
-All agent-authored documents and reports (including \`docs/observations.md\`, \`docs/knowledge.md\`, \`docs/websearch.md\`, \`docs/literature.md\`, \`docs/scientific_report.md\`, and any other generated markdown reports) must reference this specification and place the following metadata block immediately below the title:
+All agent-authored documents and reports (including \`docs/observations.md\`, \`docs/knowledge.md\`, \`docs/websearch.md\`, \`docs/literature.md\`, \`docs/manuscript.md\`, and any other generated markdown reports) must reference this specification and place the following metadata block immediately below the title:
 
 \`\`\`markdown
 Title
@@ -74,13 +76,14 @@ Agent: ${agentStr}
 export async function writeActiveModelSummaryFile(
   workspaceRoot: string,
   config: LLMConfig,
-  extensionVersion = "0.1.0"
+  extensionVersion = "0.1.0",
+  engine = "mcp"
 ): Promise<string> {
   if (!workspaceRoot) return "";
   const docsDir = path.join(workspaceRoot, "docs");
   await fs.mkdir(docsDir, { recursive: true });
   const llmPath = path.join(docsDir, "llm.md");
-  const markdown = generateActiveModelSummaryMarkdown(config, extensionVersion);
+  const markdown = generateActiveModelSummaryMarkdown(config, extensionVersion, new Date(), engine);
 
   try {
     const existing = await fs.readFile(llmPath, "utf-8");

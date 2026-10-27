@@ -1,7 +1,5 @@
 ---
-skills:
-  - TIDYPROTEOMICS_CORE
-  - TIDYPROTEOMICS_EXTRACT_QUERY
+tools: [tpa_health, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_export_table, tpa_operations, tpa_extract, tpa_run_code, tpa_export_state]
 ---
 
 ### Phase 9: Literature Knowledge Database Interrogation & Third-Layer Conclusions
@@ -17,12 +15,21 @@ You will synthesize evidence across:
 to further contextualize the observations and develop the **third layer of conclusions**.
 
 If new hypotheses or candidate networks emerge from the literature assertions:
-- Use `agent/TIDYPROTEOMICS_EXTRACT_QUERY.md` to query the saved dataset (`data/tidyproteomics_data.rds`) directly (e.g. running `tools/literature/interrogate_unthresholded_proteomics.R` or custom scripts in `code/09_literature.R` logged to `logs/09_literature/console.log`).
+- Use `tidyproteomics query tools (tpa_extract, tpa_run_code, or Rscript)` to query the saved dataset (`data/tidyproteomics_data.rds`) directly (e.g. running `tools/literature/interrogate_unthresholded_proteomics.R` or custom scripts in `code/09_literature.R` logged to `logs/09_literature/console.log`).
 - Document any **new** data-derived observations in `docs/literature.md`.
 
 Finally, you will construct `docs/literature.md` documenting both the **new** observations and **new** third-layer conclusions, with all references documented.
 
 ---
+
+> [!IMPORTANT]
+> **Turn Budget & Batched Execution Directive**:
+> Complete Phase 9 efficiently in a focused, batched sequence (aim for 4–8 turns total):
+> 1. Run literature graph queries in batch across all candidate seeds/pathways in one command.
+> 2. Run reverse interrogation across nominated candidates in batch with `interrogate_unthresholded_proteomics.R`.
+> 3. **Never run Python one-liner parsing scripts or inspect candidates one by one**:
+>    - `interrogate_unthresholded_proteomics.R` automatically formats ready-to-use markdown tables and FGSEA statistics directly in stdout and writes `docs/literature_candidates.md` (and `data/literature_candidate_expression.csv`).
+> 4. Ingest `docs/literature_candidates.md` or the stdout markdown directly, author `docs/literature.md` completely in 1–2 turns, verify required checkpoints, and call `complete_phase` promptly to avoid hitting the phase turn limit.
 
 #### 1. Pre-Flight Verification & Inputs Ingestion
 Before proceeding, verify that:
@@ -46,6 +53,7 @@ Execute the iterative graph interrogation loop:
      Rscript tools/literature/query_literature.R <literature_db_path> "<seed_symbols>" "<pathway_terms>" 20
      ```
    - This hops across `context_id` and `functional_module` to return candidate co-factors, physical interactors, and direct substrates `[X, Y, Z]` reported in the literature that may have missed strict volcano plot thresholds.
+   - If querying multiple specific candidate symbols directly via `tools/literature/literature_cli.R search`, supply them as a comma-separated list in a single batch call (e.g. `Rscript tools/literature/literature_cli.R search <literature_db_path> "HERPUD1,ATF6,EDEM1,EEA1,NSFL1C,RACGAP1" 5`) rather than running iterative single-gene bash loops.
 
 2. **Step 2B: LLM Rationalization of Retrieved Candidates & Evidentiary Distance Tiering**:
    - Review the retrieved assertions, supporting `study_id` references, and `evidence_quote` notes.
@@ -56,11 +64,13 @@ Execute the iterative graph interrogation loop:
    - Select the most biologically compelling candidate genes or functional modules hypothesized to exhibit coordinate sub-threshold regulation in the empirical tissue.
 
 3. **Step 2C: Reverse-Interrogate Unthresholded Proteomics Data**:
-   - Execute the reverse-interrogation skill against `data/tidyproteomics_data.rds`:
+   - Execute the reverse-interrogation skill in a single batch against `data/tidyproteomics_data.rds`:
      ```bash
-     mkdir -p logs/09_literature && Rscript tools/literature/interrogate_unthresholded_proteomics.R "<candidate_symbols>" "<module_name>" data/tidyproteomics_data.rds 2>&1 | tee logs/09_literature/console.log
+     Rscript tools/literature/interrogate_unthresholded_proteomics.R "<candidate_symbols>" "<module_name>" data/tidyproteomics_data.rds
      ```
-   - Review the output table and custom `fgsea` enrichment metrics (`NES`, `pval`, `leadingEdge`).
+   - **Zero-Turn Direct Ingestion**:
+     - The script automatically outputs complete Markdown summary tables and FGSEA metrics (`NES`, `pval`, `leadingEdge`) directly to stdout AND saves `docs/literature_candidates.md`.
+     - Do NOT write Python or shell scripts to extract fields from JSON or temporary files. Ingest `docs/literature_candidates.md` or copy the stdout table directly into `docs/literature.md`.
    - **Audit Concordance & Non-Replicated Literature Candidates**:
      - Candidates showing coordinated nominal shifts ($p < 0.05$) or concordant directional drift are flagged as **"Corroborated / Concordance: WEAK/MODERATE/STRONG"**.
      - Candidates showing no change ($p > 0.05$ or $|\log_2\text{FC}| < 0.5$, such as `COL15A1` or `MMP2` in tissue when nominated from plasma) must be explicitly classified as **"Non-Replicated / Concordance: NONE"**.
@@ -76,13 +86,13 @@ If no active DuckDB literature database is configured:
 
 ---
 
-#### 3. Interactive Data Queries via `agent/TIDYPROTEOMICS_EXTRACT_QUERY.md` (Pursuing Literature Hypotheses)
+#### 3. Interactive Data Queries via `tidyproteomics query tools (tpa_extract, tpa_run_code, or Rscript)` (Pursuing Literature Hypotheses)
 If the literature database assertions point to additional protein families, isoform differences, or pathway branches:
-- Write and execute `code/09_literature.R` (capturing output to `logs/09_literature/console.log`):
+- Write and execute `code/09_literature.R` (output is automatically captured to `logs/09_literature/console.log`):
   ```bash
-  mkdir -p logs/09_literature && Rscript code/09_literature.R 2>&1 | tee logs/09_literature/console.log
+  Rscript code/09_literature.R
   ```
-- Use canonical `tidyproteomics` methods per `agent/TIDYPROTEOMICS_EXTRACT_QUERY.md` to extract unthresholded metrics or verify target-interactor relationships.
+- Use canonical `tidyproteomics` methods per `tidyproteomics query tools (tpa_extract, tpa_run_code, or Rscript)` to extract unthresholded metrics or verify target-interactor relationships.
 - Document any **new** data-derived findings in `docs/literature.md`.
 
 ---
