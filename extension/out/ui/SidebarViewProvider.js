@@ -101,7 +101,7 @@ class SidebarViewProvider {
         this.executionManager.initialize().catch((err) => {
             console.warn("[SidebarViewProvider] Could not initialize ExecutionManager:", err);
         });
-        this.orchestrator = new PipelineOrchestrator_1.PipelineOrchestrator(this.workspaceRoot, this.client, this.tools, (state) => this.sendStateUpdate(state), (log, updateLast) => this.sendLog(log, updateLast), this.getExtensionVersion());
+        this.orchestrator = new PipelineOrchestrator_1.PipelineOrchestrator(this.workspaceRoot, this.client, this.tools, (state) => this.sendStateUpdate(state), (log, updateLast) => this.sendLog(log, updateLast), this.getExtensionVersion(), (phase, text) => this.agentService?.handleStageActivity(phase, text), (phase, text, meta) => this.agentService?.handleStageObservation(phase, text, meta));
         this.ingestionRunner = new IngestionRunner_1.IngestionRunner(this.literatureService, this.client, this._extensionUri.fsPath, (ev) => {
             this.sendLiteratureProgress(ev);
             this.sendLiteratureState();
@@ -563,6 +563,7 @@ class SidebarViewProvider {
                                 let content = await fs.promises.readFile(expPath, "utf-8");
                                 content = content.replace(/-\s*\*\*Proceed With Potential Batch Confounding\*\*:\s*FALSE/i, "- **Proceed With Potential Batch Confounding**: TRUE");
                                 content = content.replace(/-\s*\*\*Authorize Unadjusted Exploratory Comparison\*\*:\s*FALSE/i, "- **Authorize Unadjusted Exploratory Comparison**: TRUE");
+                                content = content.replace(/-\s*\*\*Confirm Imputation Strategy\*\*:\s*FALSE/i, "- **Confirm Imputation Strategy**: TRUE");
                                 content = content.replace(/👉\s*\[USER ACTION REQUIRED - DEFINE TARGET CONTRASTS\]:?/gi, "");
                                 content = content.replace(/\(suggested contrast requiring confirmation\)/gi, "");
                                 if (!content.includes("Status: CONFIRMED")) {
@@ -570,8 +571,11 @@ class SidebarViewProvider {
                                 }
                                 await fs.promises.writeFile(expPath, content, "utf-8");
                             }
-                            vscode.window.showInformationMessage("TidyProteomicsAgent: Target contrast confirmed & batch confounding authorized in docs/experiment.md. Resuming Phase 4...");
                             const phaseId = data.phaseId || "04";
+                            const msgLabel = phaseId === "03"
+                                ? "TidyProteomicsAgent: Imputation strategy confirmed in docs/experiment.md. Resuming Phase 3..."
+                                : "TidyProteomicsAgent: Target contrast confirmed & batch confounding authorized in docs/experiment.md. Resuming Phase 4...";
+                            vscode.window.showInformationMessage(msgLabel);
                             if (phaseId && this.orchestrator) {
                                 await this.syncActiveModelSummary();
                                 this.orchestrator.resumePipeline(phaseId).catch((err) => {
@@ -1936,7 +1940,7 @@ class SidebarViewProvider {
       min-height: 0;
     }
 
-    /* Live Agent Chat Styles */
+    /* Modern Agent Chat Styles */
     .agent-container, .advisor-container {
       display: flex;
       flex-direction: column;
@@ -1949,17 +1953,52 @@ class SidebarViewProvider {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 6px 8px;
+      padding: 7px 10px;
       background: var(--card-bg);
       border: 1px solid var(--border);
-      border-radius: 4px;
+      border-radius: 6px;
       flex-shrink: 0;
+    }
+    .agent-status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--success, #10b981);
+      display: inline-block;
+      transition: all 0.3s ease;
+    }
+    .agent-status-dot.active {
+      background: var(--primary, #3b82f6);
+      box-shadow: 0 0 8px rgba(59, 130, 246, 0.7);
+      animation: pulseDot 1.4s infinite ease-in-out;
+    }
+    @keyframes pulseDot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.45; transform: scale(1.3); }
+    }
+    .btn-subtle {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      color: var(--fg);
+      font-size: 10px;
+      border-radius: 4px;
+      padding: 2px 7px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn-subtle:hover, .btn-subtle.active {
+      background: rgba(59, 130, 246, 0.15);
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+    .contrast-designer-card.collapsed {
+      display: none !important;
     }
     .agent-suggestions, .advisor-suggestions {
       display: flex;
-      gap: 4px;
+      gap: 5px;
       overflow-x: auto;
-      padding-bottom: 2px;
+      padding: 2px 0;
       flex-shrink: 0;
       scrollbar-width: none;
     }
@@ -1967,12 +2006,12 @@ class SidebarViewProvider {
       display: none;
     }
     .agent-chip, .advisor-chip {
-      background: rgba(59, 130, 246, 0.1);
+      background: rgba(59, 130, 246, 0.08);
       color: #93c5fd;
       border: 1px solid rgba(59, 130, 246, 0.25);
       border-radius: 12px;
-      padding: 3px 8px;
-      font-size: 9.5px;
+      padding: 4px 9px;
+      font-size: 10px;
       font-weight: 500;
       white-space: nowrap;
       cursor: pointer;
@@ -1983,41 +2022,47 @@ class SidebarViewProvider {
       background: var(--primary);
       color: #fff;
       border-color: var(--primary);
+      transform: translateY(-1px);
     }
     .agent-thread, .advisor-thread {
       flex: 1 1 auto;
-      min-height: 120px;
+      min-height: 140px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 9px;
       padding: 4px 2px;
       margin-bottom: 4px;
     }
     .agent-msg, .advisor-msg {
       display: flex;
-      gap: 6px;
+      gap: 7px;
       max-width: 100%;
+      animation: fadeInMsg 0.2s ease-out;
+    }
+    @keyframes fadeInMsg {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
     }
     .agent-msg.user, .advisor-msg.user {
       flex-direction: row-reverse;
     }
     .agent-avatar, .advisor-avatar {
-      width: 22px;
-      height: 22px;
+      width: 24px;
+      height: 24px;
       border-radius: 50%;
       background: rgba(59, 130, 246, 0.2);
       color: #60a5fa;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 11px;
+      font-size: 12px;
       flex-shrink: 0;
       margin-top: 2px;
     }
     .agent-avatar .svg-icon, .advisor-avatar .svg-icon {
-      width: 13px;
-      height: 13px;
+      width: 14px;
+      height: 14px;
     }
     .agent-msg.user .agent-avatar, .advisor-msg.user .advisor-avatar {
       background: rgba(16, 185, 129, 0.2);
@@ -2026,25 +2071,83 @@ class SidebarViewProvider {
     .agent-bubble, .advisor-bubble {
       background: var(--card-bg);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 8px 10px;
+      border-radius: 8px;
+      padding: 9px 12px;
       font-size: 11px;
-      line-height: 1.45;
+      line-height: 1.5;
       color: var(--fg);
-      max-width: 88%;
+      max-width: 92%;
       word-break: break-word;
       overflow-wrap: break-word;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
     }
     .agent-msg.user .agent-bubble, .advisor-msg.user .advisor-bubble {
-      background: rgba(59, 130, 246, 0.15);
-      border-color: rgba(59, 130, 246, 0.35);
-      color: #dbeafe;
+      background: rgba(59, 130, 246, 0.18);
+      border-color: rgba(59, 130, 246, 0.4);
+      color: #e0f2fe;
+    }
+    /* Dynamic Live Activity Card */
+    .agent-msg.activity .agent-bubble {
+      background: rgba(59, 130, 246, 0.08);
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      box-shadow: 0 2px 10px rgba(59, 130, 246, 0.06);
+    }
+    .activity-spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid rgba(59, 130, 246, 0.25);
+      border-top-color: var(--primary, #3b82f6);
+      border-radius: 50%;
+      animation: agentSpin 0.75s linear infinite;
+      display: inline-block;
+    }
+    @keyframes agentSpin {
+      to { transform: rotate(360deg); }
+    }
+    .activity-badge {
+      font-size: 8.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      padding: 1px 5px;
+      border-radius: 6px;
+      background: rgba(59, 130, 246, 0.2);
+      color: #93c5fd;
+    }
+    /* Scientific Observation Card */
+    .agent-msg.observation .agent-bubble {
+      background: linear-gradient(145deg, rgba(139, 92, 246, 0.1) 0%, rgba(59, 130, 246, 0.05) 100%);
+      border: 1px solid rgba(139, 92, 246, 0.4);
+      box-shadow: 0 3px 12px rgba(139, 92, 246, 0.08);
+    }
+    .agent-msg.observation .agent-avatar {
+      background: rgba(139, 92, 246, 0.25);
+      color: #c084fc;
+    }
+    .obs-badge {
+      font-size: 8.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      padding: 1px 6px;
+      border-radius: 8px;
+      background: rgba(139, 92, 246, 0.25);
+      color: #d8b4fe;
+    }
+    /* Phase Milestone Card */
+    .agent-msg.milestone .agent-bubble {
+      background: rgba(16, 185, 129, 0.08);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+    }
+    .agent-msg.milestone .agent-avatar {
+      background: rgba(16, 185, 129, 0.25);
+      color: #34d399;
     }
     .agent-msg-title, .advisor-msg-title {
       font-size: 9.5px;
       font-weight: 700;
       color: var(--primary);
-      margin-bottom: 4px;
+      margin-bottom: 5px;
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -2055,7 +2158,7 @@ class SidebarViewProvider {
     .agent-msg-body code, .advisor-msg-body code {
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 10px;
-      background: rgba(0, 0, 0, 0.3);
+      background: rgba(0, 0, 0, 0.35);
       padding: 1px 4px;
       border-radius: 3px;
       border: 1px solid rgba(255, 255, 255, 0.08);
@@ -2853,17 +2956,20 @@ class SidebarViewProvider {
   <div class="tab-pane active" id="pane-chat" style="display:flex;">
     <div class="agent-container advisor-container">
       <div class="agent-header advisor-header">
-        <div style="display:flex; align-items:center; gap:6px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="agent-status-dot" id="agentStatusDot"></span>
           <span style="font-size:13px; color:var(--primary); display:inline-flex; align-items:center;">${icons["robot"] || icons["chat"] || ""}</span>
           <h3 style="margin:0; font-size:12px; font-weight:600;">Autonomous Agent</h3>
+          <span class="badge" id="agentStatusBadge" style="font-size:8.5px; padding:1px 6px; border-radius:10px; background:rgba(59,130,246,0.15); color:var(--primary);">READY</span>
         </div>
         <div style="display:flex; align-items:center; gap:6px;">
-          <button type="button" class="btn-sm" id="agentClearBtn" title="Clear conversation history">Clear</button>
+          <button type="button" class="btn-subtle" id="toggleDesignerBtn" title="Toggle Visual Contrast & Study Designer" onclick="window.toggleContrastDesigner && window.toggleContrastDesigner()">🎯 Designer</button>
+          <button type="button" class="btn-subtle" id="agentClearBtn" title="Clear conversation history">Clear</button>
         </div>
       </div>
 
-      <!-- Visual Contrast & Batch Designer Widget -->
-      <div class="contrast-designer-card" id="contrastDesignerCard">
+      <!-- Visual Contrast & Batch Designer Widget (Collapsible - default hidden to prioritize natural stream) -->
+      <div class="contrast-designer-card collapsed" id="contrastDesignerCard" style="display:none;">
         <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
           <div style="font-weight:600; font-size:11px; display:flex; align-items:center; gap:6px;">
             <span>🎯</span> Visual Contrast & Study Designer
@@ -4422,6 +4528,7 @@ class SidebarViewProvider {
                 const hasNotesDoc = /notes\.md/i.test(errorText);
                 const isContrastNeeded = /Section 3\.?C|suggested contrast|unconfirmed.*contrast|target contrast/i.test(errorText);
                 const isConfounding = /confound|Proceed With Potential Batch Confounding|Authorize Unadjusted Exploratory Comparison/i.test(errorText);
+                const isImputationNeeded = /imputation|Section 3\.?E|Confirm Imputation Strategy|randomforest_grouped|min_column/i.test(errorText);
                 const isLlmApiError = /LLM API Error|API error|fetch failed|network connection failed|ConnectTimeoutError|ENOTFOUND|ECONNREFUSED|ECONNRESET|authentication failed|rate limited|timed? ?out/i.test(errorText);
 
                 let linksHtml = "";
@@ -4438,10 +4545,12 @@ class SidebarViewProvider {
                   }
                 } else {
                   if (hasExpDoc) {
-                    const searchPrompt = isContrastNeeded ? "3.C" : (isConfounding ? "Proceed With Potential Batch Confounding" : "REQUIRED");
+                    const searchPrompt = isImputationNeeded ? "Confirm Imputation Strategy" : (isContrastNeeded ? "3.C" : (isConfounding ? "Proceed With Potential Batch Confounding" : "REQUIRED"));
                     linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/experiment.md" data-search="' + searchPrompt + '" title="Open docs/experiment.md and jump directly to relevant section">Edit docs/experiment.md ↗</button>';
                   }
-                  if (p.id === "04" && (isContrastNeeded || isConfounding)) {
+                  if (p.id === "03" || isImputationNeeded) {
+                    linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="confirmContrastAndProceed" data-phase-id="' + escapeHtml(p.id) + '" title="Confirm imputation strategy in Section 3.E and resume Phase 3">🎯 Confirm Imputation &amp; Proceed</button>';
+                  } else if (p.id === "04" && (isContrastNeeded || isConfounding)) {
                     linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="confirmContrastAndProceed" data-phase-id="' + escapeHtml(p.id) + '" title="Confirm target contrast in Section 3.C, authorize batch confounding in Section 3.D, and resume Phase 4">🎯 Confirm Contrast &amp; Proceed</button>';
                   } else if (isContrastNeeded) {
                     linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="confirmContrastAndProceed" data-phase-id="' + escapeHtml(p.id) + '" title="Confirm target contrast and proceed">🎯 Confirm Contrast &amp; Proceed</button>';
@@ -4451,7 +4560,7 @@ class SidebarViewProvider {
                   if (hasNotesDoc) {
                     linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/notes.md">View docs/notes.md ↗</button>';
                   }
-                  if (!isContrastNeeded && !isConfounding) {
+                  if (!isContrastNeeded && !isConfounding && !isImputationNeeded) {
                     linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="openAgentTab" title="Ask Live Agent to resolve this question">💬 Ask Agent ↗</button>';
                   }
                 }
@@ -4637,6 +4746,14 @@ class SidebarViewProvider {
       if (agentSendBtn) agentSendBtn.style.display = isAgentGenerating ? "none" : "inline-flex";
       if (agentStopBtn) agentStopBtn.style.display = isAgentGenerating ? "inline-flex" : "none";
       if (chatIndicator) chatIndicator.className = isAgentGenerating ? "tab-indicator running" : "tab-indicator";
+      const dot = document.getElementById("agentStatusDot");
+      if (dot) dot.className = isAgentGenerating ? "agent-status-dot active" : "agent-status-dot";
+      const badge = document.getElementById("agentStatusBadge");
+      if (badge) {
+        badge.textContent = isAgentGenerating ? "ANALYZING" : "READY";
+        badge.style.background = isAgentGenerating ? "rgba(59,130,246,0.25)" : "rgba(16,185,129,0.15)";
+        badge.style.color = isAgentGenerating ? "var(--primary)" : "var(--success)";
+      }
     }
     const setAdvisorGenerating = setAgentGenerating;
 
@@ -4650,8 +4767,8 @@ class SidebarViewProvider {
           '<div class="agent-bubble advisor-bubble">' +
             '<div class="agent-msg-title advisor-msg-title">TidyProteomics Live Agent</div>' +
             '<div class="agent-msg-body advisor-msg-body">' +
-              'Hello! I am your live proteomics agent. I monitor your experimental design in <code>docs/experiment.md</code>, pipeline execution status, and findings in <code>docs/notes.md</code>.<br><br>' +
-              'Feel free to ask questions about sample grouping, confounding warnings, normalization, differential expression, or biological pathways.' +
+              'Hello! I am your live proteomics agent. I configure your study design in <code>docs/experiment.md</code> and execute the 12-phase pipeline autonomously.<br><br>' +
+              'Feel free to describe your dataset in your own words, ask questions about sample grouping, normalizations, differential expression, or review ongoing observations.' +
             '</div>' +
           '</div>' +
         '</div>';
@@ -4677,14 +4794,54 @@ class SidebarViewProvider {
           chipsHtml += '</div>';
         }
 
-        html += '<div class="agent-msg advisor-msg ' + (isUser ? 'user' : 'assistant') + '">' +
-          '<div class="agent-avatar advisor-avatar">' + avatar + '</div>' +
-          '<div class="agent-bubble advisor-bubble">' +
-            '<div class="agent-msg-title advisor-msg-title">' + sender + time + '</div>' +
-            '<div class="agent-msg-body advisor-msg-body">' + body + '</div>' +
-            chipsHtml +
-          '</div>' +
-        '</div>';
+        if (m.type === "activity") {
+          const phaseLabel = m.phaseTitle ? escapeHtml(m.phaseTitle) : "Pipeline Activity";
+          html += '<div class="agent-msg activity-msg activity">' +
+            '<div class="agent-avatar activity-avatar"><span class="activity-spinner"></span></div>' +
+            '<div class="agent-bubble activity-bubble">' +
+              '<div class="agent-msg-title activity-title">' +
+                '<span style="color:var(--primary); font-weight:600;">▶ ' + phaseLabel + '</span>' +
+                '<span class="activity-badge">' + escapeHtml(m.badge || "Live") + '</span>' +
+              '</div>' +
+              '<div class="agent-msg-body activity-body">' + body + '</div>' +
+            '</div>' +
+          '</div>';
+        } else if (m.type === "observation") {
+          const phaseLabel = m.phaseTitle ? escapeHtml(m.phaseTitle) : "Scientific Observation";
+          const badgeLabel = escapeHtml(m.badge || "Observation");
+          html += '<div class="agent-msg observation-msg observation">' +
+            '<div class="agent-avatar obs-avatar">' + (ICONS["sparkles"] || "🔬") + '</div>' +
+            '<div class="agent-bubble obs-bubble">' +
+              '<div class="agent-msg-title obs-title">' +
+                '<span style="color:#c084fc; font-weight:600;">' + phaseLabel + '</span>' +
+                '<span class="obs-badge">' + badgeLabel + '</span>' +
+              '</div>' +
+              '<div class="agent-msg-body obs-body">' + body + '</div>' +
+              chipsHtml +
+            '</div>' +
+          '</div>';
+        } else if (m.type === "milestone") {
+          html += '<div class="agent-msg milestone-msg milestone">' +
+            '<div class="agent-avatar done-avatar" style="color:var(--success);">✓</div>' +
+            '<div class="agent-bubble done-bubble">' +
+              '<div class="agent-msg-title" style="color:var(--success); font-weight:600;">' +
+                '<span>' + escapeHtml(m.phaseTitle || "Phase Milestone") + time + '</span>' +
+                '<span class="badge" style="background:rgba(16,185,129,0.15); color:var(--success); font-size:8.5px;">DONE</span>' +
+              '</div>' +
+              '<div class="agent-msg-body">' + body + '</div>' +
+              chipsHtml +
+            '</div>' +
+          '</div>';
+        } else {
+          html += '<div class="agent-msg advisor-msg ' + (isUser ? 'user' : 'assistant') + '">' +
+            '<div class="agent-avatar advisor-avatar">' + avatar + '</div>' +
+            '<div class="agent-bubble advisor-bubble">' +
+              '<div class="agent-msg-title advisor-msg-title">' + sender + time + '</div>' +
+              '<div class="agent-msg-body advisor-msg-body">' + body + '</div>' +
+              chipsHtml +
+            '</div>' +
+          '</div>';
+        }
       }
       agentThread.innerHTML = html;
       scrollAgentToBottom();
@@ -4907,6 +5064,24 @@ class SidebarViewProvider {
       });
     }
     window.applyContrastFromDesigner = applyContrastFromDesigner;
+
+    function toggleContrastDesigner() {
+      const card = document.getElementById("contrastDesignerCard");
+      const btn = document.getElementById("toggleDesignerBtn");
+      if (!card) return;
+      const isHidden = card.style.display === "none" || card.classList.contains("collapsed");
+      if (isHidden) {
+        card.style.display = "block";
+        card.classList.remove("collapsed");
+        if (btn) btn.classList.add("active");
+        fetchDesignerState();
+      } else {
+        card.style.display = "none";
+        card.classList.add("collapsed");
+        if (btn) btn.classList.remove("active");
+      }
+    }
+    window.toggleContrastDesigner = toggleContrastDesigner;
 
     // Message receiver
     window.addEventListener("message", function (event) {

@@ -1,87 +1,159 @@
 ---
-tools: [tpa_health, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_export_table, tpa_operations, tpa_extract, tpa_run_code, tpa_export_state, tpa_protein_map]
+tools: []
 ---
 
-### Phase 7: Internal Knowledge Contextualization & First-Layer Conclusions
+### Phase 7: Internal Knowledge Contextualization, De Novo Functional Grouping & First-Layer Conclusions
 
-In this phase, you (the LLM) will ingest the primary data-derived observations from `06_OBSERVATIONS` (`docs/observations.md`, `logs/06_observations/console.log`, and experimental design in `docs/experiment.md`). You will apply your internal domain knowledge (molecular biology, biochemistry, cellular physiology, protein complexes, and signaling cascades) to contextualize the observations and develop the **first layer of conclusions** (strictly do not hallucinate facts, citations, or unsupported claims).
+In this phase, you (the LLM) will ingest the primary data-derived observations from `06_OBSERVATIONS` (`docs/observations.md`; note that `docs/experiment.md` is already provided in your prompt context above—do NOT waste turns re-reading `docs/experiment.md` or `logs/06_observations/console.log`). You will apply your internal domain knowledge (molecular biology, biochemistry, cellular physiology, protein complexes, operons, and signaling cascades) to contextualize the observations, construct statistically tested **de novo functional modules** (especially critical when formal GO/Reactome enrichment was bypassed or sparse in Phase 5), and develop the **first layer of conclusions** and **actionable target roles** (strictly do not hallucinate facts, citations, or unsupported claims).
 
-If you need to query the data to test new hypotheses or check related protein family members, complex subunits, or candidate interactors:
-- Use `tidyproteomics query tools (tpa_extract, tpa_run_code, or Rscript)` API conventions to write and execute targeted R queries against `data/tidyproteomics_data.rds` (e.g. `code/07_knowledge.R` logged to `logs/07_knowledge/console.log`).
-- Document any **new** data-derived observations in `docs/knowledge.md`.
+To ground biological signatures and candidate targets in quantitative data across the entire proteome:
+- Write and execute `code/07_knowledge.R` via `execute_command("Rscript code/07_knowledge.R")` against the Phase 6 expression table (`data/table_*_expression_*.tsv`) or `data/tidyproteomics_data.rds` (logged to `logs/07_knowledge/console.log`).
+- Group related proteins into coherent **functional modules / complexes / operons** using protein descriptions, gene symbol families, and biochemical roles, and test their coordinate directional shift across the unthresholded dataset (`wilcox.test` rank-sum shift, saving `data/de_novo_modules.tsv`).
+- Document all **new** data-derived observations and module statistics in `docs/knowledge.md`.
 
-You will also develop a curated list of high-yield keyphrases for downstream web search in Phase 08.
+You will also classify leading candidates into **Actionable Roles** (`Predictive Biomarker`, `Druggable Target`, `Mechanistic Dependency`, `Compensatory Buffer`) and develop a curated list of high-yield keyphrases for downstream web search in Phase 08.
 Finally, you will construct `docs/knowledge.md` documenting both the **new** observations and **new** first-layer conclusions.
 
 ---
 
 #### 1. Pre-Flight Verification & Inputs Ingestion
-Before proceeding, verify that:
-1. `docs/observations.md` exists and contains verified quantitative data (dimensions, target metrics, top up/down tables, and enrichment summaries).
-2. `data/tidyproteomics_data.rds` exists on disk.
-3. Review `docs/experiment.md` to ground your interpretation in the researcher's experimental system, perturbation conditions, and biological questions.
+Before proceeding:
+1. Read `docs/observations.md` in a single turn to ingest verified quantitative data (dimensions, target metrics, top up/down tables, and enrichment summaries).
+2. Rely on the `[WORKSPACE MANIFEST]` and `docs/experiment.md` already injected in your prompt above—do NOT waste turns calling `list_directory` or re-reading `docs/experiment.md`.
 
 ---
 
-#### 2. Interactive Data Queries via `tidyproteomics query tools (tpa_extract, tpa_run_code, or Rscript)` (Optional Follow-Up Hypotheses)
-If the observed changes in `docs/observations.md` suggest follow-up questions about specific protein complexes, unthresholded co-factors, or pathway partners:
+#### 2. De Novo Functional Module Discovery & Hypothesis Queries via `code/07_knowledge.R`
+Whenever formal ontology enrichment in Phase 5 was bypassed (or to test specific protein complexes, operons, unthresholded co-factors, and pathway partners suggested by the top hits in `docs/observations.md`):
 - Write and execute a targeted R script `code/07_knowledge.R` (output is automatically captured to `logs/07_knowledge/console.log`):
   ```bash
   Rscript code/07_knowledge.R
   ```
 - **Canonical Expression Table Columns**:
   - `tidyproteomics` exports differential expression tables with the following exact column names:
-    - `gene_name`, `protein`, `description`, `log2_foldchange` (⚠️ **CRITICAL**: spelled `log2_foldchange` with *no* underscore between 'fold' and 'change'), `p_value`, `adj_p_value`, `foldchange`.
-  - Always reference `log2_foldchange` (or use `any_of(...)` in `dplyr::select`) to prevent runtime column-not-found errors.
-- Use canonical `tidyproteomics` functions per `tidyproteomics query tools (tpa_extract, tpa_run_code, or Rscript)` (e.g., `export_analysis(tp_data, "<contrast>", .analysis = "expression")`, filtering candidate gene symbols or UniProt IDs, checking nominal $p$-values and effect sizes without imposing strict FDR cutoffs):
+    - `gene_name`, `protein`, `description`, `log2_foldchange` (⚠️ **CRITICAL**: spelled `log2_foldchange` with *no* underscore between 'fold' and 'change'), `p_value`, `adj_p_value`, `foldchange`, `candidate_reliability`, `imputation_bias`.
+  - Prefer loading the curated Phase 6 expression table (`data/table_*_expression_*.tsv`) which already has FASTA `GN=` symbols resolved and reliability metrics attached.
+- **Constructing & Testing Unbiased De Novo Functional Modules (`data/de_novo_modules.tsv`)**:
+  - Rather than relying on isolated top up/down genes, define **2 to 4 biologically coherent functional modules** informed by `description` annotations, shared operon/family prefixes (e.g., `^srfA`, `^rps|^rpl`, `^flg|^fli`, `^col|^mmp`, `^psm|^pma`), or complete macromolecular complex definitions.
+  - ⚠️ **Anti-Circularity Rule (No Cherry-Picking)**: Define module membership across the **entire unthresholded expression table** using functional description regexes (`desc_pattern`), gene family prefix regexes (`gene_pattern`), or complete complex/operon subunit lists—**never** cherry-pick individual volcano winners into a custom module just to inflate its Wilcoxon $p$-value.
+  - Test each module's coordinate shift across the **entire unthresholded expression table** using a two-sided Wilcoxon rank-sum test (`wilcox.test` of member `log2_foldchange` vs. non-member background proteins), audit intra-module directional concordance (`pct_concordant`) and dispersion (`iqr_fc`) to detect uniform shifts vs. stoichiometric subunit uncoupling, and save the summary to `data/de_novo_modules.tsv` so downstream phases (`08_WEBSEARCH`, `10_FIGURES`, `11_SYNTHESIS`) have statistically supported biological signatures:
   ```r
   library(tidyproteomics)
   library(dplyr)
+  library(readr)
 
-  tp_data <- readRDS("data/tidyproteomics_data.rds")
-  exp_tbl <- export_analysis(tp_data, "<treatment>/<control>", .analysis = "expression")
+  # Resolve active contrast and primary identifier from persisted tidyproteomics object
+  tp_data <- if (file.exists("data/tidyproteomics_data.rds")) readRDS("data/tidyproteomics_data.rds") else NULL
+  analyses <- if (!is.null(tp_data)) get_analyses(tp_data) else data.frame()
+  contrast_str <- if (nrow(analyses) > 0) analyses$comparison[1] else "<treatment>/<control>"
+  c_clean <- gsub("[^A-Za-z0-9]", ".*", contrast_str)
 
-  # Query candidate complex members or hypothesized interactors:
-  candidate_genes <- c("CAND1", "CAND2", "CAND3") # Replace with specific hypothesis candidates
-  hits <- exp_tbl %>% filter(if_any(any_of(c("gene_name", "gene_symbol", "symbol", "protein")), ~ .x %in% candidate_genes))
-  print(hits %>% select(any_of(c("gene_name", "protein", "log2_foldchange", "p_value", "adj_p_value", "description"))))
+  # Load curated Phase 6 expression table matched to contrast_str (or fallback to tidyproteomics export)
+  exp_files <- list.files("data", pattern = "^table_.*_expression_.*[.](tsv|csv)$", full.names = TRUE)
+  exp_files <- exp_files[!grepl("_extract", exp_files)]
+  matched_files <- exp_files[grepl(c_clean, basename(exp_files), ignore.case = TRUE)]
+  cand_files <- c(matched_files, setdiff(exp_files, matched_files))
+  if (length(cand_files) > 0) {
+    exp_tbl <- if (grepl("[.]tsv$", cand_files[1])) read_tsv(cand_files[1], show_col_types = FALSE) else read_csv(cand_files[1], show_col_types = FALSE)
+  } else {
+    exp_tbl <- export_analysis(tp_data, contrast_str, .analysis = "expression")
+  }
+
+  # 1. Define unbiased functional modules by gene family prefix regex (gene_pattern) and description keywords (desc_pattern):
+  # Replace patterns below with biological modules relevant to the dataset & docs/experiment.md!
+  module_defs <- list(
+    "Module A Name (e.g. Surfactin & Nonribosomal Peptide Synthesis)" = list(
+      gene_pattern = "^srfA|^pps|^fen",
+      desc_pattern = "surfactin|non-ribosomal|polyketide|siderophore"
+    ),
+    "Module B Name (e.g. Ribosomal & Translational Machinery)" = list(
+      gene_pattern = "^rps|^rpl|^inf|^tsf|^fusA",
+      desc_pattern = "ribosomal|translation|elongation factor|tRNA ligase"
+    ),
+    "Module C Name (e.g. Cell Envelope & Stress Chaperones)" = list(
+      gene_pattern = "^dnaK|^groE|^clp|^htpG",
+      desc_pattern = "chaperone|heat shock|protease|peptidoglycan|cell wall"
+    )
+  )
+
+  # 2. Evaluate coordinate rank-sum shifts and directional concordance across the unthresholded proteome:
+  mod_rows <- lapply(names(module_defs), function(m_name) {
+    def <- module_defs[[m_name]]
+    g_pat <- if (!is.null(def$gene_pattern)) def$gene_pattern else ""
+    d_pat <- if (!is.null(def$desc_pattern)) def$desc_pattern else ""
+    in_mod <- (!is.na(exp_tbl$gene_name) & nzchar(g_pat) & grepl(g_pat, exp_tbl$gene_name, ignore.case = TRUE)) |
+              (!is.na(exp_tbl$description) & nzchar(d_pat) & grepl(d_pat, exp_tbl$description, ignore.case = TRUE))
+    in_mod <- in_mod & !is.na(exp_tbl$log2_foldchange)
+    bg <- !in_mod & !is.na(exp_tbl$log2_foldchange)
+    if (sum(in_mod) < 2 || sum(bg) < 5) return(NULL)
+
+    mod_df <- exp_tbl[in_mod, ] %>% arrange(adj_p_value, desc(abs(log2_foldchange)))
+    wt <- suppressWarnings(wilcox.test(mod_df$log2_foldchange, exp_tbl$log2_foldchange[bg]))
+    med_fc <- median(mod_df$log2_foldchange, na.rm = TRUE)
+    iqr_fc <- IQR(mod_df$log2_foldchange, na.rm = TRUE)
+    dir_sign <- ifelse(med_fc >= 0, 1, -1)
+    pct_concordant <- round(mean(sign(mod_df$log2_foldchange) == dir_sign, na.rm = TRUE) * 100, 1)
+
+    tibble(
+      term = "de_novo_module",
+      annotation = m_name,
+      contrast = contrast_str,
+      size = nrow(mod_df),
+      enrichment = round(med_fc, 3),
+      iqr_log2fc = round(iqr_fc, 3),
+      pct_concordant = pct_concordant,
+      direction = ifelse(med_fc >= 0, "UP", "DOWN"),
+      p_value = wt$p.value,
+      adj_p_value = wt$p.value,
+      top_drivers = paste(head(unique(na.omit(mod_df$gene_name)), 5), collapse = ", "),
+      gene_names = paste(unique(na.omit(mod_df$gene_name)), collapse = ", ")
+    )
+  })
+  mod_tbl <- bind_rows(mod_rows)
+  if (nrow(mod_tbl) > 0) {
+    mod_tbl <- mod_tbl %>% mutate(adj_p_value = p.adjust(p_value, method = "BH")) %>% arrange(p_value)
+    print(mod_tbl)
+    write_tsv(mod_tbl, "data/de_novo_modules.tsv")
+  }
   ```
-- Inspect the log using CLI tools (`head -n 30 logs/07_knowledge/console.log`).
-- Any newly discovered findings (e.g., coordinate trends among unthresholded complex subunits) must be documented as **new observations** in `docs/knowledge.md`.
+- Inspect the output and document all newly discovered complex/module trends (with exact member counts, median $\log_2\text{FC}$ shift, IQR dispersion, percent directional concordance, $p$-values, and individual member $\log_2\text{FC}$) as **new observations** in `docs/knowledge.md`.
 
 ---
 
-#### 3. Developing First-Layer Biological Conclusions (Data-First Anchor Rule)
-Synthesize your internal biomedical knowledge to explain the observed proteomic remodeling, strictly adhering to the Data-First Anchor Rule:
+#### 3. Developing First-Layer Biological Conclusions & Actionable Role Framing (Data-First Anchor Rule)
+Synthesize your internal biomedical knowledge to explain the observed proteomic remodeling and establish why specific signatures and candidates merit manuscript inclusion, strictly adhering to the Data-First Anchor Rule:
 
 1. **Mandatory Top-Candidate Coverage**:
    - The biological themes and hypotheses formulated in Phase 7 must directly reflect the dataset's strongest quantitative features.
-   - **Every protein in the Top 5 Upregulated and Top 5 Downregulated lists** from `docs/observations.md` **must** be assigned to a biological theme or explicitly investigated. Never omit or skip the primary statistical drivers of the empirical dataset.
-2. **No Dismissal of Unexpected Hits**:
-   - If a leading hit appears biologically unexpected, atypical, or uncharacterized in the studied tissue (e.g., neuronal markers like `SYN1`, epidermal markers like `S100A7`, or unexpected erythroid/membrane markers like `EPB42` or `HBG2` in lung lesions):
-     - **NEVER dismiss them** with a cursory single-sentence dismissal (e.g., "likely artifact" or "irrelevant to studied tissue biology").
-     - **Formulate testable biological hypotheses** explaining their altered detection: e.g., neuroendocrine differentiation, epithelial-to-mesenchymal transition or squamous metaplasia, ectopic expression, immune/stromal cell-lineage infiltration, or altered proteolysis/shedding.
-     - Pair biological hypotheses with technical and detection-rate audits (checking unique peptide evidence, spectral count support, and the Phase 4/6 imputation risk tag).
-3. **Primary vs. Secondary Perturbations**:
+   - **Every protein in the Top 5 Upregulated and Top 5 Downregulated lists** from `docs/observations.md` **must** be assigned to a biological theme/module or explicitly investigated. Never omit or skip the primary statistical drivers of the empirical dataset.
+2. **Actionable Candidate Role Classification (Bidirectional)**:
+   - Rather than treating top hits as a flat list of fold-changes, explicitly evaluate and classify leading upregulated *and* downregulated candidates into **Actionable Roles** connecting the brief context of `docs/experiment.md` to downstream utility:
+     - **`Predictive Biomarker`**: High-magnitude responder (induced or repressed) with `ROBUST_QUANTITATIVE` reliability (or clean all-or-nothing `DETECTION_LIMITED_ON_OFF` switch) that serves as a diagnostic readout or signature of the condition/perturbation.
+     - **`Druggable Target`**: Induced enzyme/transporter/receptor whose pharmacological inhibition blocks the phenotype, **OR** a significantly depleted/repressed metabolic bottleneck or survival factor whose loss creates a **synthetic lethal vulnerability** or calls for **agonist / metabolic supplementation rescue**.
+     - **`Mechanistic Dependency`**: Direct physical interactor, complex subunit, operon partner, or substrate of the primary perturbation that explains how the signal propagates (including stoichiometric uncoupling where a target subunit drops while adaptors/substrates accumulate).
+     - **`Compensatory Buffer`**: Secondary stress-response chaperone, efflux pump, antioxidant, or metabolic bypass induced to buffer cellular toxicity, **OR** a collapsed protective buffer whose depletion sensitizes the cell to damage.
+3. **Actionable Biological Archetype Formulation**:
+   - Synthesize how the opposing induced vs. repressed functional programs fit together into an overarching **Actionable Model** (e.g., *Metabolic Reallocation & Secondary Metabolite Activation*, *Proteostatic Collapse & Compensatory Chaperone Induction*, *Secretory/ECM Remodeling*, or *Predictive Disease Stratification Panel*).
+4. **No Dismissal of Unexpected Hits**:
+   - If a leading hit appears biologically unexpected, atypical, or uncharacterized in the studied tissue/organism (e.g., neuronal markers like `SYN1`, epidermal markers like `S100A7`, erythroid markers like `EPB42` or `HBG2`, or uncharacterized `y*` bacterial proteins):
+     - **NEVER dismiss them** with a cursory single-sentence dismissal (e.g., "likely artifact" or "uncharacterized").
+     - **Formulate testable biological hypotheses** explaining their altered detection: e.g., domain homology, co-transcribed operon neighbor, neuroendocrine differentiation, metaplasia, cell-lineage infiltration, or altered proteolysis/shedding.
+     - Pair biological hypotheses with technical and detection-rate audits (checking unique peptide evidence and the Phase 6 `candidate_reliability` / `imputation_bias` tag).
+5. **Primary vs. Secondary Perturbations & Complex Contextualization**:
    - Differentiate direct mechanistic consequences of the target perturbation from secondary cellular stress adaptations.
-4. **Protein Complex & Pathway Contextualization**:
-   - Identify multi-protein complexes, stoichiometric shifts, or functional modules represented among top altered features.
-   - Explain biological roles of significantly enriched pathways (e.g., humoral immunity/complement cascade, proteostasis, metabolic shifts, extracellular matrix remodeling).
-5. **Hypothesis Evaluation**:
+   - Identify multi-protein complexes, operon co-regulation, stoichiometric shifts, or functional modules represented among top altered features and tested in `data/de_novo_modules.tsv`.
+6. **Hypothesis Evaluation & Anti-Hallucination Directives**:
    - Compare the observed remodeling directly against the expectations described in `docs/experiment.md`.
-6. **Anti-Hallucination Directives**:
-   - Strictly ground your conclusions in established biological mechanisms.
-   - Do NOT fabricate specific literature citations, author names, DOIs, or PMIDs.
-   - Clearly distinguish between established molecular mechanisms and working hypotheses.
+   - Strictly ground your conclusions in established biological mechanisms. Do NOT fabricate specific literature citations, author names, DOIs, or PMIDs. Clearly distinguish between established molecular mechanisms and working hypotheses.
 
 ---
 
 #### 4. Formulating Downstream Web-Search Keyphrases
 Develop a structured set of targeted keyphrases to guide Phase 08 (`08_WEBSEARCH.md`):
-- **Entity Pairs**: Specific pairs or clusters of altered proteins, prioritizing top empirical drivers (e.g. `"[Target Gene] [Top Dysregulated Gene] proteomics interaction"`).
-- **Phenotypic / Pathway Themes**: Disease states, cell stress modalities, or functional cascades (e.g. `"extracellular matrix remodeling and basement membrane loss"`).
-- **Model-Specific Queries**: Queries combining the model organism/cell line, tissue context, and observed hallmarks (e.g. `"[Tissue / Model] [Perturbation] quantitative mass spectrometry hallmarks"`).
-- **Hypothesis-Testing Queries for Unexpected Hits**: Targeted queries investigating unexpected top candidates in the biological context (e.g. `"Synapsin 1 neuroendocrine differentiation lung"` or `"S100A7 squamous metaplasia granuloma"`).
+- **Entity Pairs & Operon/Complex Partners**: Specific pairs or clusters of altered proteins, prioritizing top empirical drivers (e.g. `"[Target Gene] [Top Dysregulated Gene] proteomics interaction"`).
+- **Phenotypic / Pathway Themes**: Disease states, cell stress modalities, or functional cascades tested in `data/de_novo_modules.tsv`.
+- **Actionable Target & Biomarker Queries**: Queries testing druggability, biomarker utility, or mechanistic dependency of top candidates in the model organism/tissue (e.g. `"[Candidate Gene] inhibitor vulnerability [Organism/Disease]"` or `"[Candidate Gene] biomarker [Condition]"`).
+- **Hypothesis-Testing Queries for Unexpected or Uncharacterized Hits**: Targeted queries investigating unexpected or poorly annotated top candidates in the biological context.
 
 ---
 
@@ -100,17 +172,17 @@ Organize the document strictly into the following structured sections:
 
 1. **Primary Observations Synthesis**:
    - Concise summary of primary findings from `docs/observations.md` (quantified counts, target status, top altered proteins, and key enriched pathways).
-2. **Follow-Up Data Inquiries & New Observations**:
-   - If targeted queries were run via `code/07_knowledge.R`, document the specific hypotheses tested, candidate proteins queried, and **new data-derived observations** (with exact $\log_2\text{FC}$ and $p$-values). If no additional queries were required, note that primary data sufficed.
+2. **De Novo Functional Modules & Follow-Up Data Inquiries (`data/de_novo_modules.tsv`)**:
+   - Document the functional modules/complexes constructed and tested in `code/07_knowledge.R`, including a Markdown table reporting each module's Name, Member Count, Median $\log_2\text{FC}$ Shift, Wilcoxon $p$-value, and Leading Driver Genes, plus any specific follow-up candidate queries with exact $\log_2\text{FC}$ and $p$-values.
 3. **First-Layer Biological Conclusions (Data-First Anchor Rule)**:
    - Mechanistic interpretation of observed alterations based on internal biochemical and physiological knowledge.
    - **Explicit Top-Candidate Accounting**: Dedicated paragraphs or subsections explicitly evaluating **every candidate in the Top 5 Upregulated and Top 5 Downregulated lists**.
-   - **Formulated Hypotheses for Unexpected Hits**: Concrete biological hypotheses (e.g. neuroendocrine differentiation, metaplasia, infiltration) addressing unexpected leading candidates rather than dismissing them.
-   - Discussion of known functional complexes, enzymatic cascades, and cellular pathways implicated.
-4. **Cellular Remodeling & Physiological Themes**:
-   - Detailed analysis of cellular programs altered (e.g., organellar stress, proteasomal degradation, mitochondrial dynamics, translational control, ECM remodeling).
+   - **Formulated Hypotheses for Unexpected Hits**: Concrete biological hypotheses addressing unexpected or unannotated leading candidates rather than dismissing them.
+4. **Actionable Candidate Roles & Emerging Model of Cellular Response**:
+   - Structured table and narrative classifying the leading candidate proteins into **Actionable Roles** (`Predictive Biomarker`, `Druggable Target`, `Mechanistic Dependency`, `Compensatory Buffer`), integrating their statistical reliability (`ROBUST_QUANTITATIVE` vs. `DETECTION_LIMITED_ON_OFF`) and functional module membership.
+   - Synthesis of the emerging **Actionable Biological Model** (how the induced and repressed programs interact mechanistically in the context of `docs/experiment.md`).
 5. **Emerging Hypotheses & Open Questions**:
-   - Biological questions raised by the empirical data that warrant external literature corroboration.
+   - Biological and translational questions raised by the empirical data that warrant external literature corroboration and experimental follow-up.
 6. **Curated Keyphrases for Downstream Web Search**:
    - Structured, ranked list of specific keyphrases and search queries to be executed in Phase 08.
 
@@ -119,7 +191,7 @@ Organize the document strictly into the following structured sections:
 #### 6. Phase Completion Gate
 - [ ] **Checkpoint Gate**:
   1. `docs/observations.md` successfully ingested.
-  2. If follow-up data queries were executed, `code/07_knowledge.R` exited with code 0 and output was logged to `logs/07_knowledge/console.log` (or `logs/07_knowledge.log`).
-  3. `docs/knowledge.md` exists on disk with non-zero size, containing first-layer conclusions, new observations, and curated web search keyphrases.
+  2. `code/07_knowledge.R` executed cleanly (`exit 0`) with output logged to `logs/07_knowledge/console.log` (and `data/de_novo_modules.tsv` generated if de novo functional modules were tested).
+  3. `docs/knowledge.md` exists on disk with non-zero size, containing first-layer conclusions, de novo module statistics, actionable candidate role classifications, and curated web search keyphrases.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "07_KNOWLEDGE", summary = "Internal knowledge contextualization complete in docs/knowledge.md with first-layer conclusions, follow-up data queries, and curated web search keyphrases.")`
+  - Invoke `complete_phase(phaseName = "07_KNOWLEDGE", summary = "Internal knowledge contextualization complete in docs/knowledge.md with de novo functional modules, actionable candidate role classifications, and curated web search keyphrases.")`

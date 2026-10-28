@@ -1,5 +1,5 @@
 ---
-tools: [tpa_health, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_export_table, tpa_operations, tpa_extract, tpa_run_code, tpa_export_state]
+tools: []
 ---
 
 ### Phase 9: Literature Knowledge Database Interrogation & Third-Layer Conclusions
@@ -7,15 +7,13 @@ tools: [tpa_health, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_export_tab
 In this phase, you (the LLM) will use the literature search strategy formulated in `08_WEBSEARCH` (`docs/websearch.md`) to interrogate the "Literature Knowledge Database" (the active DuckDB literature database). 
 
 You will synthesize evidence across:
-- `06_OBSERVATIONS` (`docs/observations.md`)
-- `07_KNOWLEDGE` (`docs/knowledge.md`)
-- `08_WEBSEARCH` (`docs/websearch.md`)
+- `08_WEBSEARCH` (`docs/websearch.md` and `data/actionable_synthesis.json`, which already synthesize the primary observations and internal knowledge from Phases 6–8)
 - The retrieved molecular assertions, graph-hop evidence, and reverse-interrogation results
 
 to further contextualize the observations and develop the **third layer of conclusions**.
 
 If new hypotheses or candidate networks emerge from the literature assertions:
-- Use `tidyproteomics query tools (tpa_extract, tpa_run_code, or Rscript)` to query the saved dataset (`data/tidyproteomics_data.rds`) directly (e.g. running `tools/literature/interrogate_unthresholded_proteomics.R` or custom scripts in `code/09_literature.R` logged to `logs/09_literature/console.log`).
+- Run `tools/literature/interrogate_unthresholded_proteomics.R` or custom scripts in `code/09_literature.R` via `execute_command` (logged to `logs/09_literature/console.log`).
 - Document any **new** data-derived observations in `docs/literature.md`.
 
 Finally, you will construct `docs/literature.md` documenting both the **new** observations and **new** third-layer conclusions, with all references documented.
@@ -24,19 +22,19 @@ Finally, you will construct `docs/literature.md` documenting both the **new** ob
 
 > [!IMPORTANT]
 > **Turn Budget & Batched Execution Directive**:
-> Complete Phase 9 efficiently in a focused, batched sequence (aim for 4–8 turns total):
-> 1. Run literature graph queries in batch across all candidate seeds/pathways in one command.
-> 2. Run reverse interrogation across nominated candidates in batch with `interrogate_unthresholded_proteomics.R`.
-> 3. **Never run Python one-liner parsing scripts or inspect candidates one by one**:
->    - `interrogate_unthresholded_proteomics.R` automatically formats ready-to-use markdown tables and FGSEA statistics directly in stdout and writes `docs/literature_candidates.md` (and `data/literature_candidate_expression.csv`).
-> 4. Ingest `docs/literature_candidates.md` or the stdout markdown directly, author `docs/literature.md` completely in 1–2 turns, verify required checkpoints, and call `complete_phase` promptly to avoid hitting the phase turn limit.
+> - **Fast-Path When Literature DB is DISABLED (2 Turns Total)**: If `### ACTIVE LITERATURE DATABASE` in the runtime blackboard above is `DISABLED` (or absent):
+>   - **Turn 1**: Read `docs/websearch.md` (do NOT waste turns re-reading `docs/observations.md` or `docs/knowledge.md`, or running shell/R scripts).
+>   - **Turn 2**: Author `docs/literature.md` with `literature_status: SKIPPED (NO_LOCAL_LITERATURE_DB)` in the header, synthesizing the Tier 1/2/3 literature calibration and `data/actionable_synthesis.json` roadmap, and immediately call `complete_phase` in the same or next turn. Do NOT manually edit `docs/notes.md`.
+> - **When Literature DB is ENABLED (4–6 Turns Total)**:
+>   1. Run literature graph queries in batch across all candidate seeds/pathways in one command.
+>   2. Run reverse interrogation across nominated candidates in batch with `interrogate_unthresholded_proteomics.R`.
+>   3. **Never run Python one-liner parsing scripts or inspect candidates one by one**: `interrogate_unthresholded_proteomics.R` automatically formats ready-to-use markdown tables and FGSEA statistics directly in stdout and writes `docs/literature_candidates.md` (and `data/literature_candidate_expression.csv`).
+>   4. Ingest `docs/literature_candidates.md` or the stdout markdown directly, author `docs/literature.md` completely in 1–2 turns, verify required checkpoints, and call `complete_phase` promptly.
 
 #### 1. Pre-Flight Verification & Inputs Ingestion
-Before proceeding, verify that:
-1. `docs/websearch.md` exists and contains the literature search strategy (`seed_symbols`, `pathway_terms`).
-2. `docs/knowledge.md` and `docs/observations.md` exist and are populated.
-3. `data/tidyproteomics_data.rds` exists on disk.
-4. Check the runtime blackboard above for `### ACTIVE LITERATURE DATABASE`.
+Before proceeding:
+1. Check the runtime blackboard above for `### ACTIVE LITERATURE DATABASE`.
+2. Read `docs/websearch.md` in Turn 1 (which already integrates Phase 6–8 findings, `seed_symbols`, `pathway_terms`, and the `data/actionable_synthesis.json` summary). Do NOT re-read `docs/observations.md` or `docs/knowledge.md` unless a specific unquoted number is needed.
 
 ---
 
@@ -77,11 +75,11 @@ Execute the iterative graph interrogation loop:
      - **Prohibition on Speculative Hijacking**: Do NOT generate multi-paragraph speculative hypotheses explaining away non-replicated literature genes. Document their lack of replication concisely (1–2 sentences) as empirical divergence between local tissue pathology and surrogate matrices.
    - Any identified sub-threshold shifts must be recorded as **new observations** in `docs/literature.md`.
 
-##### Strategy B: When Literature Database is DISABLED (Standard Literature Fallback)
-If no active DuckDB literature database is configured:
-- Target & Biomarker Corroboration: Query or synthesize documented scientific literature for the target's molecular role, known phenotypes, and compensatory stress mechanisms.
-- Explicitly apply Evidentiary Distance Tiering (Tier 1 vs. Tier 2 vs. Tier 3) to all cited external studies.
-- Classify external candidates as Corroborated or Non-Replicated based on the empirical dataset.
+##### Strategy B: When Literature Database is DISABLED (2-Turn Fast-Path Fallback)
+If no active DuckDB literature database is configured (e.g. `ACTIVE LITERATURE DATABASE` is `DISABLED` or `literature/` lacks `.duckdb` files):
+- Record `literature_status: SKIPPED (NO_LOCAL_LITERATURE_DB)` in the report header of `docs/literature.md` and in the `complete_phase` summary (do NOT manually edit `docs/notes.md`).
+- Target & Biomarker Corroboration: In `docs/literature.md`, synthesize known biological literature for the system based on web search (`docs/websearch.md`) and baseline annotations, explicitly applying Evidentiary Distance Tiering (Tier 1 vs. Tier 2 vs. Tier 3).
+- **No Synthetic Candidate Forcing**: Do NOT generate artificial or duplicate DE entries in `docs/literature_candidates.md` or `data/literature_candidate_expression.csv` if no external literature database exists. Leave literature candidates empty so downstream phases know literature validation was skipped.
 - Cite standard literature by Author (Year). Never invent or hallucinate numerical PMIDs or DOIs.
 
 ---
@@ -97,21 +95,23 @@ If the literature database assertions point to additional protein families, isof
 
 ---
 
-#### 4. Developing Third-Layer Biological Conclusions (Data-First Literature Calibration)
+#### 4. Developing Third-Layer Biological Conclusions & Actionable Target Calibration (Data-First Literature Calibration)
 Synthesize all prior layers into a deep mechanistic framework, ensuring the primary empirical data remains the driving narrative:
 1. **Calibration by Evidentiary Distance**:
-   - Give primary interpretive weight to Tier 1 (direct tissue) evidence.
+   - Give primary interpretive weight to Tier 1 (direct tissue/organism) evidence.
    - Treat Tier 2 (surrogate plasma/biofluid) studies strictly as comparative contrasts, not surrogate truth.
 2. **Integration of Literature Assertions & Experimental Shifts**:
    - Reconcile the primary data with molecular assertions from the literature database.
    - Ground functional interpretations with verbatim quotes (`evidence_quote`) and verified study IDs.
 3. **Sub-Threshold Coordinated Regulation vs. Non-Replication**:
    - Differentiate genuine sub-threshold complexes (concordant directional drift among multiple subunits) from isolated non-replicated literature candidates (`Concordance: NONE`).
-4. **Reconciliation with Experimental Hypothesis**:
+4. **Refining the Actionable Synthesis (`data/actionable_synthesis.json`)**:
+   - Verify that `data/actionable_synthesis.json` (created in Phase 8) exists on disk. If Phase 9 literature interrogation revealed additional corroborated complex members or refined the role classification of any candidate (`Predictive Biomarker`, `Druggable Target`, `Mechanistic Dependency`, `Compensatory Buffer`), update `data/actionable_synthesis.json` accordingly (or create it now following the Phase 8 JSON schema if it was not yet written).
+5. **Reconciliation with Experimental Hypothesis & Actionable Next Steps**:
    - Point-by-point reconciliation with `docs/experiment.md`:
      - Which hypothesized effects are definitively supported by the integrated evidence?
      - What compensatory or secondary pathways are newly revealed?
-     - What unexpected proteomic hallmarks emerge from the synthesis?
+     - What concrete next experimental steps (orthogonal validation, epistatic/pharmacological perturbation, translational cohort/time-course testing) directly test the derived model?
 
 ---
 
@@ -141,8 +141,9 @@ Organize the document strictly into the following structured sections:
    - Deep mechanistic synthesis integrating literature assertions with observed remodeling.
    - Dissection of coordinated complex dynamics, direct vs. indirect regulatory cascades, and cellular adaptations.
    - Primary empirical findings MUST lead the discussion; external literature must calibrate rather than hijack the narrative.
-6. **Experimental Hypothesis Reconciliation**:
+6. **Experimental Hypothesis Reconciliation & Actionable Next Steps**:
    - Comprehensive point-by-point evaluation against the working hypothesis in `docs/experiment.md`.
+   - Finalized summary of the **Actionable Archetype**, **Validated Biological Signatures**, **Role-Classified Candidate Targets**, and prioritized **"What To Do Next" Experimental Roadmap** (`data/actionable_synthesis.json`).
 7. **Documented Literature References**:
    - Formatted list of all cited studies: Study ID, Author, Year, Title, Evidentiary Tier (Tier 1/2/3), and verified PMID/DOI. Include verbatim quotes where appropriate.
 
@@ -152,6 +153,7 @@ Organize the document strictly into the following structured sections:
 - [ ] **Checkpoint Gate**:
   1. `docs/websearch.md`, `docs/knowledge.md`, and `docs/observations.md` successfully ingested.
   2. Literature query scripts (`query_literature.R`, `interrogate_unthresholded_proteomics.R`, or `code/09_literature.R`) executed cleanly with output logged to `logs/09_literature/console.log` (or `logs/09_literature.log`).
-  3. `docs/literature.md` exists on disk with non-zero size, containing third-layer conclusions, new observations, sub-threshold dynamics, and documented references.
+  3. `data/actionable_synthesis.json` verified present on disk with valid JSON structure.
+  4. `docs/literature.md` exists on disk with non-zero size, containing third-layer conclusions, actionable next-step synthesis, sub-threshold dynamics, and documented references.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "09_LITERATURE", summary = "Literature database interrogation complete in docs/literature.md with third-layer conclusions, sub-threshold dynamics, and grounded citations.")`
+  - Invoke `complete_phase(phaseName = "09_LITERATURE", summary = "Literature database interrogation complete in docs/literature.md with third-layer conclusions, finalized actionable synthesis in data/actionable_synthesis.json, and grounded citations.")`

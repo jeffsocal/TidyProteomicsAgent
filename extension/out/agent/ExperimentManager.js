@@ -105,6 +105,11 @@ class ExperimentManager {
 ### D. Confounded Batch & Exploratory Comparison Authorization:
 ⚠️ [PRE-FLIGHT GATE DECISION]:
 - **Proceed With Potential Batch Confounding**: FALSE
+
+### E. Missing Value Imputation Strategy:
+👉 [USER ACTION REQUIRED - CONFIRM IMPUTATION METHOD]:
+- **Imputation Method**: randomforest_grouped
+- **Confirm Imputation Strategy**: FALSE
 `;
         }
         await fs.writeFile(expPath, templateContent, "utf-8");
@@ -128,6 +133,8 @@ class ExperimentManager {
                 sampleRenamingMap: {},
                 targetContrasts: [],
                 batchConfoundingAuthorized: false,
+                imputationMethod: "randomforest_grouped",
+                imputationConfirmed: false,
                 missingInitialFields: ["PATH_TO_DATA_FILE", "PLATFORM", "ANALYTE", "DESCRIPTION"],
             };
         }
@@ -264,6 +271,10 @@ class ExperimentManager {
             (targetContrasts.length > 0 && !secCText.includes("👉 [USER ACTION REQUIRED") && !secCText.includes("<treatment>"));
         // 9. Batch Confounding
         const batchConfoundingAuthorized = /-\s*\*\*Proceed With Potential Batch Confounding\*\*:\s*TRUE/i.test(content);
+        // 10. Imputation Strategy (Section 3.E)
+        const impMethodMatch = content.match(/-\s*\*\*Imputation Method\*\*:\s*([a-zA-Z0-9_.:-]+)/i);
+        const imputationMethod = impMethodMatch ? impMethodMatch[1].trim() : "randomforest_grouped";
+        const imputationConfirmed = /-\s*\*\*Confirm Imputation Strategy\*\*:\s*TRUE/i.test(content);
         return {
             exists: true,
             pathToDataFile,
@@ -276,6 +287,8 @@ class ExperimentManager {
             sampleRenamingMap,
             targetContrasts,
             batchConfoundingAuthorized,
+            imputationMethod,
+            imputationConfirmed,
             missingInitialFields: missing,
         };
     }
@@ -427,8 +440,36 @@ class ExperimentManager {
         await fs.writeFile(expPath, content, "utf-8");
     }
     /**
-     * Unified confirmation: sets target contrast(s) as confirmed in Section 3.C
-     * and authorizes potential batch confounding in Section 3.D.
+     * Sets Section 3E Missing Value Imputation Strategy and confirmation status.
+     */
+    async setImputationStrategy(method, confirmed = true) {
+        await this.ensureExperimentDoc();
+        const expPath = this.getExperimentPath();
+        let content = await fs.readFile(expPath, "utf-8");
+        const spec = await this.readSpec();
+        const finalMethod = method && method.trim() ? method.trim() : spec.imputationMethod || "randomforest_grouped";
+        const confirmStr = confirmed ? "TRUE" : "FALSE";
+        if (/-\s*\*\*Imputation Method\*\*:/i.test(content)) {
+            content = content.replace(/(-\s*\*\*Imputation Method\*\*:\s*)([^\n]*)/i, `$1${finalMethod}`);
+        }
+        else if (/###\s*(?:3\.E|E)\.?\s*Missing Value Imputation Strategy/i.test(content)) {
+            content = content.replace(/(###\s*(?:3\.E|E)\.?\s*Missing Value Imputation Strategy[^\n]*\n)/i, `$1- **Imputation Method**: ${finalMethod}\n`);
+        }
+        else {
+            content += `\n\n### E. Missing Value Imputation Strategy:\n- **Imputation Method**: ${finalMethod}\n- **Confirm Imputation Strategy**: ${confirmStr}\n`;
+        }
+        if (/-\s*\*\*Confirm Imputation Strategy\*\*:/i.test(content)) {
+            content = content.replace(/(-\s*\*\*Confirm Imputation Strategy\*\*:\s*)(TRUE|FALSE)/i, `$1${confirmStr}`);
+        }
+        else {
+            content = content.replace(/(-\s*\*\*Imputation Method\*\*:\s*[^\n]*\n)/i, `$1- **Confirm Imputation Strategy**: ${confirmStr}\n`);
+        }
+        await fs.writeFile(expPath, content, "utf-8");
+        return finalMethod;
+    }
+    /**
+     * Unified confirmation: sets target contrast(s) as confirmed in Section 3.C,
+     * authorizes potential batch confounding in Section 3.D, and confirms imputation in Section 3.E.
      */
     async confirmContrastAndAuthorizeConfounding(contrasts) {
         await this.ensureExperimentDoc();
@@ -452,6 +493,7 @@ class ExperimentManager {
             await this.confirmExistingContrasts();
         }
         await this.setBatchConfounding(true);
+        await this.setImputationStrategy(undefined, true);
         return finalContrasts;
     }
 }

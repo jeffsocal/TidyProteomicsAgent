@@ -705,7 +705,7 @@ ${this.buildLiteratureSection()}
 - **Live Tool Calling Enabled**: The persistent tidyproteomics MCP server is CONNECTED and maintains the S3 dataset in memory. All analysis operations are executed via live \`tpa_*\` MCP tools.
 - **Direct Tools Available**: You have direct access to live \`tpa_*\` MCP tools dynamically scoped for this phase.
 - **Standard MCP-First Workflow**:
-  1. **Phase 1 Ingestion**: Ingest the dataset directly via \`tpa_load(source = "<URL_OR_PATH>", platform = "<PLATFORM>", analyte = "proteins")\`. Remote HTTPS URLs are automatically downloaded to \`data/raw/\` and imported into memory.
+  1. **Phase 1 Ingestion**: Ingest the dataset directly via \`tpa_load(source = "<URL_OR_PATH>", platform = "<PLATFORM>", analyte = "proteins")\`. Remote HTTPS URLs are automatically downloaded to \`data/raw/\` and imported into memory. If custom regex or column mapping adjustments are needed (e.g. bare accession headers without pipes, or LFQ vs raw intensity), export the mapping template with \`tpa_export_config\`, modify the TSV, and pass \`config = "<platform>_<analyte>.tsv"\` to \`tpa_load\`.
   2. **Phase 2+ State Continuity**: In subsequent phases, the dataset is already held in memory from prior phases. If reloading is needed, call \`tpa_load(source = "data/tidyproteomics_data.rds")\`.
   3. **In-Memory Transformation**: Execute subsetting, normalization benchmarking, imputation, and contrast testing directly using the corresponding \`tpa_*\` MCP tools. All tool executions and outputs are automatically recorded to \`logs/<phase>/console.log\`.
   4. **Phase Checkpoint Gates & Artifact Generation**: When completing each phase, invoke \`tpa_export_state(rds_path = "data/tidyproteomics_data.rds", script_path = "code/<NN>_<phase>.R")\`. This automatically saves the data object to \`data/tidyproteomics_data.rds\` and writes the reproducible script to \`code/<NN>_<phase>.R\`, fully satisfying all checkpoint gates.
@@ -1783,13 +1783,15 @@ async function writeActiveModelSummaryFile(workspaceRoot, config, extensionVersi
 
 // src/orchestrator/PipelineOrchestrator.ts
 var PipelineOrchestrator = class {
-  constructor(workspaceRoot, client, tools, onStateChange, onLog, extensionVersion = "0.1.0") {
+  constructor(workspaceRoot, client, tools, onStateChange, onLog, extensionVersion = "0.1.0", onAgentActivity, onAgentObservation) {
     this.workspaceRoot = workspaceRoot;
     this.client = client;
     this.tools = tools;
     this.onStateChange = onStateChange;
     this.onLog = onLog;
     this.extensionVersion = extensionVersion;
+    this.onAgentActivity = onAgentActivity;
+    this.onAgentObservation = onAgentObservation;
     this.workspaceRoot = workspaceRoot || "";
     this.chatLogger = new ChatLogger(this.workspaceRoot);
     if (this.workspaceRoot) {
@@ -1867,7 +1869,11 @@ var PipelineOrchestrator = class {
       }
       case "tpa_load": {
         const src = args?.source || args?.load_local || "";
-        return `[MCP Load] ${path5.basename(String(src)) || src}`;
+        const cfg = args?.config ? ` (config: ${path5.basename(String(args.config))})` : "";
+        return `[MCP Load] ${path5.basename(String(src)) || src}${cfg}`;
+      }
+      case "tpa_export_config": {
+        return `[MCP Export Config] ${args?.platform || "config"}${args?.analyte ? ` (${args.analyte})` : ""}`;
       }
       case "tpa_inspect": {
         return `[MCP Inspect] ${args?.what || "structure"}`;
@@ -1909,6 +1915,11 @@ var PipelineOrchestrator = class {
       case "tpa_operations": {
         return `[MCP Audit Operations]`;
       }
+      case "tpa_reassign": {
+        const target = args?.target || "sample";
+        const desc = args?.mapping ? `${Object.keys(args.mapping).length} sample mappings` : args?.condition ? `${args.condition} -> ${args.replace}` : "";
+        return `[MCP Reassign] ${target} (${desc})`;
+      }
       case "tpa_health": {
         return `[MCP Health Check]`;
       }
@@ -1918,6 +1929,170 @@ var PipelineOrchestrator = class {
         return `[${name}]${summary}`;
       }
     }
+  }
+  formatNaturalActivity(name, args, phaseTitle) {
+    switch (name) {
+      case "tpa_load": {
+        const src = args?.source || args?.load_local || "";
+        const base = path5.basename(String(src)) || "dataset";
+        return `Loading quantitative dataset from \`${base}\`...`;
+      }
+      case "tpa_export_config": {
+        const plat = args?.platform || "platform";
+        return `Exporting ${plat} import configuration template for inspection...`;
+      }
+      case "tpa_input_audit": {
+        const plat = args?.platform || "platform";
+        return `Auditing raw file headers and matching regex patterns against ${plat}...`;
+      }
+      case "tpa_ingest_config": {
+        const act = args?.action || "configuring";
+        return `Customizing ingestion configuration (${act}) for ${args?.platform || "platform"}...`;
+      }
+      case "tpa_inspect": {
+        const what = String(args?.what || "structure");
+        if (what === "overview")
+          return "Inspecting dataset topology, sample groups, and protein counts...";
+        if (what === "samples")
+          return "Auditing sample metadata and replicate annotations...";
+        if (what === "operations")
+          return "Checking operations history and normalization status...";
+        return `Inspecting dataset ${what}...`;
+      }
+      case "tpa_summary": {
+        const by = String(args?.by || args?.what || "sample");
+        return `Calculating quality metrics across ${by}s...`;
+      }
+      case "tpa_normalize": {
+        const methods = Array.isArray(args?.methods) ? args.methods.join(", ") : args?.methods || args?.method || "algorithms";
+        return `Benchmarking normalization (${methods})...`;
+      }
+      case "tpa_select_normalization": {
+        return `Selecting ${args?.method || "optimal"} normalization layer...`;
+      }
+      case "tpa_impute": {
+        const alg = args?.algorithm || args?.method || "LOD";
+        return `Imputing missing quantitative values (${alg})...`;
+      }
+      case "tpa_expression": {
+        const comp = args?.comparison || args?.contrast || "designated contrast";
+        return `Computing differential expression for \`${comp}\`...`;
+      }
+      case "tpa_enrichment": {
+        const term = args?.term || args?.terms || "pathways";
+        return `Running functional enrichment analysis (${term})...`;
+      }
+      case "tpa_plot": {
+        const type = args?.type || "diagnostic";
+        return `Generating ${type} visualization...`;
+      }
+      case "tpa_export_table": {
+        const fn = args?.file_name || "table.csv";
+        return `Exporting analysis table to \`${fn}\`...`;
+      }
+      case "tpa_export_state": {
+        return "Exporting reproducible R script and persisting data checkpoint...";
+      }
+      case "tpa_extract": {
+        return `Extracting ${args?.values || "data values"} from analysis state...`;
+      }
+      case "tpa_operations": {
+        return "Auditing upstream transformations & operations history...";
+      }
+      case "tpa_reassign": {
+        const target = args?.target || "sample";
+        const count = args?.mapping ? `${Object.keys(args.mapping).length} samples` : args?.replace || "conditions";
+        return `Reassigning ${target} groups (${count})...`;
+      }
+      case "tpa_health": {
+        return "Verifying MCP server connectivity and runtime health...";
+      }
+      case "read_file": {
+        const fp = path5.basename(String(args?.filePath || "file"));
+        return `Reading \`${fp}\`...`;
+      }
+      case "write_file": {
+        const fp = path5.basename(String(args?.filePath || "file"));
+        return `Writing \`${fp}\`...`;
+      }
+      case "replace_file_content": {
+        const fp = path5.basename(String(args?.filePath || "file"));
+        return `Updating \`${fp}\`...`;
+      }
+      case "execute_command": {
+        const cmd = String(args?.command || "").trim();
+        const shortCmd = cmd.length > 50 ? cmd.slice(0, 47) + "..." : cmd;
+        return `Running command: \`${shortCmd}\`...`;
+      }
+      case "check_checkpoint_gate": {
+        return "Verifying quality gates and checkpoint outputs...";
+      }
+      case "complete_phase": {
+        return "Finalizing phase and recording findings...";
+      }
+      case "fail_phase": {
+        return "Evaluating phase failure checkpoint...";
+      }
+      default: {
+        const clean = name.replace(/^tpa_/, "").replace(/_/g, " ");
+        return `Executing ${clean}...`;
+      }
+    }
+  }
+  extractToolObservation(name, args, result) {
+    if (!result || typeof result !== "string")
+      return null;
+    const res = result.trim();
+    if (name === "tpa_load" || name === "tpa_inspect" && args?.what === "overview") {
+      const sampleMatch = res.match(/(?:samples?|files?)\s*[:=]\s*(\d+)/i) || res.match(/(\d+)\s+samples?/i);
+      const proteinMatch = res.match(/(?:proteins?|peptides?|features?)\s*[:=]\s*([\d,]+)/i) || res.match(/([\d,]+)\s+proteins?/i);
+      const missingMatch = res.match(/(?:missing(?:ness)?)\s*[:=]\s*([\d\.]+)%/i) || res.match(/([\d\.]+)%\s+missing/i);
+      if (sampleMatch || proteinMatch) {
+        const parts = [];
+        if (sampleMatch)
+          parts.push(`**${sampleMatch[1]}** samples`);
+        if (proteinMatch)
+          parts.push(`**${proteinMatch[1]}** quantified features`);
+        if (missingMatch)
+          parts.push(`**${missingMatch[1]}%** missingness`);
+        return {
+          text: `Dataset topology confirmed: identified ${parts.join(", ")}.`,
+          badge: "Topology"
+        };
+      }
+    }
+    if (name === "tpa_normalize" || name === "tpa_select_normalization") {
+      const cvMatch = res.match(/cv\s*[:=]?\s*([\d\.]+)/i);
+      const method = args?.method || (Array.isArray(args?.methods) ? args.methods[0] : args?.methods) || "optimal";
+      return {
+        text: `Benchmarked normalization candidates. Selected **${method}** normalization${cvMatch ? ` (CV: ${cvMatch[1]})` : ""}.`,
+        badge: "Normalization"
+      };
+    }
+    if (name === "tpa_impute") {
+      const imputedMatch = res.match(/(\d+[\d,]*|\d+\.?\d*%)\s*(?:imputed|missing)/i);
+      const method = args?.algorithm || args?.method || "LOD";
+      return {
+        text: `Completed missing value imputation using **${method}** strategy${imputedMatch ? ` (${imputedMatch[0]})` : ""}.`,
+        badge: "Imputation"
+      };
+    }
+    if (name === "tpa_expression") {
+      const sigMatch = res.match(/(\d+)\s*(?:significant|differentially expressed)/i);
+      const comp = args?.comparison || args?.contrast || "designated comparison";
+      return {
+        text: `Differential expression testing complete for \`${comp}\`${sigMatch ? `: detected **${sigMatch[1]}** significant proteins` : ""}.`,
+        badge: "Expression"
+      };
+    }
+    if (name === "tpa_enrichment") {
+      const term = args?.term || args?.terms || "pathways";
+      return {
+        text: `Pathway enrichment analysis completed for \`${term}\` ontologies.`,
+        badge: "Enrichment"
+      };
+    }
+    return null;
   }
   getIsRunning() {
     return this.isRunning;
@@ -2655,6 +2830,10 @@ Construct and execute code for this phase, capturing output to logs.
             } else {
               const cleanData = raw.replace(/^[⚠️🔄❌✓💡]\s*/g, "").trim();
               this.logPhase(phaseTag, cleanData);
+              const obsMatch = raw.match(/^(?:💡\s*)?(?:Observation|Finding|Key Observation|Discovery):\s*(.+)$/i);
+              if (obsMatch) {
+                this.onAgentObservation?.(phase, obsMatch[1], { badge: "Observation" });
+              }
             }
           } else if (event.type === "text") {
           } else if (event.type === "tool_start") {
@@ -2670,6 +2849,8 @@ Construct and execute code for this phase, capturing output to logs.
             }
             lastToolPendingText = `${prefix}${body} ...`;
             this.onLog(lastToolPendingText, false);
+            const naturalAction = this.formatNaturalActivity(event.data.name, event.data.args, cleanTitle);
+            this.onAgentActivity?.(phase, naturalAction);
           } else if (event.type === "tool_end") {
             const base = lastToolPendingText ? lastToolPendingText.replace(/\s*\.{3}$/, "") : `[${this.ts()}] ${phaseTag}: [${event.data.name}]`;
             if (event.data.isError) {
@@ -2684,6 +2865,18 @@ Construct and execute code for this phase, capturing output to logs.
               this.logPhase(phaseTag, `\u274C  ${failSnippet}`, false);
             } else {
               this.onLog(`${base} ...  \u2713 [completed]`, true);
+              if (event.data.name === "complete_phase") {
+                const summary = event.data.args?.summary || "Phase objectives and quality gates successfully passed.";
+                this.onAgentObservation?.(phase, summary, { badge: `Phase ${phase.id} Complete` });
+              } else if (event.data.name === "fail_phase") {
+                const reason = event.data.args?.reason || "Pipeline checkpoint pause.";
+                this.onAgentObservation?.(phase, `\u26A0\uFE0F Halted: ${reason}`, { badge: "Action Required" });
+              } else {
+                const obs = this.extractToolObservation(event.data.name, event.data.args, event.data.result);
+                if (obs) {
+                  this.onAgentObservation?.(phase, obs.text, { badge: obs.badge });
+                }
+              }
             }
             lastToolPendingText = "";
           } else if (event.type === "tokens") {
@@ -4434,6 +4627,11 @@ var ExperimentManager = class {
 ### D. Confounded Batch & Exploratory Comparison Authorization:
 \u26A0\uFE0F [PRE-FLIGHT GATE DECISION]:
 - **Proceed With Potential Batch Confounding**: FALSE
+
+### E. Missing Value Imputation Strategy:
+\u{1F449} [USER ACTION REQUIRED - CONFIRM IMPUTATION METHOD]:
+- **Imputation Method**: randomforest_grouped
+- **Confirm Imputation Strategy**: FALSE
 `;
     }
     await fs8.writeFile(expPath, templateContent, "utf-8");
@@ -4457,6 +4655,8 @@ var ExperimentManager = class {
         sampleRenamingMap: {},
         targetContrasts: [],
         batchConfoundingAuthorized: false,
+        imputationMethod: "randomforest_grouped",
+        imputationConfirmed: false,
         missingInitialFields: ["PATH_TO_DATA_FILE", "PLATFORM", "ANALYTE", "DESCRIPTION"]
       };
     }
@@ -4577,6 +4777,9 @@ var ExperimentManager = class {
     const secCText = secCMatch ? secCMatch[0] : "";
     const contrastConfirmed = /Status:\s*CONFIRMED/i.test(secCText) || /###\s*(?:3\.C|C)\.?\s*Target [Cc]ontrasts[^\n]*CONFIRMED/i.test(content) || targetContrasts.length > 0 && !secCText.includes("\u{1F449} [USER ACTION REQUIRED") && !secCText.includes("<treatment>");
     const batchConfoundingAuthorized = /-\s*\*\*Proceed With Potential Batch Confounding\*\*:\s*TRUE/i.test(content);
+    const impMethodMatch = content.match(/-\s*\*\*Imputation Method\*\*:\s*([a-zA-Z0-9_.:-]+)/i);
+    const imputationMethod = impMethodMatch ? impMethodMatch[1].trim() : "randomforest_grouped";
+    const imputationConfirmed = /-\s*\*\*Confirm Imputation Strategy\*\*:\s*TRUE/i.test(content);
     return {
       exists: true,
       pathToDataFile,
@@ -4589,6 +4792,8 @@ var ExperimentManager = class {
       sampleRenamingMap,
       targetContrasts,
       batchConfoundingAuthorized,
+      imputationMethod,
+      imputationConfirmed,
       missingInitialFields: missing
     };
   }
@@ -4771,8 +4976,46 @@ ${newSectionC}`;
     await fs8.writeFile(expPath, content, "utf-8");
   }
   /**
-   * Unified confirmation: sets target contrast(s) as confirmed in Section 3.C
-   * and authorizes potential batch confounding in Section 3.D.
+   * Sets Section 3E Missing Value Imputation Strategy and confirmation status.
+   */
+  async setImputationStrategy(method, confirmed = true) {
+    await this.ensureExperimentDoc();
+    const expPath = this.getExperimentPath();
+    let content = await fs8.readFile(expPath, "utf-8");
+    const spec = await this.readSpec();
+    const finalMethod = method && method.trim() ? method.trim() : spec.imputationMethod || "randomforest_grouped";
+    const confirmStr = confirmed ? "TRUE" : "FALSE";
+    if (/-\s*\*\*Imputation Method\*\*:/i.test(content)) {
+      content = content.replace(/(-\s*\*\*Imputation Method\*\*:\s*)([^\n]*)/i, `$1${finalMethod}`);
+    } else if (/###\s*(?:3\.E|E)\.?\s*Missing Value Imputation Strategy/i.test(content)) {
+      content = content.replace(
+        /(###\s*(?:3\.E|E)\.?\s*Missing Value Imputation Strategy[^\n]*\n)/i,
+        `$1- **Imputation Method**: ${finalMethod}
+`
+      );
+    } else {
+      content += `
+
+### E. Missing Value Imputation Strategy:
+- **Imputation Method**: ${finalMethod}
+- **Confirm Imputation Strategy**: ${confirmStr}
+`;
+    }
+    if (/-\s*\*\*Confirm Imputation Strategy\*\*:/i.test(content)) {
+      content = content.replace(/(-\s*\*\*Confirm Imputation Strategy\*\*:\s*)(TRUE|FALSE)/i, `$1${confirmStr}`);
+    } else {
+      content = content.replace(
+        /(-\s*\*\*Imputation Method\*\*:\s*[^\n]*\n)/i,
+        `$1- **Confirm Imputation Strategy**: ${confirmStr}
+`
+      );
+    }
+    await fs8.writeFile(expPath, content, "utf-8");
+    return finalMethod;
+  }
+  /**
+   * Unified confirmation: sets target contrast(s) as confirmed in Section 3.C,
+   * authorizes potential batch confounding in Section 3.D, and confirms imputation in Section 3.E.
    */
   async confirmContrastAndAuthorizeConfounding(contrasts) {
     await this.ensureExperimentDoc();
@@ -4794,6 +5037,7 @@ ${newSectionC}`;
       await this.confirmExistingContrasts();
     }
     await this.setBatchConfounding(true);
+    await this.setImputationStrategy(void 0, true);
     return finalContrasts;
   }
 };
@@ -4958,6 +5202,25 @@ var AgentService = class {
         }
       },
       {
+        name: "set_imputation_strategy",
+        description: "Updates Section 3E of docs/experiment.md to configure and confirm the Missing Value Imputation Strategy ('randomforest_grouped', 'min_column', 'min_row_grouped', or 'none').",
+        parameters: {
+          type: "object",
+          properties: {
+            method: {
+              type: "string",
+              enum: ["randomforest_grouped", "min_column", "min_row_grouped", "none"],
+              description: "Imputation method: 'randomforest_grouped' (MAR default: impute.randomforest, method='matrix', group_by_sample=TRUE), 'min_column' (MNAR/knockout: base::min, method='column'), 'min_row_grouped', or 'none'."
+            },
+            confirmed: {
+              type: "boolean",
+              description: "Whether the user has confirmed the imputation strategy (default TRUE)."
+            }
+          },
+          required: ["confirmed"]
+        }
+      },
+      {
         name: "start_or_resume_pipeline",
         description: "Triggers or resumes execution of the autonomous analysis pipeline when initial configuration is satisfied or when a halted phase's questions have been resolved.",
         parameters: {
@@ -5033,7 +5296,7 @@ var AgentService = class {
     ];
   }
   /**
-   * Checks docs/experiment.md and generates proactive onboarding questions if initial setup is incomplete.
+   * Checks docs/experiment.md and generates proactive onboarding guidance if initial setup is incomplete.
    */
   async checkAndTriggerOnboarding() {
     if (!this.workspaceRoot)
@@ -5041,27 +5304,21 @@ var AgentService = class {
     const spec = await this.experimentManager.readSpec();
     if (spec.missingInitialFields.length > 0) {
       if (this.messages.length === 0) {
-        const firstMissing = spec.missingInitialFields[0];
-        let promptText = "";
-        let chips = [];
-        if (firstMissing === "PATH_TO_DATA_FILE") {
-          promptText = "\u{1F44B} **Welcome to TidyProteomicsAgent!**\n\nI am your **Live Agent**. Before starting the pipeline, let's configure your experiment.\n\n\u{1F449} **Question 1/4**: What is the file path or URL to your proteomics data file? *(e.g. `data/raw/ProteomeDiscoverer_proteins.xlsx` or `data/raw/data.rds`)*";
-          chips = ["data/raw/tidyproteomics_data.rds", "Select File..."];
-        } else if (firstMissing === "PLATFORM") {
-          promptText = "\u{1F449} **Question 2/4**: Which mass spectrometry search platform generated this data?";
-          chips = ["ProteomeDiscoverer", "MaxQuant", "DIA-NN", "Spectronaut", "FragPipe", "tidyproteomics"];
-        } else if (firstMissing === "ANALYTE") {
-          promptText = "\u{1F449} **Question 3/4**: Is this dataset measuring `proteins` or `peptides`?";
-          chips = ["proteins", "peptides"];
-        } else if (firstMissing === "DESCRIPTION") {
-          promptText = "\u{1F449} **Question 4/4**: Could you briefly describe this experiment? *(e.g. biological model, treatment conditions, disease vs control groups, and key hypotheses)*";
-        }
+        const promptText = "\u{1F44B} **Welcome to TidyProteomicsAgent!**\n\nI am your live computational proteomics partner. I configure your study design and execute the 12-phase pipeline autonomously.\n\nTell me about your experiment in your own words (data file location, search platform, analyte, and comparison groups), or select a sample option below to get started!";
+        const chips = [
+          "data/raw/tidyproteomics_data.rds",
+          "ProteomeDiscoverer",
+          "DIA-NN",
+          "MaxQuant",
+          "Review docs/experiment.md \u2197"
+        ];
         this.messages.push({
           id: "msg_onboard_" + Date.now(),
           role: "assistant",
           content: promptText,
           timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
-          quickChips: chips
+          quickChips: chips,
+          type: "message"
         });
         this.notifyUpdated();
         return true;
@@ -5070,14 +5327,65 @@ var AgentService = class {
       this.messages.push({
         id: "msg_ready_" + Date.now(),
         role: "assistant",
-        content: "\u{1F44B} **Welcome back to TidyProteomicsAgent!**\n\nI reviewed `docs/experiment.md` and confirmed that all initial dataset parameters and your experiment description are configured! \u{1F680}\n\n**Ready to start the autonomous analysis pipeline?**",
+        content: "\u{1F44B} **Welcome back to TidyProteomicsAgent!**\n\nI reviewed `docs/experiment.md` and confirmed that all dataset parameters and your study hypothesis are configured! \u{1F680}\n\n**Ready to start the autonomous analysis pipeline?**",
         timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
-        quickChips: ["\u26A1 Yes, Start Pipeline", "Review docs/experiment.md \u2197"]
+        quickChips: ["\u26A1 Yes, Start Pipeline", "Review docs/experiment.md \u2197"],
+        type: "message"
       });
       this.notifyUpdated();
       return true;
     }
     return false;
+  }
+  /**
+   * Posts or updates the live, in-progress activity status in the Agent panel.
+   */
+  handleStageActivity(phase, actionText) {
+    const activityId = `activity_${phase.id}`;
+    const title = phase.title || phase.fileName;
+    const existingIdx = this.messages.findIndex((m) => m.id === activityId);
+    const msg = {
+      id: activityId,
+      role: "assistant",
+      content: actionText,
+      timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
+      type: "activity",
+      phaseId: phase.id,
+      phaseTitle: title,
+      badge: "In Progress"
+    };
+    if (existingIdx >= 0) {
+      this.messages[existingIdx] = msg;
+    } else {
+      this.messages.push(msg);
+    }
+    this.notifyUpdated();
+  }
+  /**
+   * Appends a structured scientific observation card discovered during phase execution.
+   */
+  handleStageObservation(phase, text, metadata) {
+    const cleanText = String(text || "").trim();
+    if (!cleanText)
+      return;
+    const isDuplicate = this.messages.some(
+      (m) => m.type === "observation" && m.phaseId === phase.id && m.content === cleanText
+    );
+    if (isDuplicate)
+      return;
+    const title = phase.title || phase.fileName;
+    const msg = {
+      id: `obs_${phase.id}_${Date.now()}`,
+      role: "assistant",
+      content: cleanText,
+      timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
+      type: "observation",
+      phaseId: phase.id,
+      phaseTitle: title,
+      badge: metadata?.badge || "Observation"
+    };
+    this.messages.push(msg);
+    this.notifyUpdated();
   }
   /**
    * Pushes a real-time activity card into the Agent chat when a phase starts execution.
@@ -5091,19 +5399,28 @@ var AgentService = class {
     const msg = {
       id: "msg_start_" + phase.id + "_" + Date.now(),
       role: "assistant",
-      content: `\u25B6 **[Starting Phase ${phase.id}]** ${title}`,
-      timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString()
+      content: `\u25B6 **Starting Phase ${phase.id}:** ${title}`,
+      timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
+      type: "milestone",
+      phaseId: phase.id,
+      phaseTitle: title,
+      badge: "Phase Started"
     };
     this.messages.push(msg);
     this.notifyUpdated();
   }
   /**
    * Called when a phase completes successfully.
-   * Pushes a completion summary card into Agent chat.
+   * Removes in-progress activity and pushes a completion summary card into Agent chat.
    */
   async handlePhaseCompleted(phase) {
     if (this.lastHaltedPhaseId === phase.id) {
       this.lastHaltedPhaseId = void 0;
+    }
+    const activityId = `activity_${phase.id}`;
+    const actIdx = this.messages.findIndex((m) => m.id === activityId);
+    if (actIdx >= 0) {
+      this.messages.splice(actIdx, 1);
     }
     const key = `completed_${phase.id}_${phase.endTime || Date.now()}`;
     if (!this.phaseEventsPosted.has(key)) {
@@ -5115,8 +5432,12 @@ var AgentService = class {
       const msg = {
         id: "msg_done_" + phase.id + "_" + Date.now(),
         role: "assistant",
-        content: `\u2713 **[Completed Phase ${phase.id}]** ${title}${metrics ? ` (${metrics})` : ""}`,
-        timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString()
+        content: `\u2713 **Phase ${phase.id} Complete:** ${title}${metrics ? ` (${metrics})` : ""}`,
+        timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
+        type: "milestone",
+        phaseId: phase.id,
+        phaseTitle: title,
+        badge: "Phase Completed"
       };
       this.messages.push(msg);
       this.notifyUpdated();
@@ -5161,7 +5482,15 @@ var AgentService = class {
     const isConfounding = /confound|Proceed With Potential Batch Confounding|Authorize Unadjusted Exploratory Comparison/i.test(errorText);
     const isSampleGrouping = /sample group|recoding|pooling|Section 3\.?B|reassign sample names/i.test(errorText);
     const isContrastNeeded = /contrast|target contrast|disease\/control|Section 3\.?C/i.test(errorText);
-    if (phase.id === "04" && (isConfounding || isContrastNeeded)) {
+    const isImputationNeeded = /imputation|Section 3\.?E|Confirm Imputation Strategy|randomforest_grouped|min_column/i.test(errorText);
+    if (phase.id === "03" || isImputationNeeded) {
+      questionPrompt = `\u{1F9EC} **Imputation Strategy Confirmation in ${phase.title || phase.fileName}**
+
+Per Karpievitch et al. (*BMC Bioinformatics* 2012), Random Forest (\`randomforest_grouped\`: \`impute.randomforest, method = 'matrix', group_by_sample = TRUE\`) excels for general MAR missingness, whereas column-wise minimum (\`min_column\`: \`base::min, method = 'column'\`) is recommended for intentional gene knockouts, suppressions, or MNAR binary switches.
+
+Would you like to confirm the recommended strategy in Section 3.E of \`docs/experiment.md\` or switch methods?`;
+      chips = ["\u{1F3AF} Confirm Imputation & Proceed", "Use Random Forest (MAR Default)", "Use Column Min (MNAR / Knockout)", "Review docs/experiment.md \u2197"];
+    } else if (phase.id === "04" && (isConfounding || isContrastNeeded)) {
       questionPrompt = `\u{1F3AF} **Contrast Confirmation & Confounding Authorization in ${phase.title || phase.fileName}**
 
 Phase 4 requires confirmation of target contrasts in Section 3.C and authorization of exploratory linear modeling in Section 3.D.
@@ -5267,14 +5596,16 @@ ${llm || "Not specified."}
 - **Engine**: Persistent in-memory tidyproteomics R session via Model Context Protocol (MCP).
 - **Live In-Memory Workflow**: Automated ingestion (\`tpa_load\`), QC inspection (\`tpa_inspect\`, \`tpa_summary\`), normalization benchmarking (\`tpa_normalize\`), quantitative imputation (\`tpa_impute\`), differential expression (\`tpa_expression\`), pathway enrichment (\`tpa_enrichment\`), and state export (\`tpa_export_state\`).
 
-### AGENT RESPONSIBILITIES & TOOL CALLING:
-1. **Interactive Setup**: If initial variables are missing, guide the user step-by-step. When the user provides a dataset path, platform, analyte, or description, invoke the corresponding tool (\`update_experiment_parameters\` or \`update_experiment_description\`) to update \`docs/experiment.md\` immediately!
-2. **Launch Permission**: When all 4 initial fields are satisfied, ask the user if they are ready to start. When they confirm (e.g. "yes", "start", "proceed"), call \`start_or_resume_pipeline\`.
-3. **Resolve Phase Errors**:
-   - If user specifies sample group renaming or pooling, call \`update_sample_renaming\` and resume the pipeline!
-   - If user specifies target contrasts (e.g. "disease/control" or "test cancer vs normal"), call \`update_target_contrasts\` and resume the pipeline!
-   - If user agrees to proceed despite batch confounding, call \`authorize_batch_confounding(authorized = true)\` and resume the pipeline!
-4. **Direct, Clear Explanations**: When calling tools, explain clearly to the user what was saved to \`docs/experiment.md\` and what happens next.
+### AGENT RESPONSIBILITIES & FREE-FORM NATURAL PROMPT RESOLUTION:
+1. **Natural Conversational Setup**: The researcher can describe their experiment freely in plain English (e.g. data file location, search platform, analyte, treatment vs control conditions, and biological hypothesis). You MUST parse all stated parameters and immediately invoke the corresponding tools:
+   - Call \`update_experiment_parameters({ pathToDataFile, platform, analyte })\` for any dataset path, platform, or analyte mentioned.
+   - Call \`update_target_contrasts({ contrasts: [...] })\` for any treatment/control comparisons mentioned (e.g. \`["KO vs WT"]\`).
+   - Call \`update_experiment_description({ description })\` for the biological hypothesis, model system, or study goals.
+   - If the researcher says to run/start the pipeline, call \`start_or_resume_pipeline\`.
+2. **Concise, Professional Paraphrases**: In your conversational response, do NOT ask robotic multi-part questionnaires. Paraphrase what you configured in 1\u20132 friendly sentences, mention what (if anything) remains to configure, and ask if they are ready to proceed.
+3. **Interactive Error & Checkpoint Resolution**:
+   - If user provides sample group mappings, call \`update_sample_renaming\`.
+   - If user confirms contrast or confounding, call \`update_target_contrasts\` and \`authorize_batch_confounding(authorized = true)\` and resume.
 `.trim();
   }
   /**
@@ -5373,56 +5704,39 @@ ${llm || "Not specified."}
       }
       const isAuthorizeAffirmative = /^(authorize|authorize and resume|authorize confounding|yes,? authorize|yes,? proceed|⚡ authorize confounding & resume)$/i.test(lower);
       const isConfirmContrastAffirmative = /^(🎯\s*)?confirm contrast(?:\s*(&|and)\s*proceed)?$/i.test(trimmed) || /\bconfirm contrast\b/i.test(lower) && /\bproceed\b/i.test(lower) || /\bconfirm.*contrast.*proceed\b/i.test(lower);
+      const isConfirmImputationAffirmative = /^(🎯\s*)?confirm imputation(?:\s*(&|and)\s*proceed)?$/i.test(trimmed) || /^use random forest/i.test(trimmed) || /^use column min/i.test(trimmed) || /\bconfirm imputation\b/i.test(lower);
       const preSpec = await this.experimentManager.readSpec();
-      if (preSpec.missingInitialFields.length > 0) {
-        const step = preSpec.missingInitialFields[0];
-        let reply = "";
-        let chips = [];
-        if (step === "PATH_TO_DATA_FILE") {
-          console.log("[AgentService] Saving PATH_TO_DATA_FILE:", trimmed);
-          await this.experimentManager.setParameter("PATH_TO_DATA_FILE", trimmed);
-          reply = `\u2705 **Saved Data File**: Configured \`PATH_TO_DATA_FILE: ${trimmed}\` in \`docs/experiment.md\`.
-
-\u{1F449} **Question 2/4**: Which mass spectrometry search platform generated this data?`;
-          chips = ["ProteomeDiscoverer", "MaxQuant", "DIA-NN", "Spectronaut", "FragPipe", "tidyproteomics"];
-        } else if (step === "PLATFORM") {
-          console.log("[AgentService] Saving PLATFORM:", trimmed);
+      const isSimpleChipAnswer = trimmed.length < 50 && !trimmed.includes("\n") && !trimmed.includes(" ") && (/^(ProteomeDiscoverer|MaxQuant|DIA-NN|Spectronaut|FragPipe|tidyproteomics)$/i.test(trimmed) || /^(proteins|peptides)$/i.test(trimmed) || /^(?:data\/[a-zA-Z0-9_\-./]+\.(?:rds|xlsx|txt|tsv|csv)|[a-zA-Z0-9_\-./]+\.(?:rds|xlsx|txt|tsv|csv))$/i.test(trimmed));
+      if (isSimpleChipAnswer && preSpec.missingInitialFields.length > 0) {
+        if (/^(ProteomeDiscoverer|MaxQuant|DIA-NN|Spectronaut|FragPipe|tidyproteomics)$/i.test(trimmed)) {
           await this.experimentManager.setParameter("PLATFORM", trimmed);
-          reply = `\u2705 **Saved Search Platform**: Configured \`PLATFORM: ${trimmed}\` in \`docs/experiment.md\`.
-
-\u{1F449} **Question 3/4**: Is this dataset measuring \`proteins\` or \`peptides\`?`;
-          chips = ["proteins", "peptides"];
-        } else if (step === "ANALYTE") {
-          console.log("[AgentService] Saving ANALYTE:", trimmed);
-          await this.experimentManager.setParameter("ANALYTE", trimmed);
-          reply = `\u2705 **Saved Analyte**: Configured \`ANALYTE: ${trimmed}\` in \`docs/experiment.md\`.
-
-\u{1F449} **Question 4/4**: Could you briefly describe this experiment? *(e.g. biological model, treatment conditions, disease vs control groups, and key hypotheses)*`;
-        } else if (step === "DESCRIPTION") {
-          console.log("[AgentService] Saving DESCRIPTION");
-          await this.experimentManager.setDescription(trimmed);
-          reply = `\u2705 **Saved Experiment Description**: Updated Section 2 in \`docs/experiment.md\`.
-
-\u{1F389} **All dataset parameters and study description are now configured!** \u{1F680}
-
-**Ready to start the autonomous analysis pipeline?**`;
-          chips = ["\u26A1 Yes, Start Pipeline", "Review docs/experiment.md \u2197"];
+        } else if (/^(proteins|peptides)$/i.test(trimmed)) {
+          await this.experimentManager.setParameter("ANALYTE", trimmed.toLowerCase());
+        } else if (/\.(rds|xlsx|txt|tsv|csv)$/i.test(trimmed)) {
+          await this.experimentManager.setParameter("PATH_TO_DATA_FILE", trimmed);
         }
-        if (reply) {
-          if (onToken)
-            onToken(reply);
-          const agentMsg2 = {
-            id: "msg_" + Date.now() + "_a",
-            role: "assistant",
-            content: reply,
-            timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
-            quickChips: chips.length > 0 ? chips : void 0
-          };
-          this.messages.push(agentMsg2);
-          await this.logAgentTurn(userText, reply);
-          this.notifyUpdated();
-          return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
-        }
+      }
+      if (isConfirmImputationAffirmative) {
+        const chosenMethod = /^use column min/i.test(trimmed) ? "min_column" : /^use random forest/i.test(trimmed) ? "randomforest_grouped" : void 0;
+        const finalMethod = await this.experimentManager.setImputationStrategy(chosenMethod, true);
+        const reply = `\u2705 **Confirmed Imputation Strategy**: Set \`Imputation Method: ${finalMethod}\` and \`Confirm Imputation Strategy: TRUE\` in Section 3.E of \`docs/experiment.md\`.
+
+Resuming missing value imputation (Phase 03)...`;
+        if (onToken)
+          onToken(reply);
+        const agentMsg2 = {
+          id: "msg_" + Date.now() + "_a",
+          role: "assistant",
+          content: reply,
+          timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString()
+        };
+        this.messages.push(agentMsg2);
+        const resumeId = this.lastHaltedPhaseId || "03";
+        this.lastHaltedPhaseId = void 0;
+        await this.triggerResume(resumeId);
+        await this.logAgentTurn(userText, reply);
+        this.notifyUpdated();
+        return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
       }
       if (isConfirmContrastAffirmative || this.lastHaltedPhaseId && isAuthorizeAffirmative) {
         const confirmed = await this.experimentManager.confirmContrastAndAuthorizeConfounding();
@@ -5674,6 +5988,13 @@ Resuming differential expression analysis now...`;
                 pipelineTriggered = true;
                 break;
               }
+              case "set_imputation_strategy": {
+                const finalMethod = await this.experimentManager.setImputationStrategy(tc.args?.method, tc.args?.confirmed !== false);
+                executedActionSummary += `
+\u2022 Configured Imputation Strategy to \`${finalMethod}\` (Confirmed: \`${tc.args?.confirmed !== false ? "TRUE" : "FALSE"}\`) in Section 3E`;
+                pipelineTriggered = true;
+                break;
+              }
               case "start_or_resume_pipeline":
               case "resume_pipeline": {
                 pipelineTriggered = true;
@@ -5713,16 +6034,16 @@ Resuming differential expression analysis now...`;
       if (postSpec.missingInitialFields.length > 0) {
         const nextMissing = postSpec.missingInitialFields[0];
         if (nextMissing === "PLATFORM") {
-          followUpQuestion = "\n\n\u{1F449} **Question 2/4**: Which mass spectrometry search platform generated this data?";
+          followUpQuestion = "\n\nCould you also specify which mass spectrometry search platform generated this data?";
           followUpChips = ["ProteomeDiscoverer", "MaxQuant", "DIA-NN", "Spectronaut", "FragPipe", "tidyproteomics"];
         } else if (nextMissing === "ANALYTE") {
-          followUpQuestion = "\n\n\u{1F449} **Question 3/4**: Is this dataset measuring `proteins` or `peptides`?";
+          followUpQuestion = "\n\nIs this dataset measuring `proteins` or `peptides`?";
           followUpChips = ["proteins", "peptides"];
         } else if (nextMissing === "DESCRIPTION") {
-          followUpQuestion = "\n\n\u{1F449} **Question 4/4**: Could you briefly describe this experiment? *(e.g. biological model, treatment conditions, disease vs control groups, and key questions)*";
+          followUpQuestion = "\n\nCould you briefly share your biological hypothesis or comparison model? *(e.g. treatment vs vehicle, knockout vs control)*";
         }
       } else if (executedActionSummary && !pipelineTriggered) {
-        followUpQuestion = "\n\n\u{1F389} **All dataset parameters and study description are set up in `docs/experiment.md`!**\n\nAre you ready to start the autonomous analysis pipeline?";
+        followUpQuestion = "\n\n\u{1F389} **All dataset parameters and study description are set up in `docs/experiment.md`!**\n\nReady to start the autonomous analysis pipeline?";
         followUpChips = ["\u26A1 Yes, Start Pipeline", "Review docs/experiment.md \u2197"];
       }
       let finalReply = accumulatedContent;
@@ -5732,7 +6053,7 @@ Resuming differential expression analysis now...`;
       if (executedActionSummary && !finalReply.includes("docs/experiment.md")) {
         finalReply = (finalReply ? finalReply + "\n\n" : "") + `\u{1F4BE} **Updated \`docs/experiment.md\`:**${executedActionSummary}`;
       }
-      if (followUpQuestion && !finalReply.includes("Question")) {
+      if (followUpQuestion && !finalReply.toLowerCase().includes("pipeline?") && !finalReply.toLowerCase().includes("platform")) {
         finalReply += followUpQuestion;
       }
       if (this.abortRequested) {
@@ -6199,7 +6520,9 @@ var SidebarViewProvider = class {
       this.tools,
       (state) => this.sendStateUpdate(state),
       (log, updateLast) => this.sendLog(log, updateLast),
-      this.getExtensionVersion()
+      this.getExtensionVersion(),
+      (phase, text) => this.agentService?.handleStageActivity(phase, text),
+      (phase, text, meta) => this.agentService?.handleStageObservation(phase, text, meta)
     );
     this.ingestionRunner = new IngestionRunner(
       this.literatureService,
@@ -6690,6 +7013,10 @@ var SidebarViewProvider = class {
                   /-\s*\*\*Authorize Unadjusted Exploratory Comparison\*\*:\s*FALSE/i,
                   "- **Authorize Unadjusted Exploratory Comparison**: TRUE"
                 );
+                content = content.replace(
+                  /-\s*\*\*Confirm Imputation Strategy\*\*:\s*FALSE/i,
+                  "- **Confirm Imputation Strategy**: TRUE"
+                );
                 content = content.replace(/👉\s*\[USER ACTION REQUIRED - DEFINE TARGET CONTRASTS\]:?/gi, "");
                 content = content.replace(/\(suggested contrast requiring confirmation\)/gi, "");
                 if (!content.includes("Status: CONFIRMED")) {
@@ -6700,8 +7027,9 @@ var SidebarViewProvider = class {
                 }
                 await fs11.promises.writeFile(expPath, content, "utf-8");
               }
-              vscode4.window.showInformationMessage("TidyProteomicsAgent: Target contrast confirmed & batch confounding authorized in docs/experiment.md. Resuming Phase 4...");
               const phaseId = data.phaseId || "04";
+              const msgLabel = phaseId === "03" ? "TidyProteomicsAgent: Imputation strategy confirmed in docs/experiment.md. Resuming Phase 3..." : "TidyProteomicsAgent: Target contrast confirmed & batch confounding authorized in docs/experiment.md. Resuming Phase 4...";
+              vscode4.window.showInformationMessage(msgLabel);
               if (phaseId && this.orchestrator) {
                 await this.syncActiveModelSummary();
                 this.orchestrator.resumePipeline(phaseId).catch((err) => {
@@ -8034,7 +8362,7 @@ var SidebarViewProvider = class {
       min-height: 0;
     }
 
-    /* Live Agent Chat Styles */
+    /* Modern Agent Chat Styles */
     .agent-container, .advisor-container {
       display: flex;
       flex-direction: column;
@@ -8047,17 +8375,52 @@ var SidebarViewProvider = class {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 6px 8px;
+      padding: 7px 10px;
       background: var(--card-bg);
       border: 1px solid var(--border);
-      border-radius: 4px;
+      border-radius: 6px;
       flex-shrink: 0;
+    }
+    .agent-status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--success, #10b981);
+      display: inline-block;
+      transition: all 0.3s ease;
+    }
+    .agent-status-dot.active {
+      background: var(--primary, #3b82f6);
+      box-shadow: 0 0 8px rgba(59, 130, 246, 0.7);
+      animation: pulseDot 1.4s infinite ease-in-out;
+    }
+    @keyframes pulseDot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.45; transform: scale(1.3); }
+    }
+    .btn-subtle {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      color: var(--fg);
+      font-size: 10px;
+      border-radius: 4px;
+      padding: 2px 7px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn-subtle:hover, .btn-subtle.active {
+      background: rgba(59, 130, 246, 0.15);
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+    .contrast-designer-card.collapsed {
+      display: none !important;
     }
     .agent-suggestions, .advisor-suggestions {
       display: flex;
-      gap: 4px;
+      gap: 5px;
       overflow-x: auto;
-      padding-bottom: 2px;
+      padding: 2px 0;
       flex-shrink: 0;
       scrollbar-width: none;
     }
@@ -8065,12 +8428,12 @@ var SidebarViewProvider = class {
       display: none;
     }
     .agent-chip, .advisor-chip {
-      background: rgba(59, 130, 246, 0.1);
+      background: rgba(59, 130, 246, 0.08);
       color: #93c5fd;
       border: 1px solid rgba(59, 130, 246, 0.25);
       border-radius: 12px;
-      padding: 3px 8px;
-      font-size: 9.5px;
+      padding: 4px 9px;
+      font-size: 10px;
       font-weight: 500;
       white-space: nowrap;
       cursor: pointer;
@@ -8081,41 +8444,47 @@ var SidebarViewProvider = class {
       background: var(--primary);
       color: #fff;
       border-color: var(--primary);
+      transform: translateY(-1px);
     }
     .agent-thread, .advisor-thread {
       flex: 1 1 auto;
-      min-height: 120px;
+      min-height: 140px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 9px;
       padding: 4px 2px;
       margin-bottom: 4px;
     }
     .agent-msg, .advisor-msg {
       display: flex;
-      gap: 6px;
+      gap: 7px;
       max-width: 100%;
+      animation: fadeInMsg 0.2s ease-out;
+    }
+    @keyframes fadeInMsg {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
     }
     .agent-msg.user, .advisor-msg.user {
       flex-direction: row-reverse;
     }
     .agent-avatar, .advisor-avatar {
-      width: 22px;
-      height: 22px;
+      width: 24px;
+      height: 24px;
       border-radius: 50%;
       background: rgba(59, 130, 246, 0.2);
       color: #60a5fa;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 11px;
+      font-size: 12px;
       flex-shrink: 0;
       margin-top: 2px;
     }
     .agent-avatar .svg-icon, .advisor-avatar .svg-icon {
-      width: 13px;
-      height: 13px;
+      width: 14px;
+      height: 14px;
     }
     .agent-msg.user .agent-avatar, .advisor-msg.user .advisor-avatar {
       background: rgba(16, 185, 129, 0.2);
@@ -8124,25 +8493,83 @@ var SidebarViewProvider = class {
     .agent-bubble, .advisor-bubble {
       background: var(--card-bg);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 8px 10px;
+      border-radius: 8px;
+      padding: 9px 12px;
       font-size: 11px;
-      line-height: 1.45;
+      line-height: 1.5;
       color: var(--fg);
-      max-width: 88%;
+      max-width: 92%;
       word-break: break-word;
       overflow-wrap: break-word;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
     }
     .agent-msg.user .agent-bubble, .advisor-msg.user .advisor-bubble {
-      background: rgba(59, 130, 246, 0.15);
-      border-color: rgba(59, 130, 246, 0.35);
-      color: #dbeafe;
+      background: rgba(59, 130, 246, 0.18);
+      border-color: rgba(59, 130, 246, 0.4);
+      color: #e0f2fe;
+    }
+    /* Dynamic Live Activity Card */
+    .agent-msg.activity .agent-bubble {
+      background: rgba(59, 130, 246, 0.08);
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      box-shadow: 0 2px 10px rgba(59, 130, 246, 0.06);
+    }
+    .activity-spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid rgba(59, 130, 246, 0.25);
+      border-top-color: var(--primary, #3b82f6);
+      border-radius: 50%;
+      animation: agentSpin 0.75s linear infinite;
+      display: inline-block;
+    }
+    @keyframes agentSpin {
+      to { transform: rotate(360deg); }
+    }
+    .activity-badge {
+      font-size: 8.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      padding: 1px 5px;
+      border-radius: 6px;
+      background: rgba(59, 130, 246, 0.2);
+      color: #93c5fd;
+    }
+    /* Scientific Observation Card */
+    .agent-msg.observation .agent-bubble {
+      background: linear-gradient(145deg, rgba(139, 92, 246, 0.1) 0%, rgba(59, 130, 246, 0.05) 100%);
+      border: 1px solid rgba(139, 92, 246, 0.4);
+      box-shadow: 0 3px 12px rgba(139, 92, 246, 0.08);
+    }
+    .agent-msg.observation .agent-avatar {
+      background: rgba(139, 92, 246, 0.25);
+      color: #c084fc;
+    }
+    .obs-badge {
+      font-size: 8.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      padding: 1px 6px;
+      border-radius: 8px;
+      background: rgba(139, 92, 246, 0.25);
+      color: #d8b4fe;
+    }
+    /* Phase Milestone Card */
+    .agent-msg.milestone .agent-bubble {
+      background: rgba(16, 185, 129, 0.08);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+    }
+    .agent-msg.milestone .agent-avatar {
+      background: rgba(16, 185, 129, 0.25);
+      color: #34d399;
     }
     .agent-msg-title, .advisor-msg-title {
       font-size: 9.5px;
       font-weight: 700;
       color: var(--primary);
-      margin-bottom: 4px;
+      margin-bottom: 5px;
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -8153,7 +8580,7 @@ var SidebarViewProvider = class {
     .agent-msg-body code, .advisor-msg-body code {
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 10px;
-      background: rgba(0, 0, 0, 0.3);
+      background: rgba(0, 0, 0, 0.35);
       padding: 1px 4px;
       border-radius: 3px;
       border: 1px solid rgba(255, 255, 255, 0.08);
@@ -8951,17 +9378,20 @@ var SidebarViewProvider = class {
   <div class="tab-pane active" id="pane-chat" style="display:flex;">
     <div class="agent-container advisor-container">
       <div class="agent-header advisor-header">
-        <div style="display:flex; align-items:center; gap:6px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="agent-status-dot" id="agentStatusDot"></span>
           <span style="font-size:13px; color:var(--primary); display:inline-flex; align-items:center;">${icons["robot"] || icons["chat"] || ""}</span>
           <h3 style="margin:0; font-size:12px; font-weight:600;">Autonomous Agent</h3>
+          <span class="badge" id="agentStatusBadge" style="font-size:8.5px; padding:1px 6px; border-radius:10px; background:rgba(59,130,246,0.15); color:var(--primary);">READY</span>
         </div>
         <div style="display:flex; align-items:center; gap:6px;">
-          <button type="button" class="btn-sm" id="agentClearBtn" title="Clear conversation history">Clear</button>
+          <button type="button" class="btn-subtle" id="toggleDesignerBtn" title="Toggle Visual Contrast & Study Designer" onclick="window.toggleContrastDesigner && window.toggleContrastDesigner()">\u{1F3AF} Designer</button>
+          <button type="button" class="btn-subtle" id="agentClearBtn" title="Clear conversation history">Clear</button>
         </div>
       </div>
 
-      <!-- Visual Contrast & Batch Designer Widget -->
-      <div class="contrast-designer-card" id="contrastDesignerCard">
+      <!-- Visual Contrast & Batch Designer Widget (Collapsible - default hidden to prioritize natural stream) -->
+      <div class="contrast-designer-card collapsed" id="contrastDesignerCard" style="display:none;">
         <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
           <div style="font-weight:600; font-size:11px; display:flex; align-items:center; gap:6px;">
             <span>\u{1F3AF}</span> Visual Contrast & Study Designer
@@ -10520,6 +10950,7 @@ var SidebarViewProvider = class {
                 const hasNotesDoc = /notes.md/i.test(errorText);
                 const isContrastNeeded = /Section 3.?C|suggested contrast|unconfirmed.*contrast|target contrast/i.test(errorText);
                 const isConfounding = /confound|Proceed With Potential Batch Confounding|Authorize Unadjusted Exploratory Comparison/i.test(errorText);
+                const isImputationNeeded = /imputation|Section 3.?E|Confirm Imputation Strategy|randomforest_grouped|min_column/i.test(errorText);
                 const isLlmApiError = /LLM API Error|API error|fetch failed|network connection failed|ConnectTimeoutError|ENOTFOUND|ECONNREFUSED|ECONNRESET|authentication failed|rate limited|timed? ?out/i.test(errorText);
 
                 let linksHtml = "";
@@ -10536,10 +10967,12 @@ var SidebarViewProvider = class {
                   }
                 } else {
                   if (hasExpDoc) {
-                    const searchPrompt = isContrastNeeded ? "3.C" : (isConfounding ? "Proceed With Potential Batch Confounding" : "REQUIRED");
+                    const searchPrompt = isImputationNeeded ? "Confirm Imputation Strategy" : (isContrastNeeded ? "3.C" : (isConfounding ? "Proceed With Potential Batch Confounding" : "REQUIRED"));
                     linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/experiment.md" data-search="' + searchPrompt + '" title="Open docs/experiment.md and jump directly to relevant section">Edit docs/experiment.md \u2197</button>';
                   }
-                  if (p.id === "04" && (isContrastNeeded || isConfounding)) {
+                  if (p.id === "03" || isImputationNeeded) {
+                    linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="confirmContrastAndProceed" data-phase-id="' + escapeHtml(p.id) + '" title="Confirm imputation strategy in Section 3.E and resume Phase 3">\u{1F3AF} Confirm Imputation &amp; Proceed</button>';
+                  } else if (p.id === "04" && (isContrastNeeded || isConfounding)) {
                     linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="confirmContrastAndProceed" data-phase-id="' + escapeHtml(p.id) + '" title="Confirm target contrast in Section 3.C, authorize batch confounding in Section 3.D, and resume Phase 4">\u{1F3AF} Confirm Contrast &amp; Proceed</button>';
                   } else if (isContrastNeeded) {
                     linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="confirmContrastAndProceed" data-phase-id="' + escapeHtml(p.id) + '" title="Confirm target contrast and proceed">\u{1F3AF} Confirm Contrast &amp; Proceed</button>';
@@ -10549,7 +10982,7 @@ var SidebarViewProvider = class {
                   if (hasNotesDoc) {
                     linksHtml += '<button type="button" class="btn-insight-link" data-action="openFile" data-path="docs/notes.md">View docs/notes.md \u2197</button>';
                   }
-                  if (!isContrastNeeded && !isConfounding) {
+                  if (!isContrastNeeded && !isConfounding && !isImputationNeeded) {
                     linksHtml += '<button type="button" class="btn-insight-action-primary" data-action="openAgentTab" title="Ask Live Agent to resolve this question">\u{1F4AC} Ask Agent \u2197</button>';
                   }
                 }
@@ -10735,6 +11168,14 @@ var SidebarViewProvider = class {
       if (agentSendBtn) agentSendBtn.style.display = isAgentGenerating ? "none" : "inline-flex";
       if (agentStopBtn) agentStopBtn.style.display = isAgentGenerating ? "inline-flex" : "none";
       if (chatIndicator) chatIndicator.className = isAgentGenerating ? "tab-indicator running" : "tab-indicator";
+      const dot = document.getElementById("agentStatusDot");
+      if (dot) dot.className = isAgentGenerating ? "agent-status-dot active" : "agent-status-dot";
+      const badge = document.getElementById("agentStatusBadge");
+      if (badge) {
+        badge.textContent = isAgentGenerating ? "ANALYZING" : "READY";
+        badge.style.background = isAgentGenerating ? "rgba(59,130,246,0.25)" : "rgba(16,185,129,0.15)";
+        badge.style.color = isAgentGenerating ? "var(--primary)" : "var(--success)";
+      }
     }
     const setAdvisorGenerating = setAgentGenerating;
 
@@ -10748,8 +11189,8 @@ var SidebarViewProvider = class {
           '<div class="agent-bubble advisor-bubble">' +
             '<div class="agent-msg-title advisor-msg-title">TidyProteomics Live Agent</div>' +
             '<div class="agent-msg-body advisor-msg-body">' +
-              'Hello! I am your live proteomics agent. I monitor your experimental design in <code>docs/experiment.md</code>, pipeline execution status, and findings in <code>docs/notes.md</code>.<br><br>' +
-              'Feel free to ask questions about sample grouping, confounding warnings, normalization, differential expression, or biological pathways.' +
+              'Hello! I am your live proteomics agent. I configure your study design in <code>docs/experiment.md</code> and execute the 12-phase pipeline autonomously.<br><br>' +
+              'Feel free to describe your dataset in your own words, ask questions about sample grouping, normalizations, differential expression, or review ongoing observations.' +
             '</div>' +
           '</div>' +
         '</div>';
@@ -10775,14 +11216,54 @@ var SidebarViewProvider = class {
           chipsHtml += '</div>';
         }
 
-        html += '<div class="agent-msg advisor-msg ' + (isUser ? 'user' : 'assistant') + '">' +
-          '<div class="agent-avatar advisor-avatar">' + avatar + '</div>' +
-          '<div class="agent-bubble advisor-bubble">' +
-            '<div class="agent-msg-title advisor-msg-title">' + sender + time + '</div>' +
-            '<div class="agent-msg-body advisor-msg-body">' + body + '</div>' +
-            chipsHtml +
-          '</div>' +
-        '</div>';
+        if (m.type === "activity") {
+          const phaseLabel = m.phaseTitle ? escapeHtml(m.phaseTitle) : "Pipeline Activity";
+          html += '<div class="agent-msg activity-msg activity">' +
+            '<div class="agent-avatar activity-avatar"><span class="activity-spinner"></span></div>' +
+            '<div class="agent-bubble activity-bubble">' +
+              '<div class="agent-msg-title activity-title">' +
+                '<span style="color:var(--primary); font-weight:600;">\u25B6 ' + phaseLabel + '</span>' +
+                '<span class="activity-badge">' + escapeHtml(m.badge || "Live") + '</span>' +
+              '</div>' +
+              '<div class="agent-msg-body activity-body">' + body + '</div>' +
+            '</div>' +
+          '</div>';
+        } else if (m.type === "observation") {
+          const phaseLabel = m.phaseTitle ? escapeHtml(m.phaseTitle) : "Scientific Observation";
+          const badgeLabel = escapeHtml(m.badge || "Observation");
+          html += '<div class="agent-msg observation-msg observation">' +
+            '<div class="agent-avatar obs-avatar">' + (ICONS["sparkles"] || "\u{1F52C}") + '</div>' +
+            '<div class="agent-bubble obs-bubble">' +
+              '<div class="agent-msg-title obs-title">' +
+                '<span style="color:#c084fc; font-weight:600;">' + phaseLabel + '</span>' +
+                '<span class="obs-badge">' + badgeLabel + '</span>' +
+              '</div>' +
+              '<div class="agent-msg-body obs-body">' + body + '</div>' +
+              chipsHtml +
+            '</div>' +
+          '</div>';
+        } else if (m.type === "milestone") {
+          html += '<div class="agent-msg milestone-msg milestone">' +
+            '<div class="agent-avatar done-avatar" style="color:var(--success);">\u2713</div>' +
+            '<div class="agent-bubble done-bubble">' +
+              '<div class="agent-msg-title" style="color:var(--success); font-weight:600;">' +
+                '<span>' + escapeHtml(m.phaseTitle || "Phase Milestone") + time + '</span>' +
+                '<span class="badge" style="background:rgba(16,185,129,0.15); color:var(--success); font-size:8.5px;">DONE</span>' +
+              '</div>' +
+              '<div class="agent-msg-body">' + body + '</div>' +
+              chipsHtml +
+            '</div>' +
+          '</div>';
+        } else {
+          html += '<div class="agent-msg advisor-msg ' + (isUser ? 'user' : 'assistant') + '">' +
+            '<div class="agent-avatar advisor-avatar">' + avatar + '</div>' +
+            '<div class="agent-bubble advisor-bubble">' +
+              '<div class="agent-msg-title advisor-msg-title">' + sender + time + '</div>' +
+              '<div class="agent-msg-body advisor-msg-body">' + body + '</div>' +
+              chipsHtml +
+            '</div>' +
+          '</div>';
+        }
       }
       agentThread.innerHTML = html;
       scrollAgentToBottom();
@@ -11005,6 +11486,24 @@ var SidebarViewProvider = class {
       });
     }
     window.applyContrastFromDesigner = applyContrastFromDesigner;
+
+    function toggleContrastDesigner() {
+      const card = document.getElementById("contrastDesignerCard");
+      const btn = document.getElementById("toggleDesignerBtn");
+      if (!card) return;
+      const isHidden = card.style.display === "none" || card.classList.contains("collapsed");
+      if (isHidden) {
+        card.style.display = "block";
+        card.classList.remove("collapsed");
+        if (btn) btn.classList.add("active");
+        fetchDesignerState();
+      } else {
+        card.style.display = "none";
+        card.classList.add("collapsed");
+        if (btn) btn.classList.remove("active");
+      }
+    }
+    window.toggleContrastDesigner = toggleContrastDesigner;
 
     // Message receiver
     window.addEventListener("message", function (event) {

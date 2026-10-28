@@ -1,5 +1,5 @@
 ---
-tools: [tpa_health, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_export_table, tpa_operations, tpa_extract, tpa_run_code, tpa_export_state, tpa_protein_map, tpa_normalization_sensitivity]
+tools: []
 ---
 
 ### Phase 6: Primary Data-Derived Observations & Extraction
@@ -68,7 +68,10 @@ resolve_reactome_ids <- function(ids) {
 
   unresolved <- setdiff(unique_reactome, names(name_map))
   if (length(unresolved) > 0) {
-    for (rid in unresolved) {
+    old_to <- getOption("timeout")
+    on.exit(options(timeout = old_to), add = TRUE)
+    options(timeout = 5)
+    for (rid in head(unresolved, 20)) {
       suppressWarnings(tryCatch({
         url <- paste0("https://reactome.org/ContentService/data/query/", rid)
         con <- url(url, open = "r")
@@ -112,7 +115,8 @@ emit_table <- function(df, format = "pipe") {
 cat("=== OBJECT SUMMARY ===\n")
 print(tp_data)
 
-analyte_name <- tp_data$analyte
+analyte_name <- if (!is.null(tp_data[["analyte"]])) tp_data[["analyte"]] else "proteins"
+id_col <- if (!is.null(tp_data[["identifier"]])) tp_data[["identifier"]][1] else if (identical(analyte_name, "peptides")) "peptide" else "protein"
 available_terms <- get_annotation_terms(tp_data, format = "vector")
 
 completed_analyses <- get_analyses(tp_data)
@@ -126,9 +130,11 @@ target_uniprot <- "<decided_target_uniprot_or_NULL>"   # e.g., "P01106" or NULL
 emit_md("# Primary Observations Summary (Data-Derived)")
 emit_md("")
 emit_md(sprintf("- **Generated**: %s", format(Sys.time(), "%Y-%m-%d %H:%M:%S")))
-emit_md(sprintf("- **Analyte**: `%s`", analyte_name))
+emit_md(sprintf("- **Analyte**: `%s` (Primary ID: `%s`)", analyte_name, id_col))
 emit_md(sprintf("- **Available Contrasts**: %s", paste(contrast_names, collapse = ", ")))
 emit_md("")
+
+contrast_sig_sets <- list()
 
 for (c_name in contrast_names) {
   c_parts <- strsplit(c_name, "/")[[1]]
@@ -141,28 +147,15 @@ for (c_name in contrast_names) {
   emit_md("")
 
   exp_tbl <- rlang::inject(export_analysis(tp_data, !!rlang::parse_expr(contrast_str), .analysis = "expression"))
+  row_id_col <- if (id_col %in% names(exp_tbl)) id_col else if ("protein" %in% names(exp_tbl)) "protein" else if ("peptide" %in% names(exp_tbl)) "peptide" else names(exp_tbl)[1]
 
   c_clean <- gsub("[^A-Za-z0-9]", ".*", contrast_str)
-  # Load Phase 4 exported expression table containing candidate reliability & imputation metrics (TSV or CSV):
   exp_files <- list.files("data", pattern = sprintf("^table_%s_expression_.*%s.*[.](tsv|csv)$", analyte_name, c_clean), full.names = TRUE, ignore.case = TRUE)
   if (length(exp_files) == 0) {
     exp_files <- list.files("data", pattern = sprintf("^table_.*_expression_.*%s.*[.](tsv|csv)$", c_clean), full.names = TRUE, ignore.case = TRUE)
   }
   if (length(exp_files) == 0) {
     exp_files <- list.files("data", pattern = "^table_.*_expression_.*[.](tsv|csv)$", full.names = TRUE, ignore.case = TRUE)
-  }
-  if (length(exp_files) > 0 && file.exists(exp_files[1])) {
-    csv_tbl <- tryCatch(
-      if (grepl("[.]tsv$", exp_files[1], ignore.case = TRUE)) readr::read_tsv(exp_files[1], show_col_types = FALSE) else readr::read_csv(exp_files[1], show_col_types = FALSE),
-      error = function(e) NULL
-    )
-    if (!is.null(csv_tbl) && nrow(csv_tbl) > 0) {
-      metric_cols <- intersect(c("candidate_reliability", "imputation_bias", "imputation_delta", "log2fc_observed", "imputed_total"), names(csv_tbl))
-      cols_to_add <- setdiff(metric_cols, names(exp_tbl))
-      if (length(cols_to_add) > 0 && "protein" %in% names(exp_tbl) && "protein" %in% names(csv_tbl)) {
-        exp_tbl <- exp_tbl %>% left_join(csv_tbl %>% select(any_of(c("protein", cols_to_add))), by = "protein")
-      }
-    }
   }
 
   # Missing gene symbol fallback and delimiter sanitation (extract GN= from FASTA description)
@@ -172,12 +165,14 @@ for (c_name in contrast_names) {
            NA_character_)
   } else NA_character_
 
+  id_fallback <- as.character(exp_tbl[[row_id_col]])
   exp_tbl <- exp_tbl %>%
     mutate(
       gene_name = coalesce(
         if ("gene_name" %in% names(.)) ifelse(is.na(gene_name) | !nzchar(trimws(gene_name)), NA_character_, gene_name) else NA_character_,
         desc_gn,
-        protein
+        if ("protein" %in% names(.)) as.character(protein) else NA_character_,
+        id_fallback
       ),
       gene_name = gsub(";[[:space:]]+", "; ", gsub(";+", "; ", trimws(gene_name))),
       gene_name = gsub("^[; ]+|[; ]+$", "", gene_name)
@@ -246,35 +241,87 @@ for (c_name in contrast_names) {
   sig_up <- exp_tbl %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05, log2_foldchange >= 1)
   sig_down <- exp_tbl %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05, log2_foldchange <= -1)
 
-  total_features <- length(get_unique_variables(tp_data, "protein", format = "vector"))
+  # Tier 2 (Relaxed FDR / Ratio-Compressed: q <= 0.05, |log2FC| >= 0.38 [~1.3-fold]) & Tier 3 (Nominal p <= 0.05)
+  sig_relaxed_all <- exp_tbl %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05, abs(log2_foldchange) >= 0.38)
+  sig_relaxed_up <- exp_tbl %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05, log2_foldchange >= 0.38)
+  sig_relaxed_down <- exp_tbl %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05, log2_foldchange <= -0.38)
+  sig_nom_up <- exp_tbl %>% filter(!is.na(p_value), p_value <= 0.05, log2_foldchange > 0)
+  sig_nom_down <- exp_tbl %>% filter(!is.na(p_value), p_value <= 0.05, log2_foldchange < 0)
+
+  total_features <- length(get_unique_variables(tp_data, id_col, format = "vector"))
   modeled_features <- nrow(exp_tbl)
   unmodeled_count <- total_features - modeled_features
   emit_md(sprintf("- **Total Features in Dataset (%s)**: %d", analyte_name, total_features))
   emit_md(sprintf("- **Features Modeled in Contrast (%s)**: %d (unmodeled: %d due to all-missing values or condition-exclusive absence)", analyte_name, modeled_features, unmodeled_count))
-  emit_md(sprintf("- **Total Significant (|log2FC| >= 1, q <= 0.05)**: %d", nrow(sig_all)))
-  emit_md(sprintf("- **Total Upregulated (log2FC >= 1, q <= 0.05)**: %d", nrow(sig_up)))
-  emit_md(sprintf("- **Total Downregulated (log2FC <= -1, q <= 0.05)**: %d", nrow(sig_down)))
+  emit_md(sprintf("- **Total Significant (Strict Tier 1: |log2FC| >= 1, q <= 0.05)**: %d (%d upregulated, %d downregulated)", nrow(sig_all), nrow(sig_up), nrow(sig_down)))
+  if (nrow(sig_up) < 3 || nrow(sig_down) < 3) {
+    emit_md(sprintf("- **Relaxed FDR Significant (Tier 2: |log2FC| >= 0.38, q <= 0.05)**: %d (%d upregulated, %d downregulated)", nrow(sig_relaxed_all), nrow(sig_relaxed_up), nrow(sig_relaxed_down)))
+    emit_md(sprintf("- **Nominal Significant (Tier 3: p <= 0.05)**: %d (%d upregulated, %d downregulated)", nrow(sig_nom_up) + nrow(sig_nom_down), nrow(sig_nom_up), nrow(sig_nom_down)))
+  }
   emit_md("")
 
-
-  # Clean, readable display columns for tables (omit broad multi-pathway annotations to preserve table clarity)
-  display_columns <- intersect(
-    c("gene_name", "protein", "description", "log2_foldchange", "p_value", "adj_p_value", "imputation_bias", "candidate_reliability", "imputation_delta"),
-    colnames(exp_tbl)
+  # Record per-contrast significant sets for Multi-Contrast Cross-Comparison
+  active_sig_up <- if (nrow(sig_up) > 0) sig_up else if (nrow(sig_relaxed_up) > 0) sig_relaxed_up else sig_nom_up
+  active_sig_down <- if (nrow(sig_down) > 0) sig_down else if (nrow(sig_relaxed_down) > 0) sig_relaxed_down else sig_nom_down
+  contrast_sig_sets[[contrast_str]] <- list(
+    strict_total = nrow(sig_all),
+    strict_up = nrow(sig_up),
+    strict_down = nrow(sig_down),
+    relaxed_total = nrow(sig_relaxed_all),
+    up_genes = unique(na.omit(active_sig_up$gene_name)),
+    down_genes = unique(na.omit(active_sig_down$gene_name))
   )
 
-  emit_md(sprintf("### Top 10 Upregulated %s", toupper(analyte_name)))
-  top_up <- sig_up %>% arrange(desc(log2_foldchange), adj_p_value) %>% head(10)
+  # Clean, readable display columns for tables (omit broad multi-pathway annotations to preserve table clarity)
+  display_columns <- unique(intersect(
+    c("gene_name", row_id_col, "protein", "peptide", "description", "log2_foldchange", "p_value", "adj_p_value", "imputation_bias", "candidate_reliability", "imputation_delta"),
+    colnames(exp_tbl)
+  ))
+
+  # Tiered Candidate Selection (prevents empty tables on ratio-compressed TMT or low-power clinical datasets)
+  up_tier_label <- "Tier 1 (Strict: |log2FC| >= 1, q <= 0.05)"
+  cand_pool_up <- sig_up
+  if (nrow(cand_pool_up) < 3 && nrow(sig_relaxed_up) >= nrow(cand_pool_up) && nrow(sig_relaxed_up) > 0) {
+    cand_pool_up <- sig_relaxed_up
+    up_tier_label <- "Tier 2 Fallback (Relaxed FDR: log2FC >= 0.38, q <= 0.05)"
+  }
+  if (nrow(cand_pool_up) < 3 && nrow(sig_nom_up) > 0) {
+    cand_pool_up <- sig_nom_up
+    up_tier_label <- "Tier 3 Fallback (Nominal: p <= 0.05, log2FC > 0)"
+  }
+  if (nrow(cand_pool_up) == 0) {
+    cand_pool_up <- exp_tbl %>% filter(!is.na(log2_foldchange), log2_foldchange > 0)
+    up_tier_label <- "Tier 4 Fallback (Unthresholded Top Positive Fold-Change)"
+  }
+
+  down_tier_label <- "Tier 1 (Strict: |log2FC| >= 1, q <= 0.05)"
+  cand_pool_down <- sig_down
+  if (nrow(cand_pool_down) < 3 && nrow(sig_relaxed_down) >= nrow(cand_pool_down) && nrow(sig_relaxed_down) > 0) {
+    cand_pool_down <- sig_relaxed_down
+    down_tier_label <- "Tier 2 Fallback (Relaxed FDR: log2FC <= -0.38, q <= 0.05)"
+  }
+  if (nrow(cand_pool_down) < 3 && nrow(sig_nom_down) > 0) {
+    cand_pool_down <- sig_nom_down
+    down_tier_label <- "Tier 3 Fallback (Nominal: p <= 0.05, log2FC < 0)"
+  }
+  if (nrow(cand_pool_down) == 0) {
+    cand_pool_down <- exp_tbl %>% filter(!is.na(log2_foldchange), log2_foldchange < 0)
+    down_tier_label <- "Tier 4 Fallback (Unthresholded Top Negative Fold-Change)"
+  }
+
+  emit_md(sprintf("### Top 10 Upregulated %s (%s)", toupper(analyte_name), up_tier_label))
+  top_up <- cand_pool_up %>% arrange(desc(log2_foldchange), adj_p_value, p_value) %>% head(10)
   emit_table(top_up %>% select(any_of(display_columns)) %>% format_stats())
 
-  emit_md(sprintf("### Top 10 Downregulated %s", toupper(analyte_name)))
-  top_down <- sig_down %>% arrange(log2_foldchange, adj_p_value) %>% head(10)
+  emit_md(sprintf("### Top 10 Downregulated %s (%s)", toupper(analyte_name), down_tier_label))
+  top_down <- cand_pool_down %>% arrange(log2_foldchange, adj_p_value, p_value) %>% head(10)
   emit_table(top_down %>% select(any_of(display_columns)) %>% format_stats())
 
   # Top robust candidates ranked by volcano pi-score: |log2FC| * -log10(adj_p_value)
+  pi_pool <- if (nrow(sig_all) >= 5) sig_all else if (nrow(sig_relaxed_all) >= 5) sig_relaxed_all else exp_tbl %>% filter(!is.na(log2_foldchange), !is.na(p_value))
   emit_md(sprintf("### Top 10 Balanced Candidates (Volcano Pi-Score) for %s", contrast_tag))
-  top_pi <- sig_all %>%
-    mutate(pi_score = abs(log2_foldchange) * -log10(pmax(adj_p_value, 1e-10))) %>%
+  top_pi <- pi_pool %>%
+    mutate(pi_score = abs(log2_foldchange) * -log10(pmax(coalesce(adj_p_value, p_value), 1e-10))) %>%
     arrange(desc(pi_score)) %>%
     head(10)
   top_pi_display <- top_pi %>%
@@ -302,9 +349,7 @@ for (c_name in contrast_names) {
       }
       tbl
     }))
-    if (!is.null(enr_tbl) && nrow(enr_tbl) > 0 && "annotation" %in% names(enr_tbl)) {
-      enr_tbl <- enr_tbl %>% dplyr::mutate(annotation = resolve_reactome_ids(annotation))
-    } else {
+    if (is.null(enr_tbl) || nrow(enr_tbl) == 0 || !"annotation" %in% names(enr_tbl)) {
       enr_tbl <- NULL
     }
   }
@@ -324,12 +369,9 @@ for (c_name in contrast_names) {
         error = function(e) NULL
       )
     }))
-    if (!is.null(enr_tbl) && nrow(enr_tbl) > 0 && "annotation" %in% names(enr_tbl)) {
-      enr_tbl <- enr_tbl %>% dplyr::mutate(annotation = resolve_reactome_ids(annotation))
-    }
   }
 
-  if (!is.null(enr_tbl) && nrow(enr_tbl) > 0) {
+  if (!is.null(enr_tbl) && nrow(enr_tbl) > 0 && "annotation" %in% names(enr_tbl)) {
     emit_md(sprintf("### Multi-Category Enrichment for %s", contrast_tag))
     enr_summary <- enr_tbl %>% group_by(term) %>% summarise(
       terms_count = n(),
@@ -339,19 +381,25 @@ for (c_name in contrast_names) {
     emit_table(enr_summary)
 
     emit_md(sprintf("### Top Significant Pathways for %s", contrast_tag))
-    if ("gene_names" %in% names(enr_tbl) && any(!is.na(enr_tbl$gene_names))) {
-      enr_tbl <- enr_tbl %>%
+    sig_enr <- enr_tbl %>%
+      filter(!is.na(adj_p_value), adj_p_value <= 0.05) %>%
+      arrange(adj_p_value) %>%
+      head(15) %>%
+      dplyr::mutate(annotation = resolve_reactome_ids(annotation))
+
+    if ("gene_names" %in% names(sig_enr) && any(!is.na(sig_enr$gene_names))) {
+      sig_enr <- sig_enr %>%
         mutate(top_drivers = sapply(strsplit(as.character(gene_names), ",\\s*"), function(x) paste(head(unique(na.omit(trimws(x))), 4), collapse = ", ")))
-    } else if ("member_genes" %in% names(enr_tbl) && any(!is.na(enr_tbl$member_genes))) {
-      enr_tbl <- enr_tbl %>%
+    } else if ("member_genes" %in% names(sig_enr) && any(!is.na(sig_enr$member_genes))) {
+      sig_enr <- sig_enr %>%
         mutate(top_drivers = sapply(strsplit(as.character(member_genes), ",\\s*"), function(x) paste(head(unique(na.omit(trimws(x))), 4), collapse = ", ")))
-    } else if ("member_proteins" %in% names(enr_tbl)) {
-      enr_tbl <- enr_tbl %>%
+    } else if ("member_proteins" %in% names(sig_enr)) {
+      sig_enr <- sig_enr %>%
         mutate(top_drivers = sapply(strsplit(as.character(member_proteins), ",\\s*"), function(x) paste(head(unique(na.omit(trimws(x))), 4), collapse = ", ")))
-    } else {
+    } else if (nrow(sig_enr) > 0) {
       # Derive top driving member genes directly from exp_tbl annotations if available
-      enr_tbl$top_drivers <- sapply(seq_len(nrow(enr_tbl)), function(i) {
-        ann <- enr_tbl$annotation[i]
+      sig_enr$top_drivers <- sapply(seq_len(nrow(sig_enr)), function(i) {
+        ann <- sig_enr$annotation[i]
         if (is.na(ann) || !nzchar(ann)) return(NA_character_)
         matching_genes <- sig_all %>%
           filter(if_any(any_of(c("biological_process", "cellular_component", "molecular_function", "reactome_pathway", "wiki_pathway", "annotation")), ~ grepl(ann, .x, fixed = TRUE))) %>%
@@ -367,16 +415,44 @@ for (c_name in contrast_names) {
       })
     }
 
-    enr_cols <- intersect(c("term", "annotation", "enrichment", "size", "p_value", "adj_p_value", "top_drivers", "gene_names", "member_genes", "member_proteins", "leading_edge_count"), names(enr_tbl))
-    sig_enr <- enr_tbl %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05) %>% arrange(adj_p_value) %>% head(15)
+    enr_cols <- intersect(c("term", "annotation", "enrichment", "size", "p_value", "adj_p_value", "top_drivers", "gene_names", "member_genes", "member_proteins", "leading_edge_count"), names(sig_enr))
     emit_table(sig_enr %>% select(any_of(enr_cols)) %>% format_stats())
   }
 }
 
 # Multi-Contrast Cross-Comparison (if >= 2 contrasts evaluated)
-if (length(contrast_names) >= 2) {
+if (length(contrast_names) >= 2 && length(contrast_sig_sets) >= 2) {
   emit_md("## Multi-Contrast Cross-Comparison Summary")
-  emit_md(sprintf("Total contrasts: %d. Comparing shared vs contrast-specific significant features.", length(contrast_names)))
+  emit_md(sprintf("Total contrasts evaluated: %d. Summary of shared vs. contrast-specific regulated features:", length(contrast_names)))
+  emit_md("")
+
+  all_up_lists <- lapply(contrast_sig_sets, `[[`, "up_genes")
+  all_down_lists <- lapply(contrast_sig_sets, `[[`, "down_genes")
+  shared_up <- Reduce(intersect, all_up_lists)
+  shared_down <- Reduce(intersect, all_down_lists)
+  union_up <- unique(unlist(all_up_lists))
+  union_down <- unique(unlist(all_down_lists))
+  discordant_genes <- intersect(union_up, union_down)
+
+  mc_df <- dplyr::bind_rows(lapply(names(contrast_sig_sets), function(cn) {
+    cs <- contrast_sig_sets[[cn]]
+    other_cns <- setdiff(names(contrast_sig_sets), cn)
+    other_genes <- unique(unlist(lapply(other_cns, function(oc) c(contrast_sig_sets[[oc]]$up_genes, contrast_sig_sets[[oc]]$down_genes))))
+    my_genes <- unique(c(cs$up_genes, cs$down_genes))
+    tibble(
+      contrast = cn,
+      strict_sig_total = cs$strict_total,
+      strict_up = cs$strict_up,
+      strict_down = cs$strict_down,
+      relaxed_sig_total = cs$relaxed_total,
+      shared_with_other_contrasts = length(intersect(my_genes, other_genes)),
+      contrast_unique = length(setdiff(my_genes, other_genes))
+    )
+  }))
+  emit_table(mc_df)
+  emit_md(sprintf("- **Pan-Contrast Concordant Upregulated (%d)**: %s", length(shared_up), if (length(shared_up) > 0) paste(head(shared_up, 10), collapse = ", ") else "None"))
+  emit_md(sprintf("- **Pan-Contrast Concordant Downregulated (%d)**: %s", length(shared_down), if (length(shared_down) > 0) paste(head(shared_down, 10), collapse = ", ") else "None"))
+  emit_md(sprintf("- **Discordantly Regulated Across Contrasts (%d)**: %s", length(discordant_genes), if (length(discordant_genes) > 0) paste(head(discordant_genes, 10), collapse = ", ") else "None"))
   emit_md("")
 }
 

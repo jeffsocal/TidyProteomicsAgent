@@ -1,5 +1,5 @@
 ---
-tools: [tpa_health, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_export_table, tpa_operations, tpa_extract, tpa_run_code, tpa_export_state, tpa_intersection, tpa_export_sdrf, tpa_normalization_sensitivity]
+tools: []
 ---
 
 ### Phase 10: Generation of Hypothesis-Driven Discussion Figures & Statistical Digest
@@ -41,8 +41,8 @@ Target execution budget: **2–3 turns max**.
      - Native Call: `tp_data |> plot_candidates("<contrast>", candidates = candidate_genes, status = status_map, labels_column = "gene_name", tag = "literature", destination = "png", path = "data")`
      - File Output: `data/plot_proteins_<quant>_candidates_<contrast>_literature.png` (copy or alias to `data/plot_discussion_literature_forest.png`).
    - **Imputation Diagnostic Plot**:
-     - Native Call: `tp_data |> plot_expression("<contrast>", labels_column = "gene_name", tag = "imputation_diagnostic", destination = "png", path = "data", top_n = length(diag_genes))`
-     - File Output: `data/plot_proteins_<quant>_expression_<contrast>_imputation_diagnostic.png` (copy or alias to `data/plot_discussion_imputation_diagnostic.png`).
+     - Native Call: `tp_data |> plot_imputation_diagnostic("<contrast>", labels_column = "gene_name", destination = "png", path = "data", top_n = 10)`
+     - File Output: `data/plot_proteins_<quant>_imputation_diagnostic_<contrast>.png` (copy or alias to `data/plot_discussion_imputation_diagnostic.png`).
 
 3. **Canonical Script Template for `code/10_figures.R`**:
    ```r
@@ -56,6 +56,14 @@ Target execution budget: **2–3 turns max**.
    stopifnot(file.exists("data/tidyproteomics_data.rds"))
    tp_data <- readRDS("data/tidyproteomics_data.rds")
 
+   # Extract contrast and analyte identifier from data or filename
+   analyses <- get_analyses(tp_data)
+   all_contrasts <- if (nrow(analyses) > 0) unique(analyses$comparison) else "p97_kd/ctl"
+   contrast_str <- all_contrasts[1]
+   c_clean <- gsub("[^A-Za-z0-9]", ".*", contrast_str)
+   analyte_name <- if (!is.null(tp_data[["analyte"]])) tp_data[["analyte"]] else "proteins"
+   id_col <- if (!is.null(tp_data[["identifier"]])) tp_data[["identifier"]][1] else if (identical(analyte_name, "peptides")) "peptide" else "protein"
+
    expr_files <- list.files("data", pattern = "^table_.*_expression_.*[.](tsv|csv)$", full.names = TRUE)
    # Exclude quantitative extract abundance matrices (which lack log2_foldchange and test statistics)
    expr_files <- expr_files[!grepl("_extract", expr_files)]
@@ -63,47 +71,96 @@ Target execution budget: **2–3 turns max**.
    read_de_table <- function(f) {
      if (grepl("\\.csv$", f)) read.csv(f, check.names = FALSE) else read.delim(f, check.names = FALSE)
    }
-   de_file <- expr_files[1]
-   for (f in expr_files) {
+   matched_files <- expr_files[grepl(c_clean, basename(expr_files), ignore.case = TRUE)]
+   cand_files <- c(matched_files, setdiff(expr_files, matched_files))
+   de_file <- cand_files[1]
+   for (f in cand_files) {
      hdr <- names(read_de_table(f)[0, , drop = FALSE])
      if ("log2_foldchange" %in% hdr) { de_file <- f; break }
    }
    expr <- read_de_table(de_file)
+   row_id_col <- if (id_col %in% names(expr)) id_col else if ("protein" %in% names(expr)) "protein" else if ("peptide" %in% names(expr)) "peptide" else names(expr)[1]
 
-   # Extract contrast from data or filename
-   analyses <- get_analyses(tp_data)
-   contrast_str <- if (nrow(analyses) > 0) analyses$comparison[1] else "p97_kd/ctl"
-
-   # 2. Derive Candidate Sets & Biological Program Signatures
+   # 2. Load Actionable Synthesis (from Phase 8/9) & Derive Biological Program Signatures with Tiered Fallback
    valid <- !is.na(expr$gene_name) & !is.na(expr$adj_p_value) & !is.na(expr$log2_foldchange)
-   up <- expr[valid & expr$adj_p_value < 0.05 & expr$log2_foldchange >= 1, , drop = FALSE]
-   down <- expr[valid & expr$adj_p_value < 0.05 & expr$log2_foldchange <= -1, , drop = FALSE]
-   up <- up[order(-up$log2_foldchange, up$adj_p_value), , drop = FALSE]
-   down <- down[order(down$log2_foldchange, down$adj_p_value), , drop = FALSE]
+   strict_up <- expr[valid & expr$adj_p_value <= 0.05 & expr$log2_foldchange >= 1, , drop = FALSE]
+   strict_down <- expr[valid & expr$adj_p_value <= 0.05 & expr$log2_foldchange <= -1, , drop = FALSE]
+   relaxed_up <- expr[valid & expr$adj_p_value <= 0.05 & expr$log2_foldchange >= 0.38, , drop = FALSE]
+   relaxed_down <- expr[valid & expr$adj_p_value <= 0.05 & expr$log2_foldchange <= -0.38, , drop = FALSE]
+   nom_valid <- !is.na(expr$gene_name) & !is.na(expr$p_value) & !is.na(expr$log2_foldchange)
+   nom_up <- expr[nom_valid & expr$p_value <= 0.05 & expr$log2_foldchange > 0, , drop = FALSE]
+   nom_down <- expr[nom_valid & expr$p_value <= 0.05 & expr$log2_foldchange < 0, , drop = FALSE]
 
-   module_genes <- head(unique(na.omit(c(up$gene_name, down$gene_name))), 12)
+   candidate_selection_tier <- "Tier 1 (Strict: |log2FC| >= 1, q <= 0.05)"
+   up <- strict_up
+   down <- strict_down
+   if (nrow(up) < 3) {
+     if (nrow(relaxed_up) > 0) {
+       up <- relaxed_up
+       candidate_selection_tier <- "Tier 2 Fallback (Relaxed FDR: |log2FC| >= 0.38, q <= 0.05)"
+     } else if (nrow(nom_up) > 0) {
+       up <- nom_up
+       candidate_selection_tier <- "Tier 3 Fallback (Nominal: p <= 0.05)"
+     } else {
+       up <- expr[!is.na(expr$gene_name) & !is.na(expr$log2_foldchange) & expr$log2_foldchange > 0, , drop = FALSE]
+       candidate_selection_tier <- "Tier 4 Fallback (Unthresholded Directional Rank)"
+     }
+   }
+   if (nrow(down) < 3) {
+     if (nrow(relaxed_down) > 0) {
+       down <- relaxed_down
+       if (grepl("^Tier 1", candidate_selection_tier)) candidate_selection_tier <- "Tier 2 Fallback (Relaxed FDR: |log2FC| >= 0.38, q <= 0.05)"
+     } else if (nrow(nom_down) > 0) {
+       down <- nom_down
+       if (grepl("^Tier [12]", candidate_selection_tier)) candidate_selection_tier <- "Tier 3 Fallback (Nominal: p <= 0.05)"
+     } else {
+       down <- expr[!is.na(expr$gene_name) & !is.na(expr$log2_foldchange) & expr$log2_foldchange < 0, , drop = FALSE]
+       candidate_selection_tier <- "Tier 4 Fallback (Unthresholded Directional Rank)"
+     }
+   }
+   up <- up[order(-up$log2_foldchange, up$adj_p_value, up$p_value), , drop = FALSE]
+   down <- down[order(down$log2_foldchange, down$adj_p_value, down$p_value), , drop = FALSE]
+
+   act_syn <- if (file.exists("data/actionable_synthesis.json")) {
+     tryCatch(fromJSON("data/actionable_synthesis.json", simplifyVector = FALSE), error = function(e) NULL)
+   } else NULL
 
    # Biological Program Signatures:
-   # Dynamically derive coherent opposing programs from enrichment analysis (e.g. top UP pathway vs top DOWN pathway)
-   prog_a <- character(0); prog_a_name <- "Upregulated Program"
-   prog_b <- character(0); prog_b_name <- "Downregulated Program"
+   # Priority 1: Validated functional programs from data/actionable_synthesis.json
+   sig_list <- list()
+   if (!is.null(act_syn) && !is.null(act_syn$signatures) && is.list(act_syn$signatures)) {
+     for (s_nm in names(act_syn$signatures)) {
+       g_cand <- unique(as.character(unlist(act_syn$signatures[[s_nm]])))
+       g_match <- intersect(g_cand, unique(na.omit(c(expr$gene_name, expr[[row_id_col]]))))
+       if (length(g_match) >= 2) {
+         sig_list[[ substr(s_nm, 1, 48) ]] <- head(g_match, 8)
+       }
+     }
+   }
 
-   pathway_files <- list.files("data", pattern = "^(table_.*_enrichment_.*|enrichment_.*)[.](tsv|csv)$", full.names = TRUE)
+   # Priority 2: Formal pathway enrichment tables + Phase 7 de novo functional modules (data/de_novo_modules.tsv)
+   pathway_files <- list.files("data", pattern = "^(table_.*_enrichment_.*|enrichment_.*|de_novo_modules)[.](tsv|csv)$", full.names = TRUE)
+   parsed_pathways <- list()
    enr_all <- list()
    for (pf in pathway_files) {
      ptab <- tryCatch(if (grepl("\\.csv$", pf)) read.csv(pf, check.names = FALSE) else read.delim(pf, check.names = FALSE), error = function(e) NULL)
-     if (!is.null(ptab) && all(c("annotation", "adj_p_value", "enrichment") %in% names(ptab))) {
-       enr_all[[length(enr_all) + 1L]] <- ptab
+     if (!is.null(ptab) && nrow(ptab) > 0) {
+       parsed_pathways[[pf]] <- ptab
+       if (all(c("annotation", "adj_p_value", "enrichment") %in% names(ptab))) {
+         enr_all[[length(enr_all) + 1L]] <- ptab
+       }
      }
    }
-   if (length(enr_all) > 0) {
+
+   if (length(sig_list) < 2 && length(enr_all) > 0) {
      enr_combined <- dplyr::bind_rows(enr_all)
      sig_enr <- enr_combined %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05)
+     if (nrow(sig_enr) == 0) sig_enr <- enr_combined %>% filter(!is.na(p_value), p_value <= 0.05)
      up_pathways <- sig_enr %>% filter(enrichment > 0) %>% arrange(adj_p_value)
      down_pathways <- sig_enr %>% filter(enrichment < 0) %>% arrange(adj_p_value)
 
      get_program_members <- function(ann, pathways_df, target_dir) {
-       for (col_cand in c("gene_names", "member_genes")) {
+       for (col_cand in c("gene_names", "member_genes", "top_drivers")) {
          if (col_cand %in% names(pathways_df)) {
            row <- pathways_df %>% filter(annotation == ann)
            if (nrow(row) > 0 && !is.na(row[[col_cand]][1]) && nzchar(as.character(row[[col_cand]][1]))) {
@@ -116,7 +173,7 @@ Target execution budget: **2–3 turns max**.
          }
        }
        m_expr <- expr %>%
-         filter(if_any(any_of(c("biological_process", "cellular_component", "molecular_function", "reactome_pathway", "wiki_pathway")), ~ grepl(ann, .x, fixed = TRUE)))
+         filter(if_any(any_of(c("biological_process", "cellular_component", "molecular_function", "reactome_pathway", "wiki_pathway", "description")), ~ grepl(ann, .x, fixed = TRUE)))
        if (target_dir == "UP") m_expr <- m_expr %>% filter(log2_foldchange > 0) else m_expr <- m_expr %>% filter(log2_foldchange < 0)
        m_expr <- m_expr %>% arrange(adj_p_value, desc(abs(log2_foldchange)))
        head(unique(na.omit(m_expr$gene_name)), 8)
@@ -125,28 +182,23 @@ Target execution budget: **2–3 turns max**.
      if (nrow(up_pathways) > 0) {
        best_up_ann <- up_pathways$annotation[1]
        m_up <- get_program_members(best_up_ann, up_pathways, "UP")
-       if (length(m_up) >= 2) {
-         prog_a <- m_up
-         prog_a_name <- paste0("Induced: ", substr(best_up_ann, 1, 35))
-       }
+       if (length(m_up) >= 2) sig_list[[paste0("Induced: ", substr(best_up_ann, 1, 35))]] <- m_up
      }
      if (nrow(down_pathways) > 0) {
        best_down_ann <- down_pathways$annotation[1]
        m_down <- get_program_members(best_down_ann, down_pathways, "DOWN")
-       if (length(m_down) >= 2) {
-         prog_b <- m_down
-         prog_b_name <- paste0("Repressed: ", substr(best_down_ann, 1, 35))
-       }
+       if (length(m_down) >= 2) sig_list[[paste0("Repressed: ", substr(best_down_ann, 1, 35))]] <- m_down
      }
    }
 
-   if (length(prog_a) < 2) { prog_a <- head(unique(na.omit(up$gene_name)), 8); prog_a_name <- "Top Upregulated Candidates" }
-   if (length(prog_b) < 2) { prog_b <- head(unique(na.omit(down$gene_name)), 8); prog_b_name <- "Top Downregulated Candidates" }
-   if (!length(prog_b)) prog_b <- head(expr$gene_name[!is.na(expr$gene_name)], 5)
-
-   sig_list <- list()
-   sig_list[[prog_a_name]] <- prog_a
-   sig_list[[prog_b_name]] <- prog_b
+   # Priority 3: Fallback with description-derived functional labels if needed
+   if (length(sig_list) == 0) {
+     prog_a <- head(unique(na.omit(up$gene_name)), 8)
+     prog_b <- head(unique(na.omit(down$gene_name)), 8)
+     if (!length(prog_b)) prog_b <- head(expr$gene_name[!is.na(expr$gene_name)], 5)
+     if (length(prog_a) > 0) sig_list[["Induced Empirical Signature"]] <- prog_a
+     if (length(prog_b) > 0) sig_list[["Repressed Empirical Signature"]] <- prog_b
+   }
 
    # 3. Generate Discussion Figures
    # Heatmap
@@ -157,11 +209,50 @@ Target execution budget: **2–3 turns max**.
      signatures = sig_list,
      labels_column = "gene_name", tag = "dichotomy_discussion", destination = "png", path = "data")
 
-   # Candidate Targets
-   candidate_genes <- head(unique(na.omit(c(head(up$gene_name, 3), head(down$gene_name, 3)))), 6)
-   status_map <- setNames(ifelse(candidate_genes %in% up$gene_name, "Upregulated", "Downregulated"), candidate_genes)
-   plot_candidates(data = tp_data, contrast_str, candidates = candidate_genes, status = status_map,
-     labels_column = "gene_name", tag = "literature", destination = "png", path = "data")
+   # Candidate Targets (Role-Classified from actionable_synthesis.json or Literature DB)
+   has_lit <- file.exists("docs/literature_candidates.md") && file.info("docs/literature_candidates.md")$size > 100
+   lit_candidates <- character(0)
+   if (has_lit) {
+     lit_lines <- readLines("docs/literature_candidates.md")
+     cand_matches <- regmatches(lit_lines, gregexpr("(?<=\\|\\s*)[A-Za-z0-9_-]+(?=\\s*\\|)", lit_lines, perl = TRUE))
+     cands_flat <- unique(unlist(cand_matches))
+     lit_candidates <- intersect(cands_flat, expr$gene_name)
+   }
+
+   act_cands <- character(0)
+   act_roles <- character(0)
+   if (!is.null(act_syn) && !is.null(act_syn$candidates) && is.list(act_syn$candidates)) {
+     for (c_item in act_syn$candidates) {
+       g_nm <- if (!is.null(c_item$gene)) as.character(c_item$gene)[1] else NA_character_
+       r_nm <- if (!is.null(c_item$role) && nzchar(as.character(c_item$role)[1])) as.character(c_item$role)[1] else "Prioritized Candidate"
+       if (!is.na(g_nm) && g_nm %in% c(expr$gene_name, expr[[row_id_col]])) {
+         act_cands <- c(act_cands, g_nm)
+         act_roles[g_nm] <- r_nm
+       }
+     }
+   }
+
+   if (length(act_cands) >= 2) {
+     candidate_genes <- head(unique(act_cands), 8)
+     status_map <- act_roles[candidate_genes]
+     tag_used <- if (has_lit && length(lit_candidates) >= 2) "literature" else "candidates"
+     plot_candidates(data = tp_data, contrast_str, candidates = candidate_genes, status = status_map,
+       labels_column = "gene_name", tag = tag_used, destination = "png", path = "data")
+     forest_target <- if (tag_used == "literature") "plot_discussion_literature_forest.png" else "plot_discussion_candidates.png"
+   } else if (length(lit_candidates) >= 2) {
+     candidate_genes <- head(lit_candidates, 8)
+     status_map <- setNames(ifelse(candidate_genes %in% up$gene_name, "Upregulated", 
+                            ifelse(candidate_genes %in% down$gene_name, "Downregulated", "Observed")), candidate_genes)
+     plot_candidates(data = tp_data, contrast_str, candidates = candidate_genes, status = status_map,
+       labels_column = "gene_name", tag = "literature", destination = "png", path = "data")
+     forest_target <- "plot_discussion_literature_forest.png"
+   } else {
+     candidate_genes <- head(unique(na.omit(c(head(up$gene_name, 3), head(down$gene_name, 3)))), 6)
+     status_map <- setNames(ifelse(candidate_genes %in% up$gene_name, "Induced Biomarker", "Repressed Biomarker"), candidate_genes)
+     plot_candidates(data = tp_data, contrast_str, candidates = candidate_genes, status = status_map,
+       labels_column = "gene_name", tag = "candidates", destination = "png", path = "data")
+     forest_target <- "plot_discussion_candidates.png"
+   }
 
 
    # Imputation Diagnostic
@@ -177,7 +268,7 @@ Target execution budget: **2–3 turns max**.
    plot_specs <- list(
      module = c("module_.*[.]png$", "plot_discussion_module.png"),
      dichotomy = c("(dichotomy|signatures|programs).*[.]png$", "plot_discussion_dichotomy.png"),
-     forest = c("(candidates|forest).*literature.*[.]png$|literature.*[.]png$", "plot_discussion_literature_forest.png"),
+     forest = c("(candidates|forest).*[.]png$", if (exists("forest_target")) forest_target else "plot_discussion_candidates.png"),
      imputation = c("imputation_diagnostic.*[.]png$", "plot_discussion_imputation_diagnostic.png")
    )
    discussion_figures <- list()
@@ -201,7 +292,7 @@ Target execution budget: **2–3 turns max**.
      } else "Not reported in expression table"
      list(
        gene = as.character(r$gene_name),
-       accession = as.character(r$protein),
+       accession = as.character(r[[row_id_col]]),
        log2fc = unname(as.numeric(r$log2_foldchange)),
        p_value = format(as.numeric(r$p_value), scientific = TRUE, digits = 3),
        q_value = format(as.numeric(r$adj_p_value), scientific = TRUE, digits = 3),
@@ -212,46 +303,64 @@ Target execution budget: **2–3 turns max**.
      )
    }
 
-   # 6. Extract Top Pathways
-   pathway_files <- list.files("data", pattern = "^(table_.*_enrichment_.*|enrichment_.*)[.](tsv|csv)$", full.names = TRUE)
+   # 6. Extract Top Pathways & De Novo Functional Modules (reusing parsed_pathways)
    pathways <- list()
-   for (f in pathway_files) {
-     tab <- tryCatch(if (grepl("\\.csv$", f)) read.csv(f, check.names = FALSE) else read.delim(f, check.names = FALSE), error = function(e) NULL)
+   for (f in names(parsed_pathways)) {
+     tab <- parsed_pathways[[f]]
      if (is.null(tab) || !any(c("adj_p_value", "p_value") %in% names(tab))) next
      sig_col <- if ("adj_p_value" %in% names(tab)) "adj_p_value" else "p_value"
-     term_col <- if ("term" %in% names(tab)) "term" else if ("annotation" %in% names(tab)) "annotation" else names(tab)[1]
+     term_col <- if ("annotation" %in% names(tab)) "annotation" else if ("term" %in% names(tab)) "term" else names(tab)[1]
      score_col <- if ("enrichment" %in% names(tab)) "enrichment" else if ("enrichment_score" %in% names(tab)) "enrichment_score" else NA_character_
-     domain <- sub("^[a-z_]*enrichment_", "", sub("[.](tsv|csv)$", "", basename(f)))
-     tab <- tab[!is.na(tab[[sig_col]]) & tab[[sig_col]] < 0.05, , drop = FALSE]
-     if (!nrow(tab)) next
-     tab <- tab[order(tab[[sig_col]]), , drop = FALSE]
-     for (i in seq_len(min(5, nrow(tab)))) {
-       score_val <- if (!is.na(score_col) && score_col %in% names(tab)) as.numeric(tab[[score_col]][i]) else 0
+     domain <- if (grepl("de_novo_modules", basename(f))) "de_novo_module" else sub("^[a-z_]*enrichment_", "", sub("[.](tsv|csv)$", "", basename(f)))
+     tab_sig <- tab[!is.na(tab[[sig_col]]) & tab[[sig_col]] <= 0.05, , drop = FALSE]
+     if (!nrow(tab_sig) && "p_value" %in% names(tab)) {
+       tab_sig <- tab[!is.na(tab$p_value) & tab$p_value <= 0.05, , drop = FALSE]
+     }
+     if (!nrow(tab_sig)) next
+     tab_sig <- tab_sig[order(tab_sig[[sig_col]]), , drop = FALSE]
+     for (i in seq_len(min(5, nrow(tab_sig)))) {
+       score_val <- if (!is.na(score_col) && score_col %in% names(tab_sig)) as.numeric(tab_sig[[score_col]][i]) else 0
+       drv <- if ("top_drivers" %in% names(tab_sig) && !is.na(tab_sig$top_drivers[i])) {
+         trimws(unlist(strsplit(as.character(tab_sig$top_drivers[i]), ",")))
+       } else if ("gene_names" %in% names(tab_sig) && !is.na(tab_sig$gene_names[i])) {
+         head(trimws(unlist(strsplit(as.character(tab_sig$gene_names[i]), ","))), 5)
+       } else character()
        pathways[[length(pathways) + 1L]] <- list(
-         domain = domain, term = as.character(tab[[term_col]][i]),
+         domain = domain, term = as.character(tab_sig[[term_col]][i]),
          direction = if (score_val >= 0) "UP" else "DOWN",
-         q_value = format(tab[[sig_col]][i], scientific = TRUE, digits = 3),
-         enrichment_score = score_val, driver_proteins = character()
+         q_value = format(tab_sig[[sig_col]][i], scientific = TRUE, digits = 3),
+         enrichment_score = score_val, driver_proteins = drv
        )
      }
    }
 
    # 7. Compile Digest
    all_png <- list.files("data", pattern = "[.]png$", full.names = TRUE)
-   existing_path <- function(pattern) {
+   existing_path <- function(pattern, exclude = NULL) {
      x <- all_png[grepl(pattern, basename(all_png), ignore.case = TRUE)]
+     if (!is.null(exclude)) x <- x[!grepl(exclude, basename(x), ignore.case = TRUE)]
      if (length(x)) x[1] else NA_character_
    }
-   total_quant <- get_unique_variables(tp_data, "protein", format = "vector")
+   total_quant <- get_unique_variables(tp_data, id_col, format = "vector")
    qn <- get_quant_names(tp_data)
    active_sel <- if (is.data.frame(qn) && "selected" %in% names(qn)) qn$quant_name[qn$selected] else character(0)
    active_assay <- if (length(active_sel) > 0) active_sel[1] else tail(get_quant_names(tp_data, format = "vector"), 1)
    ops_txt <- paste(capture.output(operations(tp_data), type = "message"), collapse = " ")
    imputation_status <- if (grepl("impute", ops_txt, ignore.case = TRUE)) "imputed" else "unimputed"
+   imputation_method <- if (grepl("randomforest", ops_txt, ignore.case = TRUE)) {
+     "impute.randomforest (method = 'matrix', group_by_sample = TRUE)"
+   } else if (grepl("by 'column'", ops_txt, ignore.case = TRUE)) {
+     "base::min (method = 'column')"
+   } else if (grepl("by 'row'", ops_txt, ignore.case = TRUE)) {
+     "base::min (method = 'row', group_by_sample = TRUE)"
+   } else if (imputation_status == "imputed") {
+     "imputed (custom/upstream)"
+   } else {
+     "none (unimputed)"
+   }
 
    # Automated Accounting for Unmodeled Features
-   id_col <- if (!is.null(tp_data[["identifier"]])) tp_data[["identifier"]][1] else "protein"
-   unmodeled_prots <- setdiff(total_quant, expr[[id_col]])
+   unmodeled_prots <- setdiff(total_quant, expr[[row_id_col]])
    quant_col <- paste0("abundance_", active_assay)
    df_long <- as.data.frame(tp_data, shape = "long")
    long_unmod <- df_long[df_long[[id_col]] %in% unmodeled_prots, ]
@@ -293,24 +402,67 @@ Target execution budget: **2–3 turns max**.
      unmodeled_condition_exclusive_breakdown = dropout_detail
    )
 
+   # Multi-Contrast Summary across all evaluated contrasts
+   contrasts_summary <- lapply(all_contrasts, function(cs) {
+     cs_clean <- gsub("[^A-Za-z0-9]", ".*", cs)
+     cs_files <- expr_files[grepl(cs_clean, basename(expr_files), ignore.case = TRUE)]
+     cs_df <- if (length(cs_files) > 0) tryCatch(read_de_table(cs_files[1]), error = function(e) NULL) else NULL
+     if (is.null(cs_df) || !"log2_foldchange" %in% names(cs_df)) {
+       cs_df <- tryCatch(rlang::inject(export_analysis(tp_data, !!rlang::parse_expr(cs), .analysis = "expression")), error = function(e) NULL)
+     }
+     if (!is.null(cs_df) && "log2_foldchange" %in% names(cs_df)) {
+       v <- !is.na(cs_df$adj_p_value) & !is.na(cs_df$log2_foldchange)
+       list(
+         contrast = cs,
+         modeled_rows = nrow(cs_df),
+         strict_significant = sum(v & cs_df$adj_p_value <= 0.05 & abs(cs_df$log2_foldchange) >= 1),
+         strict_up = sum(v & cs_df$adj_p_value <= 0.05 & cs_df$log2_foldchange >= 1),
+         strict_down = sum(v & cs_df$adj_p_value <= 0.05 & cs_df$log2_foldchange <= -1),
+         relaxed_significant = sum(v & cs_df$adj_p_value <= 0.05 & abs(cs_df$log2_foldchange) >= 0.38)
+       )
+     } else {
+       list(contrast = cs)
+     }
+   })
+
    digest <- list(
-     study_title = paste0("Differential Proteomics Analysis: ", contrast_str),
-     contrast = contrast_str, analyte = if (!is.null(tp_data[["analyte"]])) tp_data[["analyte"]] else "proteins",
+     study_title = paste0("Differential Proteomics Analysis: ", paste(all_contrasts, collapse = "; ")),
+     contrast = contrast_str,
+     contrasts_evaluated = contrasts_summary,
+     analyte = analyte_name,
+     identifier_column = id_col,
      total_quantified = length(total_quant),
      expression_table_rows = nrow(expr),
      feature_retention = feature_retention,
      active_assay = if (length(active_assay)) active_assay else "normalized",
      imputation_status = imputation_status,
+     imputation_method = imputation_method,
+     literature_status = if (exists("has_lit") && isTRUE(has_lit) && length(lit_candidates) >= 2) "ACTIVE" else "SKIPPED",
+     actionable_synthesis = act_syn,
 
      de_counts = list(
-       total_significant = sum(valid & expr$adj_p_value < 0.05 & abs(expr$log2_foldchange) >= 1),
-       upregulated = nrow(up), downregulated = nrow(down),
-       threshold_log2fc = 1.0, threshold_qvalue = 0.05
+       total_significant = nrow(strict_up) + nrow(strict_down),
+       upregulated = nrow(strict_up),
+       downregulated = nrow(strict_down),
+       relaxed_significant = nrow(relaxed_up) + nrow(relaxed_down),
+       relaxed_upregulated = nrow(relaxed_up),
+       relaxed_downregulated = nrow(relaxed_down),
+       candidate_selection_tier = candidate_selection_tier,
+       threshold_log2fc = 1.0,
+       threshold_qvalue = 0.05
      ),
      top_candidates_up = lapply(seq_len(min(10, nrow(up))), function(i) format_candidate(up[i, ])),
      top_candidates_down = lapply(seq_len(min(10, nrow(down))), function(i) format_candidate(down[i, ])),
      top_pathways = pathways,
-     figures = list(volcano = existing_path("volcano"), pca = existing_path("pca"), heatmap = existing_path("heatmap")),
+     figures = list(
+       counts = existing_path("counts"),
+       venn = existing_path("venn|euler"),
+       variation_cv = existing_path("variation"),
+       pca = existing_path("pca"),
+       heatmap = existing_path("heatmap", exclude = "module|discussion"),
+       volcano = existing_path("volcano"),
+       enrichment = existing_path("enrichment")
+     ),
      discussion_figures = discussion_figures
    )
    write_json(digest, "data/manuscript_digest.json", auto_unbox = TRUE, pretty = TRUE, null = "null")

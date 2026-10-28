@@ -208,6 +208,25 @@ class AgentService {
                 },
             },
             {
+                name: "set_imputation_strategy",
+                description: "Updates Section 3E of docs/experiment.md to configure and confirm the Missing Value Imputation Strategy ('randomforest_grouped', 'min_column', 'min_row_grouped', or 'none').",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        method: {
+                            type: "string",
+                            enum: ["randomforest_grouped", "min_column", "min_row_grouped", "none"],
+                            description: "Imputation method: 'randomforest_grouped' (MAR default: impute.randomforest, method='matrix', group_by_sample=TRUE), 'min_column' (MNAR/knockout: base::min, method='column'), 'min_row_grouped', or 'none'.",
+                        },
+                        confirmed: {
+                            type: "boolean",
+                            description: "Whether the user has confirmed the imputation strategy (default TRUE).",
+                        },
+                    },
+                    required: ["confirmed"],
+                },
+            },
+            {
                 name: "start_or_resume_pipeline",
                 description: "Triggers or resumes execution of the autonomous analysis pipeline when initial configuration is satisfied or when a halted phase's questions have been resolved.",
                 parameters: {
@@ -283,7 +302,7 @@ class AgentService {
         ];
     }
     /**
-     * Checks docs/experiment.md and generates proactive onboarding questions if initial setup is incomplete.
+     * Checks docs/experiment.md and generates proactive onboarding guidance if initial setup is incomplete.
      */
     async checkAndTriggerOnboarding() {
         if (!this.workspaceRoot)
@@ -291,30 +310,21 @@ class AgentService {
         const spec = await this.experimentManager.readSpec();
         if (spec.missingInitialFields.length > 0) {
             if (this.messages.length === 0) {
-                const firstMissing = spec.missingInitialFields[0];
-                let promptText = "";
-                let chips = [];
-                if (firstMissing === "PATH_TO_DATA_FILE") {
-                    promptText = "👋 **Welcome to TidyProteomicsAgent!**\n\nI am your **Live Agent**. Before starting the pipeline, let's configure your experiment.\n\n👉 **Question 1/4**: What is the file path or URL to your proteomics data file? *(e.g. `data/raw/ProteomeDiscoverer_proteins.xlsx` or `data/raw/data.rds`)*";
-                    chips = ["data/raw/tidyproteomics_data.rds", "Select File..."];
-                }
-                else if (firstMissing === "PLATFORM") {
-                    promptText = "👉 **Question 2/4**: Which mass spectrometry search platform generated this data?";
-                    chips = ["ProteomeDiscoverer", "MaxQuant", "DIA-NN", "Spectronaut", "FragPipe", "tidyproteomics"];
-                }
-                else if (firstMissing === "ANALYTE") {
-                    promptText = "👉 **Question 3/4**: Is this dataset measuring `proteins` or `peptides`?";
-                    chips = ["proteins", "peptides"];
-                }
-                else if (firstMissing === "DESCRIPTION") {
-                    promptText = "👉 **Question 4/4**: Could you briefly describe this experiment? *(e.g. biological model, treatment conditions, disease vs control groups, and key hypotheses)*";
-                }
+                const promptText = "👋 **Welcome to TidyProteomicsAgent!**\n\nI am your live computational proteomics partner. I configure your study design and execute the 12-phase pipeline autonomously.\n\nTell me about your experiment in your own words (data file location, search platform, analyte, and comparison groups), or select a sample option below to get started!";
+                const chips = [
+                    "data/raw/tidyproteomics_data.rds",
+                    "ProteomeDiscoverer",
+                    "DIA-NN",
+                    "MaxQuant",
+                    "Review docs/experiment.md ↗"
+                ];
                 this.messages.push({
                     id: "msg_onboard_" + Date.now(),
                     role: "assistant",
                     content: promptText,
                     timestamp: new Date().toLocaleTimeString(),
                     quickChips: chips,
+                    type: "message",
                 });
                 this.notifyUpdated();
                 return true;
@@ -325,14 +335,65 @@ class AgentService {
             this.messages.push({
                 id: "msg_ready_" + Date.now(),
                 role: "assistant",
-                content: "👋 **Welcome back to TidyProteomicsAgent!**\n\nI reviewed `docs/experiment.md` and confirmed that all initial dataset parameters and your experiment description are configured! 🚀\n\n**Ready to start the autonomous analysis pipeline?**",
+                content: "👋 **Welcome back to TidyProteomicsAgent!**\n\nI reviewed `docs/experiment.md` and confirmed that all dataset parameters and your study hypothesis are configured! 🚀\n\n**Ready to start the autonomous analysis pipeline?**",
                 timestamp: new Date().toLocaleTimeString(),
                 quickChips: ["⚡ Yes, Start Pipeline", "Review docs/experiment.md ↗"],
+                type: "message",
             });
             this.notifyUpdated();
             return true;
         }
         return false;
+    }
+    /**
+     * Posts or updates the live, in-progress activity status in the Agent panel.
+     */
+    handleStageActivity(phase, actionText) {
+        const activityId = `activity_${phase.id}`;
+        const title = phase.title || phase.fileName;
+        const existingIdx = this.messages.findIndex((m) => m.id === activityId);
+        const msg = {
+            id: activityId,
+            role: "assistant",
+            content: actionText,
+            timestamp: new Date().toLocaleTimeString(),
+            type: "activity",
+            phaseId: phase.id,
+            phaseTitle: title,
+            badge: "In Progress",
+        };
+        if (existingIdx >= 0) {
+            this.messages[existingIdx] = msg;
+        }
+        else {
+            this.messages.push(msg);
+        }
+        this.notifyUpdated();
+    }
+    /**
+     * Appends a structured scientific observation card discovered during phase execution.
+     */
+    handleStageObservation(phase, text, metadata) {
+        const cleanText = String(text || "").trim();
+        if (!cleanText)
+            return;
+        // Prevent duplicate observations with identical text in the same phase
+        const isDuplicate = this.messages.some((m) => m.type === "observation" && m.phaseId === phase.id && m.content === cleanText);
+        if (isDuplicate)
+            return;
+        const title = phase.title || phase.fileName;
+        const msg = {
+            id: `obs_${phase.id}_${Date.now()}`,
+            role: "assistant",
+            content: cleanText,
+            timestamp: new Date().toLocaleTimeString(),
+            type: "observation",
+            phaseId: phase.id,
+            phaseTitle: title,
+            badge: metadata?.badge || "Observation",
+        };
+        this.messages.push(msg);
+        this.notifyUpdated();
     }
     /**
      * Pushes a real-time activity card into the Agent chat when a phase starts execution.
@@ -346,19 +407,29 @@ class AgentService {
         const msg = {
             id: "msg_start_" + phase.id + "_" + Date.now(),
             role: "assistant",
-            content: `▶ **[Starting Phase ${phase.id}]** ${title}`,
+            content: `▶ **Starting Phase ${phase.id}:** ${title}`,
             timestamp: new Date().toLocaleTimeString(),
+            type: "milestone",
+            phaseId: phase.id,
+            phaseTitle: title,
+            badge: "Phase Started",
         };
         this.messages.push(msg);
         this.notifyUpdated();
     }
     /**
      * Called when a phase completes successfully.
-     * Pushes a completion summary card into Agent chat.
+     * Removes in-progress activity and pushes a completion summary card into Agent chat.
      */
     async handlePhaseCompleted(phase) {
         if (this.lastHaltedPhaseId === phase.id) {
             this.lastHaltedPhaseId = undefined;
+        }
+        // Remove in-progress activity card for this phase upon completion
+        const activityId = `activity_${phase.id}`;
+        const actIdx = this.messages.findIndex((m) => m.id === activityId);
+        if (actIdx >= 0) {
+            this.messages.splice(actIdx, 1);
         }
         const key = `completed_${phase.id}_${phase.endTime || Date.now()}`;
         if (!this.phaseEventsPosted.has(key)) {
@@ -370,8 +441,12 @@ class AgentService {
             const msg = {
                 id: "msg_done_" + phase.id + "_" + Date.now(),
                 role: "assistant",
-                content: `✓ **[Completed Phase ${phase.id}]** ${title}${metrics ? ` (${metrics})` : ""}`,
+                content: `✓ **Phase ${phase.id} Complete:** ${title}${metrics ? ` (${metrics})` : ""}`,
                 timestamp: new Date().toLocaleTimeString(),
+                type: "milestone",
+                phaseId: phase.id,
+                phaseTitle: title,
+                badge: "Phase Completed",
             };
             this.messages.push(msg);
             this.notifyUpdated();
@@ -413,7 +488,12 @@ class AgentService {
         const isConfounding = /confound|Proceed With Potential Batch Confounding|Authorize Unadjusted Exploratory Comparison/i.test(errorText);
         const isSampleGrouping = /sample group|recoding|pooling|Section 3\.?B|reassign sample names/i.test(errorText);
         const isContrastNeeded = /contrast|target contrast|disease\/control|Section 3\.?C/i.test(errorText);
-        if (phase.id === "04" && (isConfounding || isContrastNeeded)) {
+        const isImputationNeeded = /imputation|Section 3\.?E|Confirm Imputation Strategy|randomforest_grouped|min_column/i.test(errorText);
+        if (phase.id === "03" || isImputationNeeded) {
+            questionPrompt = `🧬 **Imputation Strategy Confirmation in ${phase.title || phase.fileName}**\n\nPer Karpievitch et al. (*BMC Bioinformatics* 2012), Random Forest (\`randomforest_grouped\`: \`impute.randomforest, method = 'matrix', group_by_sample = TRUE\`) excels for general MAR missingness, whereas column-wise minimum (\`min_column\`: \`base::min, method = 'column'\`) is recommended for intentional gene knockouts, suppressions, or MNAR binary switches.\n\nWould you like to confirm the recommended strategy in Section 3.E of \`docs/experiment.md\` or switch methods?`;
+            chips = ["🎯 Confirm Imputation & Proceed", "Use Random Forest (MAR Default)", "Use Column Min (MNAR / Knockout)", "Review docs/experiment.md ↗"];
+        }
+        else if (phase.id === "04" && (isConfounding || isContrastNeeded)) {
             questionPrompt = `🎯 **Contrast Confirmation & Confounding Authorization in ${phase.title || phase.fileName}**\n\nPhase 4 requires confirmation of target contrasts in Section 3.C and authorization of exploratory linear modeling in Section 3.D.\n\nWould you like to confirm the target contrast and authorize proceeding?`;
             chips = ["🎯 Confirm Contrast & Proceed", "Review docs/experiment.md ↗"];
         }
@@ -509,14 +589,16 @@ ${llm || "Not specified."}
 - **Engine**: Persistent in-memory tidyproteomics R session via Model Context Protocol (MCP).
 - **Live In-Memory Workflow**: Automated ingestion (\`tpa_load\`), QC inspection (\`tpa_inspect\`, \`tpa_summary\`), normalization benchmarking (\`tpa_normalize\`), quantitative imputation (\`tpa_impute\`), differential expression (\`tpa_expression\`), pathway enrichment (\`tpa_enrichment\`), and state export (\`tpa_export_state\`).
 
-### AGENT RESPONSIBILITIES & TOOL CALLING:
-1. **Interactive Setup**: If initial variables are missing, guide the user step-by-step. When the user provides a dataset path, platform, analyte, or description, invoke the corresponding tool (\`update_experiment_parameters\` or \`update_experiment_description\`) to update \`docs/experiment.md\` immediately!
-2. **Launch Permission**: When all 4 initial fields are satisfied, ask the user if they are ready to start. When they confirm (e.g. "yes", "start", "proceed"), call \`start_or_resume_pipeline\`.
-3. **Resolve Phase Errors**:
-   - If user specifies sample group renaming or pooling, call \`update_sample_renaming\` and resume the pipeline!
-   - If user specifies target contrasts (e.g. "disease/control" or "test cancer vs normal"), call \`update_target_contrasts\` and resume the pipeline!
-   - If user agrees to proceed despite batch confounding, call \`authorize_batch_confounding(authorized = true)\` and resume the pipeline!
-4. **Direct, Clear Explanations**: When calling tools, explain clearly to the user what was saved to \`docs/experiment.md\` and what happens next.
+### AGENT RESPONSIBILITIES & FREE-FORM NATURAL PROMPT RESOLUTION:
+1. **Natural Conversational Setup**: The researcher can describe their experiment freely in plain English (e.g. data file location, search platform, analyte, treatment vs control conditions, and biological hypothesis). You MUST parse all stated parameters and immediately invoke the corresponding tools:
+   - Call \`update_experiment_parameters({ pathToDataFile, platform, analyte })\` for any dataset path, platform, or analyte mentioned.
+   - Call \`update_target_contrasts({ contrasts: [...] })\` for any treatment/control comparisons mentioned (e.g. \`["KO vs WT"]\`).
+   - Call \`update_experiment_description({ description })\` for the biological hypothesis, model system, or study goals.
+   - If the researcher says to run/start the pipeline, call \`start_or_resume_pipeline\`.
+2. **Concise, Professional Paraphrases**: In your conversational response, do NOT ask robotic multi-part questionnaires. Paraphrase what you configured in 1–2 friendly sentences, mention what (if anything) remains to configure, and ask if they are ready to proceed.
+3. **Interactive Error & Checkpoint Resolution**:
+   - If user provides sample group mappings, call \`update_sample_renaming\`.
+   - If user confirms contrast or confounding, call \`update_target_contrasts\` and \`authorize_batch_confounding(authorized = true)\` and resume.
 `.trim();
     }
     /**
@@ -623,52 +705,54 @@ ${llm || "Not specified."}
             const isConfirmContrastAffirmative = /^(🎯\s*)?confirm contrast(?:\s*(&|and)\s*proceed)?$/i.test(trimmed) ||
                 (/\bconfirm contrast\b/i.test(lower) && /\bproceed\b/i.test(lower)) ||
                 /\bconfirm.*contrast.*proceed\b/i.test(lower);
-            // 4. Direct handling of initial onboarding interview questions
+            const isConfirmImputationAffirmative = /^(🎯\s*)?confirm imputation(?:\s*(&|and)\s*proceed)?$/i.test(trimmed) ||
+                /^use random forest/i.test(trimmed) ||
+                /^use column min/i.test(trimmed) ||
+                (/\bconfirm imputation\b/i.test(lower));
+            // 4. Fast-path single-token answers for quick chips (e.g. clicking "ProteomeDiscoverer" or "proteins")
             const preSpec = await this.experimentManager.readSpec();
-            if (preSpec.missingInitialFields.length > 0) {
-                const step = preSpec.missingInitialFields[0];
-                let reply = "";
-                let chips = [];
-                if (step === "PATH_TO_DATA_FILE") {
-                    console.log("[AgentService] Saving PATH_TO_DATA_FILE:", trimmed);
-                    await this.experimentManager.setParameter("PATH_TO_DATA_FILE", trimmed);
-                    reply = `✅ **Saved Data File**: Configured \`PATH_TO_DATA_FILE: ${trimmed}\` in \`docs/experiment.md\`.\n\n👉 **Question 2/4**: Which mass spectrometry search platform generated this data?`;
-                    chips = ["ProteomeDiscoverer", "MaxQuant", "DIA-NN", "Spectronaut", "FragPipe", "tidyproteomics"];
-                }
-                else if (step === "PLATFORM") {
-                    console.log("[AgentService] Saving PLATFORM:", trimmed);
+            const isSimpleChipAnswer = trimmed.length < 50 &&
+                !trimmed.includes("\n") &&
+                !trimmed.includes(" ") &&
+                (/^(ProteomeDiscoverer|MaxQuant|DIA-NN|Spectronaut|FragPipe|tidyproteomics)$/i.test(trimmed) ||
+                    /^(proteins|peptides)$/i.test(trimmed) ||
+                    /^(?:data\/[a-zA-Z0-9_\-./]+\.(?:rds|xlsx|txt|tsv|csv)|[a-zA-Z0-9_\-./]+\.(?:rds|xlsx|txt|tsv|csv))$/i.test(trimmed));
+            if (isSimpleChipAnswer && preSpec.missingInitialFields.length > 0) {
+                if (/^(ProteomeDiscoverer|MaxQuant|DIA-NN|Spectronaut|FragPipe|tidyproteomics)$/i.test(trimmed)) {
                     await this.experimentManager.setParameter("PLATFORM", trimmed);
-                    reply = `✅ **Saved Search Platform**: Configured \`PLATFORM: ${trimmed}\` in \`docs/experiment.md\`.\n\n👉 **Question 3/4**: Is this dataset measuring \`proteins\` or \`peptides\`?`;
-                    chips = ["proteins", "peptides"];
                 }
-                else if (step === "ANALYTE") {
-                    console.log("[AgentService] Saving ANALYTE:", trimmed);
-                    await this.experimentManager.setParameter("ANALYTE", trimmed);
-                    reply = `✅ **Saved Analyte**: Configured \`ANALYTE: ${trimmed}\` in \`docs/experiment.md\`.\n\n👉 **Question 4/4**: Could you briefly describe this experiment? *(e.g. biological model, treatment conditions, disease vs control groups, and key hypotheses)*`;
+                else if (/^(proteins|peptides)$/i.test(trimmed)) {
+                    await this.experimentManager.setParameter("ANALYTE", trimmed.toLowerCase());
                 }
-                else if (step === "DESCRIPTION") {
-                    console.log("[AgentService] Saving DESCRIPTION");
-                    await this.experimentManager.setDescription(trimmed);
-                    reply = `✅ **Saved Experiment Description**: Updated Section 2 in \`docs/experiment.md\`.\n\n🎉 **All dataset parameters and study description are now configured!** 🚀\n\n**Ready to start the autonomous analysis pipeline?**`;
-                    chips = ["⚡ Yes, Start Pipeline", "Review docs/experiment.md ↗"];
-                }
-                if (reply) {
-                    if (onToken)
-                        onToken(reply);
-                    const agentMsg = {
-                        id: "msg_" + Date.now() + "_a",
-                        role: "assistant",
-                        content: reply,
-                        timestamp: new Date().toLocaleTimeString(),
-                        quickChips: chips.length > 0 ? chips : undefined,
-                    };
-                    this.messages.push(agentMsg);
-                    await this.logAgentTurn(userText, reply);
-                    this.notifyUpdated();
-                    return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+                else if (/\.(rds|xlsx|txt|tsv|csv)$/i.test(trimmed)) {
+                    await this.experimentManager.setParameter("PATH_TO_DATA_FILE", trimmed);
                 }
             }
             // 5. Direct handling of pipeline halt resolutions
+            if (isConfirmImputationAffirmative) {
+                const chosenMethod = /^use column min/i.test(trimmed)
+                    ? "min_column"
+                    : /^use random forest/i.test(trimmed)
+                        ? "randomforest_grouped"
+                        : undefined;
+                const finalMethod = await this.experimentManager.setImputationStrategy(chosenMethod, true);
+                const reply = `✅ **Confirmed Imputation Strategy**: Set \`Imputation Method: ${finalMethod}\` and \`Confirm Imputation Strategy: TRUE\` in Section 3.E of \`docs/experiment.md\`.\n\nResuming missing value imputation (Phase 03)...`;
+                if (onToken)
+                    onToken(reply);
+                const agentMsg = {
+                    id: "msg_" + Date.now() + "_a",
+                    role: "assistant",
+                    content: reply,
+                    timestamp: new Date().toLocaleTimeString(),
+                };
+                this.messages.push(agentMsg);
+                const resumeId = this.lastHaltedPhaseId || "03";
+                this.lastHaltedPhaseId = undefined;
+                await this.triggerResume(resumeId);
+                await this.logAgentTurn(userText, reply);
+                this.notifyUpdated();
+                return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+            }
             if (isConfirmContrastAffirmative || (this.lastHaltedPhaseId && isAuthorizeAffirmative)) {
                 const confirmed = await this.experimentManager.confirmContrastAndAuthorizeConfounding();
                 const contrastLabel = confirmed.length > 0 ? ` (\`${confirmed.join(", ")}\`)` : "";
@@ -919,6 +1003,12 @@ ${llm || "Not specified."}
                                 pipelineTriggered = true;
                                 break;
                             }
+                            case "set_imputation_strategy": {
+                                const finalMethod = await this.experimentManager.setImputationStrategy(tc.args?.method, tc.args?.confirmed !== false);
+                                executedActionSummary += `\n• Configured Imputation Strategy to \`${finalMethod}\` (Confirmed: \`${tc.args?.confirmed !== false ? "TRUE" : "FALSE"}\`) in Section 3E`;
+                                pipelineTriggered = true;
+                                break;
+                            }
                             case "start_or_resume_pipeline":
                             case "resume_pipeline": {
                                 pipelineTriggered = true;
@@ -956,19 +1046,19 @@ ${llm || "Not specified."}
             if (postSpec.missingInitialFields.length > 0) {
                 const nextMissing = postSpec.missingInitialFields[0];
                 if (nextMissing === "PLATFORM") {
-                    followUpQuestion = "\n\n👉 **Question 2/4**: Which mass spectrometry search platform generated this data?";
+                    followUpQuestion = "\n\nCould you also specify which mass spectrometry search platform generated this data?";
                     followUpChips = ["ProteomeDiscoverer", "MaxQuant", "DIA-NN", "Spectronaut", "FragPipe", "tidyproteomics"];
                 }
                 else if (nextMissing === "ANALYTE") {
-                    followUpQuestion = "\n\n👉 **Question 3/4**: Is this dataset measuring `proteins` or `peptides`?";
+                    followUpQuestion = "\n\nIs this dataset measuring `proteins` or `peptides`?";
                     followUpChips = ["proteins", "peptides"];
                 }
                 else if (nextMissing === "DESCRIPTION") {
-                    followUpQuestion = "\n\n👉 **Question 4/4**: Could you briefly describe this experiment? *(e.g. biological model, treatment conditions, disease vs control groups, and key questions)*";
+                    followUpQuestion = "\n\nCould you briefly share your biological hypothesis or comparison model? *(e.g. treatment vs vehicle, knockout vs control)*";
                 }
             }
             else if (executedActionSummary && !pipelineTriggered) {
-                followUpQuestion = "\n\n🎉 **All dataset parameters and study description are set up in `docs/experiment.md`!**\n\nAre you ready to start the autonomous analysis pipeline?";
+                followUpQuestion = "\n\n🎉 **All dataset parameters and study description are set up in `docs/experiment.md`!**\n\nReady to start the autonomous analysis pipeline?";
                 followUpChips = ["⚡ Yes, Start Pipeline", "Review docs/experiment.md ↗"];
             }
             let finalReply = accumulatedContent;
@@ -978,7 +1068,7 @@ ${llm || "Not specified."}
             if (executedActionSummary && !finalReply.includes("docs/experiment.md")) {
                 finalReply = (finalReply ? finalReply + "\n\n" : "") + `💾 **Updated \`docs/experiment.md\`:**${executedActionSummary}`;
             }
-            if (followUpQuestion && !finalReply.includes("Question")) {
+            if (followUpQuestion && !finalReply.toLowerCase().includes("pipeline?") && !finalReply.toLowerCase().includes("platform")) {
                 finalReply += followUpQuestion;
             }
             if (this.abortRequested) {

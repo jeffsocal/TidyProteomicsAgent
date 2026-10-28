@@ -23,7 +23,9 @@ export class PipelineOrchestrator {
     private tools: ToolRegistry,
     private onStateChange: (state: PipelineState) => void,
     private onLog: (text: string, updateLast?: boolean) => void,
-    private extensionVersion: string = "0.1.0"
+    private extensionVersion: string = "0.1.0",
+    private onAgentActivity?: (phase: PhaseInfo, text: string) => void,
+    private onAgentObservation?: (phase: PhaseInfo, text: string, metadata?: { badge?: string; metric?: string }) => void
   ) {
     this.workspaceRoot = workspaceRoot || "";
     this.chatLogger = new ChatLogger(this.workspaceRoot);
@@ -104,7 +106,11 @@ export class PipelineOrchestrator {
       }
       case "tpa_load": {
         const src = args?.source || args?.load_local || "";
-        return `[MCP Load] ${path.basename(String(src)) || src}`;
+        const cfg = args?.config ? ` (config: ${path.basename(String(args.config))})` : "";
+        return `[MCP Load] ${path.basename(String(src)) || src}${cfg}`;
+      }
+      case "tpa_export_config": {
+        return `[MCP Export Config] ${args?.platform || "config"}${args?.analyte ? ` (${args.analyte})` : ""}`;
       }
       case "tpa_inspect": {
         return `[MCP Inspect] ${args?.what || "structure"}`;
@@ -146,6 +152,11 @@ export class PipelineOrchestrator {
       case "tpa_operations": {
         return `[MCP Audit Operations]`;
       }
+      case "tpa_reassign": {
+        const target = args?.target || "sample";
+        const desc = args?.mapping ? `${Object.keys(args.mapping).length} sample mappings` : (args?.condition ? `${args.condition} -> ${args.replace}` : "");
+        return `[MCP Reassign] ${target} (${desc})`;
+      }
       case "tpa_health": {
         return `[MCP Health Check]`;
       }
@@ -155,6 +166,177 @@ export class PipelineOrchestrator {
         return `[${name}]${summary}`;
       }
     }
+  }
+
+  private formatNaturalActivity(name: string, args: Record<string, any>, phaseTitle: string): string {
+    switch (name) {
+      case "tpa_load": {
+        const src = args?.source || args?.load_local || "";
+        const base = path.basename(String(src)) || "dataset";
+        return `Loading quantitative dataset from \`${base}\`...`;
+      }
+      case "tpa_export_config": {
+        const plat = args?.platform || "platform";
+        return `Exporting ${plat} import configuration template for inspection...`;
+      }
+      case "tpa_input_audit": {
+        const plat = args?.platform || "platform";
+        return `Auditing raw file headers and matching regex patterns against ${plat}...`;
+      }
+      case "tpa_ingest_config": {
+        const act = args?.action || "configuring";
+        return `Customizing ingestion configuration (${act}) for ${args?.platform || "platform"}...`;
+      }
+      case "tpa_inspect": {
+        const what = String(args?.what || "structure");
+        if (what === "overview") return "Inspecting dataset topology, sample groups, and protein counts...";
+        if (what === "samples") return "Auditing sample metadata and replicate annotations...";
+        if (what === "operations") return "Checking operations history and normalization status...";
+        return `Inspecting dataset ${what}...`;
+      }
+      case "tpa_summary": {
+        const by = String(args?.by || args?.what || "sample");
+        return `Calculating quality metrics across ${by}s...`;
+      }
+      case "tpa_normalize": {
+        const methods = Array.isArray(args?.methods)
+          ? args.methods.join(", ")
+          : args?.methods || args?.method || "algorithms";
+        return `Benchmarking normalization (${methods})...`;
+      }
+      case "tpa_select_normalization": {
+        return `Selecting ${args?.method || "optimal"} normalization layer...`;
+      }
+      case "tpa_impute": {
+        const alg = args?.algorithm || args?.method || "LOD";
+        return `Imputing missing quantitative values (${alg})...`;
+      }
+      case "tpa_expression": {
+        const comp = args?.comparison || args?.contrast || "designated contrast";
+        return `Computing differential expression for \`${comp}\`...`;
+      }
+      case "tpa_enrichment": {
+        const term = args?.term || args?.terms || "pathways";
+        return `Running functional enrichment analysis (${term})...`;
+      }
+      case "tpa_plot": {
+        const type = args?.type || "diagnostic";
+        return `Generating ${type} visualization...`;
+      }
+      case "tpa_export_table": {
+        const fn = args?.file_name || "table.csv";
+        return `Exporting analysis table to \`${fn}\`...`;
+      }
+      case "tpa_export_state": {
+        return "Exporting reproducible R script and persisting data checkpoint...";
+      }
+      case "tpa_extract": {
+        return `Extracting ${args?.values || "data values"} from analysis state...`;
+      }
+      case "tpa_operations": {
+        return "Auditing upstream transformations & operations history...";
+      }
+      case "tpa_reassign": {
+        const target = args?.target || "sample";
+        const count = args?.mapping ? `${Object.keys(args.mapping).length} samples` : args?.replace || "conditions";
+        return `Reassigning ${target} groups (${count})...`;
+      }
+      case "tpa_health": {
+        return "Verifying MCP server connectivity and runtime health...";
+      }
+      case "read_file": {
+        const fp = path.basename(String(args?.filePath || "file"));
+        return `Reading \`${fp}\`...`;
+      }
+      case "write_file": {
+        const fp = path.basename(String(args?.filePath || "file"));
+        return `Writing \`${fp}\`...`;
+      }
+      case "replace_file_content": {
+        const fp = path.basename(String(args?.filePath || "file"));
+        return `Updating \`${fp}\`...`;
+      }
+      case "execute_command": {
+        const cmd = String(args?.command || "").trim();
+        const shortCmd = cmd.length > 50 ? cmd.slice(0, 47) + "..." : cmd;
+        return `Running command: \`${shortCmd}\`...`;
+      }
+      case "check_checkpoint_gate": {
+        return "Verifying quality gates and checkpoint outputs...";
+      }
+      case "complete_phase": {
+        return "Finalizing phase and recording findings...";
+      }
+      case "fail_phase": {
+        return "Evaluating phase failure checkpoint...";
+      }
+      default: {
+        const clean = name.replace(/^tpa_/, "").replace(/_/g, " ");
+        return `Executing ${clean}...`;
+      }
+    }
+  }
+
+  private extractToolObservation(
+    name: string,
+    args: Record<string, any>,
+    result: string
+  ): { text: string; badge: string } | null {
+    if (!result || typeof result !== "string") return null;
+    const res = result.trim();
+
+    if (name === "tpa_load" || (name === "tpa_inspect" && args?.what === "overview")) {
+      const sampleMatch = res.match(/(?:samples?|files?)\s*[:=]\s*(\d+)/i) || res.match(/(\d+)\s+samples?/i);
+      const proteinMatch = res.match(/(?:proteins?|peptides?|features?)\s*[:=]\s*([\d,]+)/i) || res.match(/([\d,]+)\s+proteins?/i);
+      const missingMatch = res.match(/(?:missing(?:ness)?)\s*[:=]\s*([\d\.]+)%/i) || res.match(/([\d\.]+)%\s+missing/i);
+      if (sampleMatch || proteinMatch) {
+        const parts: string[] = [];
+        if (sampleMatch) parts.push(`**${sampleMatch[1]}** samples`);
+        if (proteinMatch) parts.push(`**${proteinMatch[1]}** quantified features`);
+        if (missingMatch) parts.push(`**${missingMatch[1]}%** missingness`);
+        return {
+          text: `Dataset topology confirmed: identified ${parts.join(", ")}.`,
+          badge: "Topology",
+        };
+      }
+    }
+
+    if (name === "tpa_normalize" || name === "tpa_select_normalization") {
+      const cvMatch = res.match(/cv\s*[:=]?\s*([\d\.]+)/i);
+      const method = args?.method || (Array.isArray(args?.methods) ? args.methods[0] : args?.methods) || "optimal";
+      return {
+        text: `Benchmarked normalization candidates. Selected **${method}** normalization${cvMatch ? ` (CV: ${cvMatch[1]})` : ""}.`,
+        badge: "Normalization",
+      };
+    }
+
+    if (name === "tpa_impute") {
+      const imputedMatch = res.match(/(\d+[\d,]*|\d+\.?\d*%)\s*(?:imputed|missing)/i);
+      const method = args?.algorithm || args?.method || "LOD";
+      return {
+        text: `Completed missing value imputation using **${method}** strategy${imputedMatch ? ` (${imputedMatch[0]})` : ""}.`,
+        badge: "Imputation",
+      };
+    }
+
+    if (name === "tpa_expression") {
+      const sigMatch = res.match(/(\d+)\s*(?:significant|differentially expressed)/i);
+      const comp = args?.comparison || args?.contrast || "designated comparison";
+      return {
+        text: `Differential expression testing complete for \`${comp}\`${sigMatch ? `: detected **${sigMatch[1]}** significant proteins` : ""}.`,
+        badge: "Expression",
+      };
+    }
+
+    if (name === "tpa_enrichment") {
+      const term = args?.term || args?.terms || "pathways";
+      return {
+        text: `Pathway enrichment analysis completed for \`${term}\` ontologies.`,
+        badge: "Enrichment",
+      };
+    }
+
+    return null;
   }
 
   public getIsRunning(): boolean {
@@ -1028,6 +1210,11 @@ Construct and execute code for this phase, capturing output to logs.
             } else {
               const cleanData = raw.replace(/^[⚠️🔄❌✓💡]\s*/g, "").trim();
               this.logPhase(phaseTag, cleanData);
+
+              const obsMatch = raw.match(/^(?:💡\s*)?(?:Observation|Finding|Key Observation|Discovery):\s*(.+)$/i);
+              if (obsMatch) {
+                this.onAgentObservation?.(phase, obsMatch[1], { badge: "Observation" });
+              }
             }
           } else if (event.type === "text") {
             // Raw context stream is logged to logs/<phase>/chat.md by chatLogger; live terminal feed displays timestamped headers only
@@ -1045,6 +1232,10 @@ Construct and execute code for this phase, capturing output to logs.
             }
             lastToolPendingText = `${prefix}${body} ...`;
             this.onLog(lastToolPendingText, false);
+
+            // Stream continuous live activity paraphrase to the Agent panel
+            const naturalAction = this.formatNaturalActivity(event.data.name, event.data.args, cleanTitle);
+            this.onAgentActivity?.(phase, naturalAction);
           } else if (event.type === "tool_end") {
             const base = lastToolPendingText
               ? lastToolPendingText.replace(/\s*\.{3}$/, "")
@@ -1062,6 +1253,20 @@ Construct and execute code for this phase, capturing output to logs.
               this.logPhase(phaseTag, `❌  ${failSnippet}`, false);
             } else {
               this.onLog(`${base} ...  ✓ [completed]`, true);
+
+              // Extract stage observations and stream to the Agent panel
+              if (event.data.name === "complete_phase") {
+                const summary = event.data.args?.summary || "Phase objectives and quality gates successfully passed.";
+                this.onAgentObservation?.(phase, summary, { badge: `Phase ${phase.id} Complete` });
+              } else if (event.data.name === "fail_phase") {
+                const reason = event.data.args?.reason || "Pipeline checkpoint pause.";
+                this.onAgentObservation?.(phase, `⚠️ Halted: ${reason}`, { badge: "Action Required" });
+              } else {
+                const obs = this.extractToolObservation(event.data.name, event.data.args, event.data.result);
+                if (obs) {
+                  this.onAgentObservation?.(phase, obs.text, { badge: obs.badge });
+                }
+              }
             }
             lastToolPendingText = "";
           } else if (event.type === "tokens") {

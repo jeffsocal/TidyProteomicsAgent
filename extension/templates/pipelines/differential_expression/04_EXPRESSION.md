@@ -1,5 +1,5 @@
 ---
-tools: [tpa_health, tpa_load, tpa_inspect, tpa_summary, tpa_subset, tpa_reassign, tpa_expression, tpa_batch_analysis, tpa_plot, tpa_export_table, tpa_operations, tpa_extract, tpa_export_state, tpa_normalization_sensitivity]
+tools: [tpa_health, tpa_load, tpa_inspect, tpa_summary, tpa_reassign, tpa_expression, tpa_plot, tpa_export_table, tpa_operations, tpa_extract, tpa_export_state]
 ---
 
 ### Phase 4: Differential Expression Analysis & Candidate Profiling
@@ -10,11 +10,11 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/04_e
 
 #### Phase 4.1: Contrast Formulation, Sample Recoding & Group Verification
 - [ ] In-Memory State Continuity: The dataset is active in memory from Phase 3. If reloading is needed, call `tpa_load(source = "data/tidyproteomics_data.rds")`.
-- [ ] Inspect raw sample groups in data using `tpa_inspect(what = "sample_names")`.
-- [ ] **Parse Sample Group Renaming & Pooling Map (`docs/experiment.md` Section 3)**:
-  - If Section 3.B contains a confirmed **Sample Group Renaming & Pooling Map** table proposing clean biological names (e.g. pooling `active_necrotic granuloma_batch5`, `batch6`, `batch9` -> `active necrotic granuloma`, and `healthy_healthy_batch8` -> `healthy`) and `- **Reassign Sample Names According to Pooling Map**: TRUE`:
-    - Apply sample renaming in memory using `tpa_reassign(mapping = { "raw_sample_1": "clean_sample_1", ... })`.
-    - Run `tpa_inspect(what = "sample_names")` to verify that the active sample groups now reflect the cleaned biological conditions.
+- [ ] **Verify / Apply Sample Group Renaming & Pooling Map (`docs/experiment.md` Section 3)**:
+  - Check the Executive Blackboard above (`Active Sample Groups`): if sample groups were already recoded into clean biological cohorts in Phase 2.1b, proceed directly to the Pre-flight Gate without making redundant `tpa_inspect(what = "sample_names")` or `tpa_reassign` calls.
+  - Only if sample groups have not yet been recoded and Section 3.B has `- **Reassign Sample Names According to Pooling Map**: TRUE`:
+    - Apply sample renaming in batch using `tpa_reassign(mapping = { "raw_sample_1": "clean_sample_1", ... })` or regex (e.g. `tpa_reassign(condition = "sample %like% 'surfactin'", replace = "surfactin")`).
+    - Run `tpa_inspect(what = "sample_names")` to verify that active sample groups reflect the cleaned biological conditions.
 - [ ] **Pre-flight Gate & Contrast Confirmation**:
   - Review Section 3.C (`Target Contrasts`) and Section 3.D (`Pre-Flight Gate Decision`) in `docs/experiment.md`.
   - **Evaluation & Confirmation Criteria**:
@@ -42,35 +42,20 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/04_e
 #### Phase 4.3: Quantitative Significance & Candidate Extraction
 - [ ] Export differential expression analysis tables:
   - Invoke `tpa_export_table(type = "analysis", analysis = "expression", comparison = "<contrast>", file_name = "data/table_proteins_expression_<contrast>.tsv")`.
-- [ ] **Candidate Reliability Classification & Bias Auditing**:
-  - Interrogate exported results using `tpa_extract(what = "expression")`.
-  - Classify top candidate biomarkers into reliability tiers:
-    1. `ROBUST_QUANTITATIVE`: Detected across replicates in both conditions ($q \le 0.05, |\log_2\text{FC}| \ge 1.0$), low imputation reliance.
-    2. `DETECTION_LIMITED_ON_OFF`: Substantial missingness in one group imputed at limit-of-detection minimum. Highly biologically informative (clean presence/absence), but effect size is lower-bounded by detection limit.
-    3. `HIGH_UNCERTAINTY`: High variance or low replicate support.
-- [ ] **Feature Retention & Modeling Diagnostic**:
-  - In tidyproteomics, `expression()` applies linear modeling via `limma` to features that have sufficient quantifiable observations. Features that have all-missing (NA) values in the active assay or zero variance across conditions cannot be modeled and drop from the output table.
-  - Document the total features in the dataset (e.g. 5,586) versus modeled features in the expression table (e.g. 4,721) in `docs/notes.md`, explicitly noting that the difference represents unquantified features or condition-exclusive absences.
+  - *(Note: Full programmatic classification of `candidate_reliability`, `imputation_bias`, `imputation_delta`, and exact `feature_retention` accounting across all rows will be executed automatically by `code/06_observations.R` and `code/10_figures.R`. Do NOT dump the entire expression table into LLM context via `tpa_extract` just to count rows manually).*
 - [ ] Generate publication-grade Volcano Plot:
   - Generate volcano plot using `tpa_plot(type = "volcano", contrast = "<treatment>/<control>")` (automatically saved to `data/`).
 
 
-#### Phase 4.4: Object Persistence & Blackboard Recording
+#### Phase 4.4: Object Persistence & Checkpoint Verification
 - [ ] Persist the modeled dataset and generate reproducible R script:
   - Invoke `tpa_export_state(rds_path = "data/tidyproteomics_data.rds", script_path = "code/04_expression.R")`.
-- [ ] Record the following directly into `docs/notes.md`:
-  - Statistical testing method (`limma` empirical Bayes moderated $t$-test).
-  - Target contrast pairs evaluated.
-  - Number of significantly regulated proteins ($|\log_2\text{FC}| \ge 1.0, q \le 0.05$), broken down by upregulated and downregulated.
-  - Top upregulated and downregulated candidates with gene symbols, $\log_2\text{FC}$, and $q$-values.
-  - Candidate reliability tier summary (robust quantitative vs limit-of-detection on/off).
-
-#### Phase 4.5: Checkpoint Verification & State Recording
-- [ ] **Checkpoint 4.5**:
+- [ ] **Checkpoint 4.4**:
   1. `logs/04_expression/console.log` exists on disk with non-zero file size.
   2. `data/tidyproteomics_data.rds` and `code/04_expression.R` exist on disk with non-zero file size.
   3. `data/table_*_expression_*.tsv` (or `.csv`) exists on disk with non-zero file size.
   4. Volcano plot (`data/plot_*_volcano_*.png`) exists in `data/` with non-zero file size.
-  5. `docs/notes.md` contains the differential expression summary and candidate table.
-- [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "04_EXPRESSION", summary = "Differential expression analysis completed. Computed moderated t-statistics via limma, exported expression tables and volcano plots, verified candidate reliability tiers, and persisted data/tidyproteomics_data.rds.")`
+- [ ] **Complete Phase (Automated Blackboard Recording)**:
+  - Do NOT manually edit `docs/notes.md` via file tools; the orchestrator automatically records your `complete_phase` summary into `docs/notes.md`.
+  - Invoke `complete_phase` with a comprehensive summary including the statistical testing method (`limma`), evaluated contrast(s), significant DE counts ($|\log_2\text{FC}| \ge 1.0, q \le 0.05$, broken down into upregulated and downregulated), and leading regulated candidates:
+    `complete_phase(phaseName = "04_EXPRESSION", summary = "Differential expression analysis (<contrast>) completed via limma (<N_sig> significant proteins: <N_up> upregulated, <N_down> downregulated at |log2FC| >= 1, q <= 0.05). Exported expression tables and volcano plot, and persisted data/tidyproteomics_data.rds.")`

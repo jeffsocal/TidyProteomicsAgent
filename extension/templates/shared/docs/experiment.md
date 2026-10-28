@@ -43,7 +43,7 @@ Phase 0 (00_INSTALL.md) will verify that you have replaced this placeholder with
 COLLABORATIVE INTERACTION SECTION:
 Phase 1 (01_INSPECT) will inspect the ingested dataset and scaffold the discovered sample groups below.
 If raw sample names contain technical batch suffixes (e.g. _batch5, _run1) or need pooling into clean biological
-groups, you (or the agent) can specify the recoding map below. Phase 4 will automatically apply this mapping.
+groups, you (or the agent) can specify the recoding map below. Phase 2 (2.1b) and Phase 4 will automatically apply this mapping prior to normalization benchmarking, PCA/CV variation analysis, within-group imputation, and differential expression.
 -->
 
 ### A. Discovered Sample Groups in Dataset:
@@ -69,10 +69,10 @@ groups, you (or the agent) can specify the recoding map below. Phase 4 will auto
 - **Reassign Sample Names According to Pooling Map**: TRUE
 <!-- 
      What TRUE / FALSE means for your analysis:
-     - TRUE:  Phase 4 will apply the mapping table above to reassign and pool sample group names 
+     - TRUE:  Phase 2 (2.1b) and Phase 4 will apply the mapping table above to reassign and pool sample group names 
               in the dataset (e.g. merging 'lesion_batch2' and 'lesion_batch5' into 'lesion') 
-              before computing differential expression contrasts.
-     - FALSE: Phase 4 will ignore the table above and retain raw sample group names as originally ingested.
+              before normalization benchmarking, replicate CV/PCA plotting, within-condition imputation, and differential expression.
+     - FALSE: Phases 2–4 will ignore the table above and retain raw sample group names as originally ingested.
      NOTE: This value must strictly remain TRUE or FALSE without appending conversational text.
 -->
 
@@ -100,4 +100,26 @@ groups, you (or the agent) can specify the recoding map below. Phase 4 will auto
      NOTE: This value must strictly remain TRUE or FALSE without appending conversational text.
 -->
 - **Proceed With Potential Batch Confounding**: FALSE
+
+### E. Missing Value Imputation Strategy:
+👉 [USER ACTION REQUIRED - CONFIRM IMPUTATION METHOD]:
+<!-- 
+     Why this setting exists:
+     Per Karpievitch et al. (BMC Bioinformatics 13 Suppl 16, S5, 2012), Random Forest imputation 
+     (impute.randomforest, method = "matrix", group_by_sample = TRUE) excels at imputing sporadic 
+     Missing At Random (MAR) values without distorting within-group variance, EXCEPT when missingness 
+     is Missing Not At Random (MNAR) due to intentional gene knockout/knockdown, targeted suppression, 
+     or condition-exclusive on/off switches, where column-wise minimum Limit-of-Detection imputation 
+     (base::min, method = "column") is unbiased and retains condition-exclusive proteins in linear modeling.
+
+     Allowed Imputation Method values:
+     - randomforest_grouped : impute.randomforest, method = "matrix", group_by_sample = TRUE (Default for general/MAR profiling)
+     - min_column           : base::min, method = "column" (Recommended for intentional knockouts, suppressions, or MNAR on/off switches)
+     - min_row_grouped      : base::min, method = "row", group_by_sample = TRUE (Within-condition row minimum only)
+     - none                 : Bypass imputation (for complete-case datasets with 0% missingness)
+     NOTE: Keep Imputation Method and Confirm Imputation Strategy as clean values without appending conversational text.
+-->
+- **Imputation Method**: randomforest_grouped
+- **Confirm Imputation Strategy**: FALSE
+
 

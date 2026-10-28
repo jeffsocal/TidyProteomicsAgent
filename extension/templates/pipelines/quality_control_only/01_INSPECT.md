@@ -1,5 +1,5 @@
 ---
-tools: [tpa_health, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_operations, tpa_extract, tpa_export_state, tpa_set_workspace, tpa_collapse, tpa_merge, tpa_protein_map, tpa_export_sdrf]
+tools: [tpa_health, tpa_input_audit, tpa_ingest_config, tpa_export_config, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_export_state, tpa_set_workspace]
 ---
 
 ### Phase 1: Data Ingestion & Exploratory Quality Inspection
@@ -14,11 +14,23 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
 > In tidyproteomics, `overview` returns the complete dataset topology in a single call: file count, sample group names, total protein counts, dynamic range, percent missingness, operations history (normalization/imputation status), and all functional annotation terms.
 > **DO NOT** make redundant exploratory calls for `operations`, `quant_names`, `sample_names`, or `annotation_terms` — `overview` already supplies all of them.
 
-#### Phase 1.1: Data Ingestion & Consolidated Overview Discovery
+#### Phase 1.1: Pre-Ingestion Raw Header Audit & Data Ingestion
+- [ ] **Pre-Ingestion Header & Annotation Audit**:
+  - Run `tpa_input_audit(source = "{{PATH_TO_DATA_FILE}}", platform = "{{PLATFORM}}", analyte = "{{ANALYTE}}")` to inspect raw headers against the active platform configuration regexes.
+  - Review the audit table and actionable suggestions:
+    1. **Identifier Check**: Confirm that `identifier_column` (e.g. `Protein IDs`, `Accession`) is matched and properly captures protein accessions.
+    2. **Quantitative Layer Check**: Check whether `quantitative_columns` matches raw `Intensity` or `LFQ intensity`. If the experiment calls for MaxLFQ (or LFQ columns are present and preferred), invoke `tpa_ingest_config(platform = "{{PLATFORM}}", analyte = "{{ANALYTE}}", action = "set", column_defined = "abundance_raw", column_import = "^LFQ intensity\\s")`.
+    3. **Embedded Annotations Check**: Check for unmapped annotations (e.g. `Gene names`, `Protein names`, `Fasta headers`). If unmapped annotations are suggested, run `tpa_ingest_config(platform = "{{PLATFORM}}", analyte = "{{ANALYTE}}", file_name = "{{PATH_TO_DATA_FILE}}", action = "auto_fix")` to auto-configure all detected annotation mappings into a local `<platform>_<analyte>.tsv`.
 - [ ] Ingest the quantitative dataset using `tpa_load`:
   - Provide `source = "{{PATH_TO_DATA_FILE}}"`, `platform = "{{PLATFORM}}"`, and `analyte = "{{ANALYTE}}"` substituting actual values from `docs/experiment.md`.
+  - If a tailored configuration was created (`<platform>_<analyte>.tsv`), pass `config = "<platform>_<analyte>.tsv"` (or rely on automatic local config discovery).
   - If `source` is a remote URL (starts with `http://` or `https://`), `tpa_load` automatically stages the file to `data/raw/` and imports it.
   - If `source` is an `.rds` file (or `platform` is `"tidyproteomics"` / `"rds"`), `tpa_load` ingests the pre-processed R data object directly into memory.
+- [ ] **Ingestion Diagnostics & Custom Mapping Recovery (Self-Healing Fallback)**:
+  - If `tpa_load` fails with `"... not retaining values, check import regex"` or missing column errors:
+    1. Re-run `tpa_input_audit` to see exact column regex mismatches.
+    2. Adjust regex patterns via `tpa_ingest_config(platform = "{{PLATFORM}}", analyte = "{{ANALYTE}}", action = "set", ...)`.
+    3. Re-run `tpa_load(source = "<raw_staged_file>", platform = "{{PLATFORM}}", analyte = "{{ANALYTE}}", config = "<platform>_<analyte>.tsv")`.
 - [ ] **Consolidated Topology & Operations Discovery**:
   - Run `tpa_inspect(what = "overview")` to verify core object state in stdout and log.
   - Extract all essential topology metrics directly from the `overview` printout:
@@ -60,16 +72,17 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
     - *Targeting Edits*: Target concise unique anchor lines (e.g. replacing `- *(Pending Phase 1 data ingestion)*` in Section 3.A) rather than replacing large multi-paragraph comment blocks, ensuring `replace_file_content` succeeds reliably without whitespace mismatches.
     - **Scaffold Section 3**: Update Section 3 of `docs/experiment.md` directly using standardized visual badges:
       1. Section 3.A: Label with `ℹ️ [AUTO-GENERATED REFERENCE - READ ONLY]:` and list all discovered sample groups with replicate counts.
-      2. Section 3.B: Label with `👉 [USER REVIEW & EDIT TABLE]:`. If technical batch suffixes are detected (e.g. `active_necrotic granuloma_batch5`, `batch6`, `batch9` and `healthy_healthy_batch8`), provide a suggested **Sample Group Renaming & Pooling Map** table proposing clean biological names (e.g. stripping `_batch\d+` to pool into `active necrotic granuloma` and `healthy`), and add `👉 [USER TOGGLE]:` with `- **Reassign Sample Names According to Pooling Map**: TRUE`.
+      2. Section 3.B: Label with `👉 [USER REVIEW & EDIT TABLE]:`. If technical batch or replicate suffixes are detected (e.g. `active_necrotic granuloma_batch5`, `batch6`, `batch9` and `healthy_healthy_batch8`), provide a suggested **Sample Group Renaming & Pooling Map** table proposing clean biological names (e.g. stripping `_batch\d+` to pool into `active necrotic granuloma` and `healthy`), and add `👉 [USER TOGGLE]:`:
+         - If raw sample names map unambiguously to the biological conditions described in Section 2 (yielding $\ge 2$ replicates per cohort), set `- **Reassign Sample Names According to Pooling Map**: TRUE`.
+         - If sample group mapping is ambiguous (e.g. cryptic codes that cannot be safely resolved from Section 2 without researcher input), set `- **Reassign Sample Names According to Pooling Map**: FALSE` so downstream phases do not pool misgrouped cohorts before researcher review.
       3. Section 3.C: Label with `👉 [USER ACTION REQUIRED - DEFINE TARGET CONTRASTS]:` and suggest logical **Target Contrasts** based on the cleaned groups (e.g. `active necrotic granuloma` vs `healthy`).
       4. Section 3.D: Label with `⚠️ [PRE-FLIGHT GATE DECISION]:`. If disease condition is confounded with batch across cohorts (e.g. healthy only in batch 8, disease in batches 5/6/9), explicitly document the confounding in the template comments and set `- **Proceed With Potential Batch Confounding**: FALSE` as the scaffolded default awaiting researcher review. Setting this default does NOT fail or halt Phase 1 (confounding authorization gating belongs strictly in Phase 4).
   - If Section 3 already contains user-customized renaming or contrast definitions, preserve them exactly!
-  - **Enforce Clean Boolean Values & Badge Preservation**: Preserve visual badges (`ℹ️ [AUTO-GENERATED REFERENCE]`, `👉 [USER ACTION REQUIRED]`, `⚠️ [PRE-FLIGHT GATE DECISION]`) and keep all boolean configuration toggles (`- **Reassign Sample Names According to Pooling Map**: TRUE` and `- **Proceed With Potential Batch Confounding**: FALSE`) strictly as clean booleans without appending conversational notes or explanations. Any notes must be placed in markdown comments `<!-- ... -->` or recorded in `docs/notes.md`.
-- [ ] **Blackboard Recording**:
-  - Record the experimental alignment verification, discovered sample inventory, proposed or confirmed contrast groups, discovered target metadata (or untargeted scope), baseline quality stats, and detected upstream operations (normalization and imputation status) directly into `docs/notes.md`. If pre-existing normalization or imputation is detected, explicitly record the audit findings.
+  - **Enforce Clean Boolean Values & Badge Preservation**: Preserve visual badges (`ℹ️ [AUTO-GENERATED REFERENCE]`, `👉 [USER ACTION REQUIRED]`, `⚠️ [PRE-FLIGHT GATE DECISION]`) and keep all boolean configuration toggles (`- **Reassign Sample Names According to Pooling Map**: TRUE` and `- **Proceed With Potential Batch Confounding**: FALSE`) strictly as clean booleans without appending conversational notes or explanations. Any notes must be placed in markdown comments `<!-- ... -->`.
 - [ ] **Checkpoint 1.4 (Design Alignment Gate)**: 
-  - Verify that `sample_names` are confirmed, alignment with `docs/experiment.md` is verified, Section 3 is scaffolded with discovered sample groups, and the summary is recorded in `docs/notes.md`.
+  - Verify that `sample_names` are confirmed, alignment with `docs/experiment.md` is verified, and Section 3 is scaffolded with discovered sample groups.
   - Setting `- **Proceed With Potential Batch Confounding**: FALSE` is the scaffolded default awaiting researcher review and does NOT fail or halt Phase 1. Phase 1 must NEVER invoke `fail_phase` for discovered groups, batch suffixes, or confounding.
-- [ ] **Complete Phase**:
-  - Once `docs/experiment.md` Section 3 is scaffolded, QC plots are generated, and `docs/notes.md` is updated, Phase 1 MUST invoke `complete_phase(phaseName = "01_INSPECT", ...)` to preserve all QC artifacts and allow baseline inspection:
-    `complete_phase(phaseName = "01_INSPECT", summary = "Data ingestion complete. Ingested dataset, audited operations history (normalization and imputation status), verified sample groups in sample_names, scaffolded sample grouping and contrast template in docs/experiment.md Section 3, generated count diagnostic plot, and persisted data/tidyproteomics_data.rds.")`
+- [ ] **Complete Phase (Automated Blackboard Recording)**:
+  - Do NOT manually edit `docs/notes.md` via file tools; the orchestrator automatically records your `complete_phase` summary into `docs/notes.md`.
+  - Once `docs/experiment.md` Section 3 is scaffolded and QC plots are generated, invoke `complete_phase` with a comprehensive summary including quantified protein count, sample inventory, baseline quality stats, and detected upstream operations:
+    `complete_phase(phaseName = "01_INSPECT", summary = "Data ingestion complete (<N> proteins across <M> samples). Audited operations history (normalization and imputation status), verified sample groups in sample_names, scaffolded sample grouping and contrast template in docs/experiment.md Section 3, generated count diagnostic plot, and persisted data/tidyproteomics_data.rds.")`
