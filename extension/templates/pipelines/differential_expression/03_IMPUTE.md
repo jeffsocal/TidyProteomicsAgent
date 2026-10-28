@@ -11,12 +11,13 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/03_i
 #### Phase 3.1: Missing Value Distribution & Mechanism Audit
 - [ ] In-Memory State Continuity: The dataset is active in memory from Phase 2. If reloading is needed, call `tpa_load(source = "data/tidyproteomics_data.rds")`.
 - [ ] Quantify missing values overall and per sample/condition:
-  - Run `tpa_inspect(what = "overview")` and `tpa_summary(what = "sample")`.
+  - Run `tpa_inspect(what = "overview")` and `tpa_summary(by = "sample")`.
+  - ⚠️ **Imputation Slot Notice**: In tidyproteomics, the dataset summary may print `Imputed: Yes` as an artifact of internal accounting slot initialization. Always consult `tpa_operations()` as the single source of truth: if no imputation step is recorded in `tpa_operations()`, the dataset contains raw un-imputed missing values. Do NOT execute redundant exploratory extraction queries to verify missingness; proceed immediately with `tpa_impute()`.
 - [ ] **Scientific Imputation Strategy Assessment**:
   Evaluate the biological mechanism of missingness before applying an imputation function:
   1. **Missing Not At Random (MNAR) / Limit of Detection (LOD)**:
      - *Characteristics*: Feature is consistently detected in one condition but undetected in another (e.g. biological dropouts, clean knockouts, or condition-exclusive biomarkers).
-     - *Recommended Tool Call*: `tpa_impute(method = "min", group_by_sample = true)` (within-condition left-censored minimum).
+     - *Recommended Tool Call*: `tpa_impute(method = "base::min, group_by_sample = TRUE")` (within-condition left-censored minimum).
   2. **Missing At Random (MAR)**:
      - *Characteristics*: Missingness occurs sporadically across replicates at moderate-to-high feature abundances.
   3. **No Imputation / Complete-Case Bypass**:
@@ -26,16 +27,18 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/03_i
 - [ ] Check for missingness and operations history using `tpa_operations()`:
   - If pre-existing imputation is detected in operations history: preserve upstream imputed values to prevent variance distortion.
   - If total missing is 0: bypass imputation to preserve empirical ground truth.
-  - Otherwise: apply within-condition left-censored minimum imputation for limit-of-detection dropouts via `tpa_impute(method = "min", group_by_sample = true)`.
+  - Otherwise: apply within-condition left-censored minimum imputation for limit-of-detection dropouts via `tpa_impute(method = "base::min, group_by_sample = TRUE")`.
 - [ ] **Checkpoint 3.2**: Run `tpa_inspect(what = "overview")` to verify that imputation has executed successfully, auditing the number of imputed values and confirming that remaining missing values (if any) correspond to condition-exclusive biological dropouts (features absent across all replicates of a condition). *Note: In tidyproteomics, complete matrix coverage (0% missing) is NOT required when biological condition-exclusive dropouts are present; do NOT halt with fail_phase if residual condition-level dropouts remain.*
 
 #### Phase 3.3: Post-Imputation Distribution & Detection-Rate Sensitivity Audit
 - [ ] Verify that the imputed dataset maintains valid dynamic range and variance structure across conditions.
 - [ ] Confirm that no `NaN` or `Inf` values were introduced into quantitative matrices.
-- [ ] Audit detection and missingness using `tpa_plot(type = "missingness")` or `tpa_summary(what = "sample")`.
+- [ ] Audit detection and missingness using `tpa_plot(type = "missingness")` or `tpa_summary(by = "sample")`.
 - [ ] If extracting quantitative abundances for distribution auditing via `tpa_extract`:
   - Set `values` to the specific normalization layer applied in Phase 2 (e.g. `tpa_extract(values = "loess")`, `"median"`, `"linear"`, `"limma"`, or `"raw"`).
   - *Note: In tidyproteomics, `values` must be the specific normalization method name, not `"normalized"`.*
+  - **Directory Hygiene Requirement**: If supplying `save_csv`, always prefix the filepath with `data/` (e.g. `tpa_extract(values = "loess", na_rm = FALSE, save_csv = "data/03_loess_full_matrix.csv")`), NEVER saving CSV files to the project root directory.
+
 
 #### Phase 3.4: Object Persistence & Blackboard Recording
 - [ ] Persist the imputed dataset and generate reproducible R script:

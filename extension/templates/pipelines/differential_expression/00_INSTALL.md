@@ -18,6 +18,8 @@ Execute workspace validation, enforce research specification gates, and establis
   - `logs/` (stores persistent execution logs)
   - `tools/` (contains utility scripts like `tools/lint_tidyproteomics.R`)
 - [ ] If any of the required directories are missing, create them immediately using `mkdir -p`.
+- [ ] *Portability Note*: When checking files and directories, use standard POSIX tests (`test -d <dir>`, `test -f <file>`, or `ls`) rather than non-portable commands such as `head -c 0` (which fails on macOS BSD coreutils).
+
 
 #### Phase 0.2: User Study Specification & Dataset Parameters Gate
 - [ ] **Verify `docs/experiment.md`**:

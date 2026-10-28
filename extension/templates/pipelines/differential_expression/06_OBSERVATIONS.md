@@ -165,15 +165,18 @@ for (c_name in contrast_names) {
     }
   }
 
-  # Missing gene symbol fallback and delimiter sanitation
-  clean_desc_word <- if ("description" %in% names(exp_tbl)) sub(" .*$", "", trimws(exp_tbl$description)) else NA_character_
-  clean_desc_word[is.na(clean_desc_word) | clean_desc_word == ""] <- NA_character_
+  # Missing gene symbol fallback and delimiter sanitation (extract GN= from FASTA description)
+  desc_gn <- if ("description" %in% names(exp_tbl)) {
+    ifelse(grepl("\\bGN=([A-Za-z0-9_-]+)", exp_tbl$description),
+           sub("^.*\\bGN=([A-Za-z0-9_-]+).*$", "\\1", exp_tbl$description),
+           NA_character_)
+  } else NA_character_
 
   exp_tbl <- exp_tbl %>%
     mutate(
       gene_name = coalesce(
         if ("gene_name" %in% names(.)) ifelse(is.na(gene_name) | !nzchar(trimws(gene_name)), NA_character_, gene_name) else NA_character_,
-        clean_desc_word,
+        desc_gn,
         protein
       ),
       gene_name = gsub(";[[:space:]]+", "; ", gsub(";+", "; ", trimws(gene_name))),
@@ -243,11 +246,16 @@ for (c_name in contrast_names) {
   sig_up <- exp_tbl %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05, log2_foldchange >= 1)
   sig_down <- exp_tbl %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05, log2_foldchange <= -1)
 
-  emit_md(sprintf("- **Total Quantified Identifiers (%s)**: %d", analyte_name, nrow(exp_tbl)))
+  total_features <- length(get_unique_variables(tp_data, "protein", format = "vector"))
+  modeled_features <- nrow(exp_tbl)
+  unmodeled_count <- total_features - modeled_features
+  emit_md(sprintf("- **Total Features in Dataset (%s)**: %d", analyte_name, total_features))
+  emit_md(sprintf("- **Features Modeled in Contrast (%s)**: %d (unmodeled: %d due to all-missing values or condition-exclusive absence)", analyte_name, modeled_features, unmodeled_count))
   emit_md(sprintf("- **Total Significant (|log2FC| >= 1, q <= 0.05)**: %d", nrow(sig_all)))
   emit_md(sprintf("- **Total Upregulated (log2FC >= 1, q <= 0.05)**: %d", nrow(sig_up)))
   emit_md(sprintf("- **Total Downregulated (log2FC <= -1, q <= 0.05)**: %d", nrow(sig_down)))
   emit_md("")
+
 
   # Clean, readable display columns for tables (omit broad multi-pathway annotations to preserve table clarity)
   display_columns <- intersect(
@@ -331,12 +339,15 @@ for (c_name in contrast_names) {
     emit_table(enr_summary)
 
     emit_md(sprintf("### Top Significant Pathways for %s", contrast_tag))
-    if ("member_genes" %in% names(enr_tbl) && any(!is.na(enr_tbl$member_genes))) {
+    if ("gene_names" %in% names(enr_tbl) && any(!is.na(enr_tbl$gene_names))) {
       enr_tbl <- enr_tbl %>%
-        mutate(top_drivers = sapply(strsplit(as.character(member_genes), ",\\s*"), function(x) paste(head(x, 4), collapse = ", ")))
+        mutate(top_drivers = sapply(strsplit(as.character(gene_names), ",\\s*"), function(x) paste(head(unique(na.omit(trimws(x))), 4), collapse = ", ")))
+    } else if ("member_genes" %in% names(enr_tbl) && any(!is.na(enr_tbl$member_genes))) {
+      enr_tbl <- enr_tbl %>%
+        mutate(top_drivers = sapply(strsplit(as.character(member_genes), ",\\s*"), function(x) paste(head(unique(na.omit(trimws(x))), 4), collapse = ", ")))
     } else if ("member_proteins" %in% names(enr_tbl)) {
       enr_tbl <- enr_tbl %>%
-        mutate(top_drivers = sapply(strsplit(as.character(member_proteins), ",\\s*"), function(x) paste(head(x, 4), collapse = ", ")))
+        mutate(top_drivers = sapply(strsplit(as.character(member_proteins), ",\\s*"), function(x) paste(head(unique(na.omit(trimws(x))), 4), collapse = ", ")))
     } else {
       # Derive top driving member genes directly from exp_tbl annotations if available
       enr_tbl$top_drivers <- sapply(seq_len(nrow(enr_tbl)), function(i) {
@@ -346,10 +357,17 @@ for (c_name in contrast_names) {
           filter(if_any(any_of(c("biological_process", "cellular_component", "molecular_function", "reactome_pathway", "wiki_pathway", "annotation")), ~ grepl(ann, .x, fixed = TRUE))) %>%
           arrange(desc(abs(log2_foldchange))) %>%
           pull(gene_name)
-        if (length(matching_genes) > 0) paste(head(unique(matching_genes), 4), collapse = ", ") else NA_character_
+        if (length(matching_genes) == 0) {
+          matching_genes <- exp_tbl %>%
+            filter(if_any(any_of(c("biological_process", "cellular_component", "molecular_function", "reactome_pathway", "wiki_pathway", "annotation")), ~ grepl(ann, .x, fixed = TRUE))) %>%
+            arrange(adj_p_value, p_value, desc(abs(log2_foldchange))) %>%
+            pull(gene_name)
+        }
+        if (length(matching_genes) > 0) paste(head(unique(na.omit(matching_genes)), 4), collapse = ", ") else NA_character_
       })
     }
-    enr_cols <- intersect(c("term", "annotation", "enrichment", "size", "p_value", "adj_p_value", "top_drivers", "member_genes", "member_proteins", "leading_edge_count"), names(enr_tbl))
+
+    enr_cols <- intersect(c("term", "annotation", "enrichment", "size", "p_value", "adj_p_value", "top_drivers", "gene_names", "member_genes", "member_proteins", "leading_edge_count"), names(enr_tbl))
     sig_enr <- enr_tbl %>% filter(!is.na(adj_p_value), adj_p_value <= 0.05) %>% arrange(adj_p_value) %>% head(15)
     emit_table(sig_enr %>% select(any_of(enr_cols)) %>% format_stats())
   }
@@ -395,7 +413,7 @@ Organize the document strictly into the following structured sections:
 
 1. **Analysis Checkpoint & Dataset Dimensions Summary**:
    - Status (PASS/FAIL) for Target Perturbation (if targeted; or "NOT APPLICABLE - UNTARGETED DISCOVERY SCREEN") and Artifact Verification (`data/tidyproteomics_data.rds`, tables in `data/`, plots in `data/`).
-   - Summary of dataset dimensions: total features quantified (`proteins` or `peptides`), total significantly altered ($|\log_2\text{FC}| \ge 1.0$, $q \le 0.05$), count upregulated, count downregulated per contrast.
+   - Summary of dataset dimensions: total features in dataset (`proteins` or `peptides`), modeled identifiers in contrast (noting any unmodeled features due to all-missing values or condition-exclusive dropouts), total significantly altered ($|\log_2\text{FC}| \ge 1.0$, $q \le 0.05$), count upregulated, count downregulated per contrast.
 2. **Target Efficacy / Leading Perturbation Status**:
    - Quantitative breakdown of the primary target (if targeted) or leading master regulator / key functional hub (if untargeted screening): Gene Symbol / Accession, $\log_2\text{FC}$, fold change, $p$-value, $q$-value, imputation risk tag, and percent change.
    - Comparison with experimental expectations stated in `docs/experiment.md`.
@@ -405,7 +423,8 @@ Organize the document strictly into the following structured sections:
    - Structured markdown table: Rank, Identifier (Gene Symbol / Accession), Description, $\log_2\text{FC}$, $q$-value, Imputation Risk (`imputation_bias`: HIGH, MODERATE, LOW), Candidate Reliability (`candidate_reliability`: ROBUST_QUANTITATIVE, DETECTION_LIMITED_ON_OFF, HIGH_UNCERTAINTY), and $\Delta$ (`imputation_delta`). (Directly copy pre-formatted markdown table from `data/observations_summary.md`).
 5. **Top Significant Pathway Enrichments**:
    - Summary table of significant terms across analyzed annotation categories (Category/Term, Annotation Name, Direction / Enrichment Score, $q$-value, Leading Driver Genes [top 3–5 member gene symbols from `member_genes`, falling back to `member_proteins` if symbols are absent], Leading-Edge Count). (Directly copy pre-formatted markdown table from `data/observations_summary.md`).
-   - Primary biological themes identified across contrasts based directly on statistical enrichment and driven by specific leading-edge member genes.
+   - Primary biological themes identified across contrasts based directly on statistical enrichment and driven by specific leading-edge member genes. Note that in tidyproteomics, Wilcoxon score sign indicates direction relative to background: positive (+) = shifted higher in treatment; negative (-) = shifted lower in treatment.
+
 6. **Primary Empirical Data Summary**:
    - Objective, factual synthesis of data-derived observations directly grounded in the quantitative tables and figures.
    - Detection-rate sensitivity discussion: explicitly evaluate whether top candidates are driven by continuous abundance changes (LOW imputation bias) or limit-of-detection presence/absence shifts (HIGH imputation bias).

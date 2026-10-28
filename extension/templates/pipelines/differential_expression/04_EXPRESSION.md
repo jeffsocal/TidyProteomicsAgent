@@ -48,8 +48,12 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/04_e
     1. `ROBUST_QUANTITATIVE`: Detected across replicates in both conditions ($q \le 0.05, |\log_2\text{FC}| \ge 1.0$), low imputation reliance.
     2. `DETECTION_LIMITED_ON_OFF`: Substantial missingness in one group imputed at limit-of-detection minimum. Highly biologically informative (clean presence/absence), but effect size is lower-bounded by detection limit.
     3. `HIGH_UNCERTAINTY`: High variance or low replicate support.
+- [ ] **Feature Retention & Modeling Diagnostic**:
+  - In tidyproteomics, `expression()` applies linear modeling via `limma` to features that have sufficient quantifiable observations. Features that have all-missing (NA) values in the active assay or zero variance across conditions cannot be modeled and drop from the output table.
+  - Document the total features in the dataset (e.g. 5,586) versus modeled features in the expression table (e.g. 4,721) in `docs/notes.md`, explicitly noting that the difference represents unquantified features or condition-exclusive absences.
 - [ ] Generate publication-grade Volcano Plot:
   - Generate volcano plot using `tpa_plot(type = "volcano", contrast = "<treatment>/<control>")` (automatically saved to `data/`).
+
 
 #### Phase 4.4: Object Persistence & Blackboard Recording
 - [ ] Persist the modeled dataset and generate reproducible R script:

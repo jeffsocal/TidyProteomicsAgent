@@ -90,7 +90,7 @@ if (!is_10_figures) {
       line_num <- pd$line1[idx]
       line_text <- trimws(raw_lines[line_num])
       violations <- c(violations, sprintf(
-        "Line %d: Raw ggplot() call detected:\n    %s\n  --> FORBIDDEN: Do not construct custom ggplot graphs.\n  --> USE CANONICAL PLOTTING METHODS with built-in saving:\n      * tp_data |> plot_counts(destination = 'png')\n      * tp_data |> plot_pca(destination = 'png')\n      * tp_data |> plot_volcano(destination = 'png')\n      * tp_data |> plot_heatmap(..., destination = 'png')\n      * tp_data |> plot_expression(..., destination = 'png')\n      * tp_data |> plot_programs(..., destination = 'png')\n      * tp_data |> plot_forest(..., destination = 'png')",
+        "Line %d: Raw ggplot() call detected:\n    %s\n  --> FORBIDDEN: Do not construct custom ggplot graphs.\n  --> USE CANONICAL PLOTTING METHODS with built-in saving:\n      * tp_data |> plot_counts(destination = 'png')\n      * tp_data |> plot_pca(destination = 'png')\n      * tp_data |> plot_volcano(destination = 'png')\n      * tp_data |> plot_heatmap(..., destination = 'png')\n      * tp_data |> plot_expression(..., destination = 'png')\n      * tp_data |> plot_signatures(..., destination = 'png')\n      * tp_data |> plot_candidates(..., destination = 'png')\n      * tp_data |> plot_imputation_diagnostic(..., destination = 'png')",
         line_num, line_text
       ))
     }

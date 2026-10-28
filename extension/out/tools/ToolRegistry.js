@@ -360,7 +360,7 @@ class ToolRegistry {
         this.tools.set("replace_file_content", {
             definition: {
                 name: "replace_file_content",
-                description: "Replaces an exact target substring with replacement content in an existing file. Note: For analysis scripts and files under 150 lines, prefer 'write_file' to overwrite the complete file cleanly and avoid whitespace mismatch errors.",
+                description: "Replaces an exact target substring with replacement content in an existing file. Note: For analysis scripts and files under 150 lines, prefer 'write_file' to overwrite the complete file cleanly and avoid whitespace mismatch errors. Ensure targetContent matches exact indentation, line prefixes, and bullet/number formatting in the target file, and issue multiple edits to the same file serially across turns.",
                 parameters: {
                     type: "object",
                     properties: {

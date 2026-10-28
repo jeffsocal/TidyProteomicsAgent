@@ -53,11 +53,19 @@ If external web findings suggest candidate interactors, co-complex members, or d
   library(dplyr)
 
   tp_data <- readRDS("data/tidyproteomics_data.rds")
-  exp_tbl <- export_analysis(tp_data, "<treatment>/<control>", .analysis = "expression")
+  # Prefer loading the curated Phase 6 expression table (with FASTA regex-mapped gene symbols):
+  exp_files <- list.files("data", pattern = "^table_.*_expression_.*[.](tsv|csv)$", full.names = TRUE)
+  exp_files <- exp_files[!grepl("_extract", exp_files)]
+  exp_tbl <- if (length(exp_files) > 0) {
+    if (grepl("[.]tsv$", exp_files[1])) readr::read_tsv(exp_files[1], show_col_types = FALSE) else readr::read_csv(exp_files[1], show_col_types = FALSE)
+  } else {
+    export_analysis(tp_data, "<treatment>/<control>", .analysis = "expression")
+  }
 
-  # Query newly identified candidates from web search:
+  # Query newly identified candidates from web search (checking symbol, accession, and description for unmapped isoforms like CIP2A):
   web_candidates <- c("CAND_A", "CAND_B", "CAND_C")
-  matches <- exp_tbl %>% filter(if_any(any_of(c("gene_name", "gene_symbol", "symbol", "protein")), ~ .x %in% web_candidates))
+  matches <- exp_tbl %>% filter(if_any(any_of(c("gene_name", "gene_symbol", "symbol", "protein")), ~ .x %in% web_candidates) |
+                                grepl(paste(web_candidates, collapse = "|"), description, ignore.case = TRUE))
   print(matches %>% select(any_of(c("gene_name", "protein", "log2_foldchange", "p_value", "adj_p_value", "description"))))
   ```
 - Inspect output via CLI (`head -n 30 logs/08_websearch/console.log`).
